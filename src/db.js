@@ -39,6 +39,12 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires);
 
+    CREATE TABLE IF NOT EXISTS exchange_rates (
+      currency TEXT PRIMARY KEY,
+      rate_to_mxn REAL NOT NULL CHECK (rate_to_mxn > 0),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       quote_number TEXT NOT NULL UNIQUE,
@@ -49,6 +55,7 @@ function migrate(database) {
       client_name TEXT NOT NULL,
       expected_margin REAL NOT NULL DEFAULT 0,
       total_invoiced REAL NOT NULL DEFAULT 0,
+      total_invoiced_currency TEXT NOT NULL DEFAULT 'MXN',
       progress_percent REAL NOT NULL DEFAULT 0,
       technician_name TEXT NOT NULL,
       promised_delivery_date TEXT NOT NULL,
@@ -63,6 +70,7 @@ function migrate(database) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL,
       amount REAL NOT NULL CHECK (amount >= 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
       payment_date TEXT NOT NULL,
       notes TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -75,11 +83,37 @@ function migrate(database) {
       category TEXT NOT NULL CHECK (category IN ('Compra', 'Gasto', 'Salario')),
       description TEXT NOT NULL,
       amount REAL NOT NULL CHECK (amount >= 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
       cost_date TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
   `);
+  ensureColumn(database, 'projects', 'total_invoiced_currency', "TEXT NOT NULL DEFAULT 'MXN'");
+  ensureColumn(database, 'project_payments', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
+  ensureColumn(database, 'project_costs', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
+  seedExchangeRates(database);
+}
+
+function ensureColumn(database, tableName, columnName, definition) {
+  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  const hasColumn = columns.some((column) => column.name === columnName);
+
+  if (!hasColumn) {
+    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+function seedExchangeRates(database) {
+  const seedRate = database.prepare(
+    `INSERT INTO exchange_rates (currency, rate_to_mxn)
+     VALUES (?, ?)
+     ON CONFLICT(currency) DO NOTHING`,
+  );
+
+  seedRate.run('MXN', 1);
+  seedRate.run('USD', Number(process.env.USD_TO_MXN || 17));
+  seedRate.run('EUR', Number(process.env.EUR_TO_MXN || 19));
 }
 
 function seedAdmin(database) {

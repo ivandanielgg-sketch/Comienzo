@@ -1,6 +1,8 @@
 const state = {
   projects: [],
   users: [],
+  exchangeRates: { MXN: 1, USD: 17, EUR: 19 },
+  exchangeUpdatedAt: null,
   selectedProjectId: null,
   selectedUserId: null,
 };
@@ -11,6 +13,8 @@ const projectsView = document.querySelector('#projects-view');
 const usersView = document.querySelector('#users-view');
 const projectsTab = document.querySelector('#projects-tab');
 const usersTab = document.querySelector('#users-tab');
+const exchangeRateForm = document.querySelector('#exchange-rate-form');
+const exchangeMessage = document.querySelector('#exchange-message');
 const loginForm = document.querySelector('#login-form');
 const loginMessage = document.querySelector('#login-message');
 const logoutButton = document.querySelector('#logout-button');
@@ -37,6 +41,12 @@ const money = new Intl.NumberFormat('es-MX', {
   style: 'currency',
   currency: 'MXN',
 });
+
+const currencyFormatters = {
+  MXN: money,
+  USD: new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'USD' }),
+  EUR: new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'EUR' }),
+};
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -83,6 +93,7 @@ async function showApp() {
   setDefaultDates();
   resetUserForm();
   switchView('projects');
+  await loadExchangeRates();
   await loadProjects();
   await loadUsers();
 }
@@ -126,12 +137,34 @@ function userPayload() {
   return payload;
 }
 
+function exchangeRatePayload() {
+  return Object.fromEntries(new FormData(exchangeRateForm).entries());
+}
+
 function switchView(viewName) {
   const showingProjects = viewName === 'projects';
   projectsView.classList.toggle('hidden', !showingProjects);
   usersView.classList.toggle('hidden', showingProjects);
   projectsTab.classList.toggle('active', showingProjects);
   usersTab.classList.toggle('active', !showingProjects);
+}
+
+async function loadExchangeRates() {
+  const exchangeRateState = await api('/api/exchange-rates');
+  state.exchangeRates = exchangeRateState.rates.reduce((rates, row) => {
+    rates[row.currency] = Number(row.rate_to_mxn);
+    return rates;
+  }, {});
+  state.exchangeUpdatedAt = exchangeRateState.last_updated_at;
+  renderExchangeRates();
+}
+
+function renderExchangeRates() {
+  exchangeRateForm.elements.USD.value = state.exchangeRates.USD || '';
+  exchangeRateForm.elements.EUR.value = state.exchangeRates.EUR || '';
+  document.querySelector('#exchange-updated-at').textContent = state.exchangeUpdatedAt
+    ? new Date(state.exchangeUpdatedAt.replace(' ', 'T')).toLocaleString('es-MX')
+    : 'Sin cambios';
 }
 
 async function loadProjects() {
@@ -213,10 +246,12 @@ function exportProjectsToExcel() {
     ['Vendedor', (project) => project.seller],
     ['Cliente', (project) => project.client_name],
     ['Margen esperado de utilidad (%)', (project) => project.expected_margin],
-    ['Total Cobrado', (project) => project.total_charged],
-    ['Gastado', (project) => project.spent],
-    ['Total Facturado', (project) => project.total_invoiced],
-    ['Pendiente de cobro', (project) => project.pending_collection],
+    ['Total Cobrado MXN', (project) => project.total_charged],
+    ['Gastado MXN', (project) => project.spent],
+    ['Total Facturado Capturado', (project) =>
+      formatCurrency(project.total_invoiced, project.total_invoiced_currency)],
+    ['Total Facturado MXN', (project) => project.total_invoiced_mxn],
+    ['Pendiente de cobro MXN', (project) => project.pending_collection],
     ['Porcentaje de Avance (%)', (project) => project.progress_percent],
     ['Tecnico Responsable', (project) => project.technician_name],
     ['Fecha Prometida de entrega', (project) => project.promised_delivery_date],
@@ -225,15 +260,24 @@ function exportProjectsToExcel() {
     ['Margen Final (%)', (project) =>
       project.final_margin === null ? '' : (Number(project.final_margin) * 100).toFixed(2)],
     ['Observaciones', (project) => project.observations || ''],
+    ['Gasto - Tipo', (project, cost) => cost?.category || ''],
+    ['Gasto - Fecha', (project, cost) => cost?.cost_date || ''],
+    ['Gasto - Descripcion', (project, cost) => cost?.description || ''],
+    ['Gasto - Importe capturado', (project, cost) =>
+      cost ? formatCurrency(cost.amount, cost.currency) : ''],
+    ['Gasto - Importe MXN', (project, cost) => cost?.amount_mxn || ''],
   ];
   const headerRow = columns.map(([label]) => `<th>${escapeHtml(label)}</th>`).join('');
   const bodyRows = state.projects
+    .flatMap((project) => (project.costs.length ? project.costs : [null]).map((cost) => ({ project, cost })))
     .map(
-      (project) => `
-        <tr>
-          ${columns.map(([, valueGetter]) => `<td>${escapeHtml(valueGetter(project))}</td>`).join('')}
-        </tr>
-      `,
+      ({ project, cost }) => `
+          <tr>
+            ${columns
+              .map(([, valueGetter]) => `<td>${escapeHtml(valueGetter(project, cost))}</td>`)
+              .join('')}
+          </tr>
+        `,
     )
     .join('');
   const workbookHtml = `
@@ -262,6 +306,20 @@ function exportProjectsToExcel() {
 
 function sum(items, field) {
   return items.reduce((total, item) => total + Number(item[field] || 0), 0);
+}
+
+function formatCurrency(value, currency = 'MXN') {
+  const formatter = currencyFormatters[currency] || money;
+  return formatter.format(Number(value || 0));
+}
+
+function formatCapturedAndMxn(amount, currency, amountMxn) {
+  const captured = formatCurrency(amount, currency);
+  if (currency === 'MXN') {
+    return captured;
+  }
+
+  return `${captured} (${money.format(amountMxn)} MXN)`;
 }
 
 function formatPercentDecimal(value) {
@@ -300,6 +358,7 @@ function fillProjectForm(project) {
   projectForm.elements.client_name.value = project.client_name;
   projectForm.elements.expected_margin.value = project.expected_margin;
   projectForm.elements.total_invoiced.value = project.total_invoiced;
+  projectForm.elements.total_invoiced_currency.value = project.total_invoiced_currency || 'MXN';
   projectForm.elements.progress_percent.value = project.progress_percent;
   projectForm.elements.technician_name.value = project.technician_name;
   projectForm.elements.promised_delivery_date.value = project.promised_delivery_date;
@@ -316,6 +375,7 @@ function resetProjectForm() {
   projectForm.elements.id.value = '';
   projectForm.elements.expected_margin.value = 0;
   projectForm.elements.total_invoiced.value = 0;
+  projectForm.elements.total_invoiced_currency.value = 'MXN';
   projectForm.elements.progress_percent.value = 0;
   togglePurchaseOrder();
   setMessage(projectMessage, '');
@@ -357,7 +417,11 @@ function renderDetail(project) {
   document.querySelector('#detail-subtitle').textContent =
     `Cotizacion ${project.quote_number} | Pedido ${project.order_number} | Tecnico ${project.technician_name}`;
   document.querySelector('#detail-po').textContent = project.purchase_order_display;
-  document.querySelector('#detail-invoiced').textContent = money.format(project.total_invoiced);
+  document.querySelector('#detail-invoiced').textContent = formatCapturedAndMxn(
+    project.total_invoiced,
+    project.total_invoiced_currency,
+    project.total_invoiced_mxn,
+  );
   document.querySelector('#detail-pending').textContent = money.format(project.pending_collection);
   document.querySelector('#detail-progress').textContent = formatPercent(project.progress_percent);
 
@@ -366,7 +430,7 @@ function renderDetail(project) {
     (payment) => `
       <li>
         <div>
-          <strong>${money.format(payment.amount)}</strong>
+          <strong>${formatCapturedAndMxn(payment.amount, payment.currency, payment.amount_mxn)}</strong>
           <small>${escapeHtml(payment.payment_date)} ${escapeHtml(payment.notes || '')}</small>
         </div>
         <button data-action="delete-payment" data-id="${payment.id}" type="button">Eliminar</button>
@@ -380,7 +444,7 @@ function renderDetail(project) {
     (cost) => `
       <li>
         <div>
-          <strong>${escapeHtml(cost.category)}: ${money.format(cost.amount)}</strong>
+          <strong>${escapeHtml(cost.category)}: ${formatCapturedAndMxn(cost.amount, cost.currency, cost.amount_mxn)}</strong>
           <small>${escapeHtml(cost.cost_date)} - ${escapeHtml(cost.description)}</small>
         </div>
         <button data-action="delete-cost" data-id="${cost.id}" type="button">Eliminar</button>
@@ -433,6 +497,28 @@ logoutButton.addEventListener('click', async () => {
 projectsTab.addEventListener('click', () => switchView('projects'));
 usersTab.addEventListener('click', () => switchView('users'));
 exportProjectsButton.addEventListener('click', exportProjectsToExcel);
+
+exchangeRateForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(exchangeMessage, '');
+
+  try {
+    const exchangeRateState = await api('/api/exchange-rates', {
+      method: 'PUT',
+      body: JSON.stringify(exchangeRatePayload()),
+    });
+    state.exchangeRates = exchangeRateState.rates.reduce((rates, row) => {
+      rates[row.currency] = Number(row.rate_to_mxn);
+      return rates;
+    }, {});
+    state.exchangeUpdatedAt = exchangeRateState.last_updated_at;
+    renderExchangeRates();
+    await loadProjects();
+    setMessage(exchangeMessage, 'Tipo de cambio actualizado.', true);
+  } catch (error) {
+    setMessage(exchangeMessage, error.message);
+  }
+});
 
 projectForm.addEventListener('submit', async (event) => {
   event.preventDefault();

@@ -46,6 +46,33 @@
         </header>
 
         <section id="projects-view">
+          <section class="panel exchange-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Monedas</p>
+                <h2>Tipo de cambio a MXN</h2>
+                <p class="muted">Los listados y calculos se muestran siempre en pesos mexicanos.</p>
+              </div>
+              <p class="muted">Ultima actualizacion: <strong id="exchange-updated-at">Sin cambios</strong></p>
+            </div>
+            <form id="exchange-rate-form" class="exchange-form">
+              <label>
+                MXN
+                <input value="1.00" disabled />
+              </label>
+              <label>
+                USD a MXN
+                <input name="USD" type="number" min="0.000001" step="0.000001" required />
+              </label>
+              <label>
+                EUR a MXN
+                <input name="EUR" type="number" min="0.000001" step="0.000001" required />
+              </label>
+              <button type="submit">Actualizar tipo de cambio</button>
+              <p id="exchange-message" class="message"></p>
+            </form>
+          </section>
+
           <section class="cards">
             <article>
               <span>Proyectos</span>
@@ -107,7 +134,14 @@
                 </label>
                 <label>
                   Total facturado con IVA
-                  <input name="total_invoiced" type="number" min="0" step="0.01" value="0" required />
+                  <div class="money-row">
+                    <input name="total_invoiced" type="number" min="0" step="0.01" value="0" required />
+                    <select name="total_invoiced_currency" required>
+                      <option>MXN</option>
+                      <option>USD</option>
+                      <option>EUR</option>
+                    </select>
+                  </div>
                 </label>
                 <label>
                   Avance del proyecto (%)
@@ -198,7 +232,14 @@
                 <form id="payment-form" class="stack">
                   <label>
                     Cantidad cobrada
-                    <input name="amount" type="number" min="0.01" step="0.01" required />
+                    <div class="money-row">
+                      <input name="amount" type="number" min="0.01" step="0.01" required />
+                      <select name="currency" required>
+                        <option>MXN</option>
+                        <option>USD</option>
+                        <option>EUR</option>
+                      </select>
+                    </div>
                   </label>
                   <label>
                     Fecha de pago
@@ -230,7 +271,14 @@
                   </label>
                   <label>
                     Importe
-                    <input name="amount" type="number" min="0.01" step="0.01" required />
+                    <div class="money-row">
+                      <input name="amount" type="number" min="0.01" step="0.01" required />
+                      <select name="currency" required>
+                        <option>MXN</option>
+                        <option>USD</option>
+                        <option>EUR</option>
+                      </select>
+                    </div>
                   </label>
                   <label>
                     Fecha

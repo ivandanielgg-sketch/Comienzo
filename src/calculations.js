@@ -2,24 +2,55 @@ function roundMoney(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
-function sumAmounts(items) {
-  return roundMoney(
-    items.reduce((total, item) => total + Number(item.amount || 0), 0),
+function normalizeExchangeRates(exchangeRates = {}) {
+  if (Array.isArray(exchangeRates)) {
+    return exchangeRates.reduce((rates, row) => {
+      rates[row.currency] = Number(row.rate_to_mxn);
+      return rates;
+    }, { MXN: 1 });
+  }
+
+  return Object.entries(exchangeRates).reduce(
+    (rates, [currency, value]) => {
+      rates[currency] = Number(value.rate_to_mxn ?? value);
+      return rates;
+    },
+    { MXN: 1 },
   );
 }
 
-function buildProjectTotals(project, payments = [], costs = []) {
-  const totalCharged = sumAmounts(payments);
-  const spent = sumAmounts(costs);
-  const totalInvoiced = roundMoney(project.total_invoiced || 0);
-  const pendingCollection = roundMoney(totalInvoiced - totalCharged);
+function convertAmountToMxn(amount, currency = 'MXN', exchangeRates = {}) {
+  const rates = normalizeExchangeRates(exchangeRates);
+  const rate = rates[currency] ?? 1;
+  return roundMoney(Number(amount || 0) * rate);
+}
+
+function sumAmounts(items, exchangeRates = {}) {
+  return roundMoney(
+    items.reduce(
+      (total, item) =>
+        total + convertAmountToMxn(item.amount, item.currency || 'MXN', exchangeRates),
+      0,
+    ),
+  );
+}
+
+function buildProjectTotals(project, payments = [], costs = [], exchangeRates = {}) {
+  const totalCharged = sumAmounts(payments, exchangeRates);
+  const spent = sumAmounts(costs, exchangeRates);
+  const totalInvoicedMxn = convertAmountToMxn(
+    project.total_invoiced,
+    project.total_invoiced_currency || 'MXN',
+    exchangeRates,
+  );
+  const pendingCollection = roundMoney(totalInvoicedMxn - totalCharged);
   const finalMargin =
-    totalInvoiced > 0 ? roundMoney(1 - spent / totalInvoiced) : null;
+    totalInvoicedMxn > 0 ? roundMoney(1 - spent / totalInvoicedMxn) : null;
 
   return {
     total_charged: totalCharged,
     spent,
-    total_invoiced: totalInvoiced,
+    total_invoiced_mxn: totalInvoicedMxn,
     pending_collection: pendingCollection,
     final_margin: finalMargin,
   };
@@ -27,6 +58,8 @@ function buildProjectTotals(project, payments = [], costs = []) {
 
 module.exports = {
   buildProjectTotals,
+  convertAmountToMxn,
+  normalizeExchangeRates,
   roundMoney,
   sumAmounts,
 };
