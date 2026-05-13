@@ -138,6 +138,32 @@ function normalizeCost(body) {
   };
 }
 
+function normalizeUser(body, { requirePassword = false } = {}) {
+  const username = requiredText(body, 'username', 'Usuario');
+  const password = trim(body.password);
+
+  if (requirePassword && !password) {
+    throw badRequest('Contrasena es obligatoria.');
+  }
+
+  if (password && password.length < 6) {
+    throw badRequest('La contrasena debe tener al menos 6 caracteres.');
+  }
+
+  return {
+    username,
+    password: password || null,
+  };
+}
+
+function mapUser(row) {
+  return {
+    id: row.id,
+    username: row.username,
+    created_at: row.created_at,
+  };
+}
+
 function mapProject(row) {
   if (!row) {
     return null;
@@ -171,6 +197,17 @@ function getProjectOrFail(projectId) {
   }
 
   return project;
+}
+
+function getUserOrFail(userId) {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!user) {
+    const error = new Error('Usuario no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return user;
 }
 
 app.get('/api/session', (req, res) => {
@@ -207,6 +244,53 @@ app.post('/api/logout', requireAuth, (req, res) => {
     res.clearCookie('proyectos.sid');
     res.status(204).end();
   });
+});
+
+app.get('/api/users', requireAuth, (req, res) => {
+  const users = db
+    .prepare('SELECT id, username, created_at FROM users ORDER BY username ASC')
+    .all()
+    .map(mapUser);
+  res.json(users);
+});
+
+app.post('/api/users', requireAuth, (req, res, next) => {
+  try {
+    const user = normalizeUser(req.body, { requirePassword: true });
+    const passwordHash = bcrypt.hashSync(user.password, 12);
+    const result = db
+      .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
+      .run(user.username, passwordHash);
+
+    res.status(201).json(mapUser(getUserOrFail(result.lastInsertRowid)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/users/:id', requireAuth, (req, res, next) => {
+  try {
+    getUserOrFail(req.params.id);
+    const user = normalizeUser(req.body);
+
+    if (user.password) {
+      db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?').run(
+        user.username,
+        bcrypt.hashSync(user.password, 12),
+        req.params.id,
+      );
+    } else {
+      db.prepare('UPDATE users SET username = ? WHERE id = ?').run(user.username, req.params.id);
+    }
+
+    if (Number(req.session.userId) === Number(req.params.id)) {
+      req.session.username = user.username;
+    }
+
+    res.json(mapUser(getUserOrFail(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/projects', requireAuth, (req, res) => {
@@ -363,7 +447,10 @@ app.use((err, req, res, next) => {
   }
 
   if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-    return res.status(400).json({ message: 'El numero de cotizacion ya existe.' });
+    const message = err.message.includes('users.username')
+      ? 'El usuario ya existe.'
+      : 'El numero de cotizacion ya existe.';
+    return res.status(400).json({ message });
   }
 
   const statusCode = err.statusCode || 500;

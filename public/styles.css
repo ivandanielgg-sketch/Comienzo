@@ -145,6 +145,18 @@ th {
   margin-bottom: 24px;
 }
 
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+button.active {
+  background: var(--primary);
+  color: #ffffff;
+}
+
 .eyebrow {
   color: var(--primary);
   font-size: 0.82rem;
@@ -339,5 +351,9 @@ th {
   .panel-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    justify-content: stretch;
   }
 }
