@@ -63,6 +63,7 @@ function migrate(database) {
       status TEXT NOT NULL CHECK (status IN ('Pendiente', 'En Proceso', 'Terminado')),
       risk TEXT NOT NULL CHECK (risk IN ('Alto', 'Medio', 'Bajo')),
       observations TEXT,
+      closed_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -103,6 +104,7 @@ function migrate(database) {
   `);
   ensureColumn(database, 'projects', 'project_description', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, 'projects', 'total_invoiced_currency', "TEXT NOT NULL DEFAULT 'MXN'");
+  ensureColumn(database, 'projects', 'closed_at', 'TEXT');
   ensureColumn(database, 'project_payments', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'project_costs', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
   migrateCostCategories(database);

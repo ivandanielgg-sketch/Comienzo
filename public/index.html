@@ -40,6 +40,7 @@
           </div>
           <div class="topbar-actions">
             <button id="projects-tab" class="secondary active" type="button">Proyectos</button>
+            <button id="closed-projects-tab" class="secondary" type="button">Proyectos Cerrados</button>
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
             <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
           </div>
@@ -297,6 +298,60 @@
                   <button type="submit">Registrar costo</button>
                 </form>
                 <ul id="costs-list" class="entry-list"></ul>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="closed-projects-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Proyectos Cerrados</h2>
+                <p class="muted">
+                  Conserva el historial de proyectos cerrados con pagos y gastos.
+                  El borrado definitivo requiere contrasena del admin.
+                </p>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Cotizacion</th>
+                    <th>Cliente</th>
+                    <th>Cerrado</th>
+                    <th>Facturado MXN</th>
+                    <th>Cobrado MXN</th>
+                    <th>Gastado MXN</th>
+                    <th>Margen final</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="closed-projects-table"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <section id="closed-detail-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Historial cerrado</p>
+                <h2 id="closed-detail-title"></h2>
+                <p id="closed-detail-subtitle" class="muted"></p>
+                <p id="closed-detail-description" class="project-description"></p>
+              </div>
+            </div>
+
+            <div class="layout two-columns">
+              <div>
+                <h3>Pagos realizados</h3>
+                <ul id="closed-payments-list" class="entry-list"></ul>
+              </div>
+              <div>
+                <h3>Gastos registrados</h3>
+                <ul id="closed-costs-list" class="entry-list"></ul>
               </div>
             </div>
           </section>
