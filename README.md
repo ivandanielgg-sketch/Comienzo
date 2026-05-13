@@ -78,11 +78,15 @@ Express reconozca la conexion segura y mantenga la cookie de sesion despues del
 login.
 
 Si usas SQLite en produccion, configura tambien un disco persistente y apunta la
-base de datos ahi:
+base de datos ahi. En ese mismo archivo se guardan proyectos, usuarios y sesiones:
 
 ```bash
 DB_PATH=/var/data/app.db
 ```
+
+Esto evita la advertencia de `connect.session() MemoryStore` y mantiene la
+sesion activa aunque el servicio reinicie, siempre que `/var/data` sea un disco
+persistente.
 
 ## Pruebas
 
