@@ -250,10 +250,19 @@ button.active {
   gap: 14px;
 }
 
+.money-field .money-row {
+  max-width: 520px;
+}
+
 .money-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 100px;
+  grid-template-columns: minmax(180px, 1fr) 112px;
   gap: 8px;
+  width: 100%;
+}
+
+.money-row input {
+  min-width: 0;
 }
 
 .checkbox-row {

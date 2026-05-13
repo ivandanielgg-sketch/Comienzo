@@ -70,8 +70,47 @@ function optionalText(body, field) {
   return value || null;
 }
 
+function parseDecimal(value) {
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) {
+    return 0;
+  }
+
+  const numericValue = rawValue.replace(/[^\d.,-]/g, '');
+  const lastDotIndex = numericValue.lastIndexOf('.');
+  const lastCommaIndex = numericValue.lastIndexOf(',');
+  const decimalSeparator =
+    lastDotIndex > lastCommaIndex
+      ? '.'
+      : lastCommaIndex > lastDotIndex
+        ? ','
+        : null;
+
+  if (!decimalSeparator) {
+    return Number(numericValue);
+  }
+
+  const normalizedValue = numericValue
+    .split('')
+    .filter((character, index) => {
+      if (character !== '.' && character !== ',') {
+        return true;
+      }
+
+      return index === (decimalSeparator === '.' ? lastDotIndex : lastCommaIndex);
+    })
+    .join('')
+    .replace(decimalSeparator, '.');
+
+  return Number(normalizedValue);
+}
+
 function numberValue(body, field, label, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
-  const value = Number(body[field] ?? 0);
+  const value = parseDecimal(body[field]);
   if (!Number.isFinite(value) || value < min || value > max) {
     throw badRequest(`${label} debe ser un numero entre ${min} y ${max}.`);
   }

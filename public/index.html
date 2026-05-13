@@ -62,11 +62,11 @@
               </label>
               <label>
                 USD a MXN
-                <input name="USD" type="number" min="0.000001" step="0.000001" required />
+                <input name="USD" type="text" inputmode="decimal" placeholder="17.12" required />
               </label>
               <label>
                 EUR a MXN
-                <input name="EUR" type="number" min="0.000001" step="0.000001" required />
+                <input name="EUR" type="text" inputmode="decimal" placeholder="18.50" required />
               </label>
               <button type="submit">Actualizar tipo de cambio</button>
               <p id="exchange-message" class="message"></p>
@@ -132,10 +132,10 @@
                   Margen esperado de utilidad (%)
                   <input name="expected_margin" type="number" min="0" max="100" step="0.01" value="0" required />
                 </label>
-                <label>
+                <label class="full money-field">
                   Total facturado con IVA
                   <div class="money-row">
-                    <input name="total_invoiced" type="number" min="0" step="0.01" value="0" required />
+                    <input name="total_invoiced" type="text" inputmode="decimal" value="0" required />
                     <select name="total_invoiced_currency" required>
                       <option>MXN</option>
                       <option>USD</option>
@@ -233,7 +233,7 @@
                   <label>
                     Cantidad cobrada
                     <div class="money-row">
-                      <input name="amount" type="number" min="0.01" step="0.01" required />
+                      <input name="amount" type="text" inputmode="decimal" required />
                       <select name="currency" required>
                         <option>MXN</option>
                         <option>USD</option>
@@ -272,7 +272,7 @@
                   <label>
                     Importe
                     <div class="money-row">
-                      <input name="amount" type="number" min="0.01" step="0.01" required />
+                      <input name="amount" type="text" inputmode="decimal" required />
                       <select name="currency" required>
                         <option>MXN</option>
                         <option>USD</option>
