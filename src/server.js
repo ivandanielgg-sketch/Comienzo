@@ -5,7 +5,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('node:path');
 const { getDb } = require('./db');
-const { buildProjectTotals, convertAmountToMxn } = require('./calculations');
+const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
 
 const app = express();
@@ -305,6 +305,13 @@ function mapProject(row, exchangeRates = getExchangeRateMap()) {
     total_invoiced_currency: row.total_invoiced_currency || 'MXN',
   };
   const totals = buildProjectTotals(normalizedProject, payments, costs, exchangeRates);
+  const costsWithInvoicePercentage = costs.map((cost) => ({
+    ...cost,
+    invoice_cost_percentage:
+      totals.total_invoiced_mxn > 0
+        ? roundMoney(1 - cost.amount_mxn / totals.total_invoiced_mxn)
+        : null,
+  }));
 
   return {
     ...normalizedProject,
@@ -312,7 +319,7 @@ function mapProject(row, exchangeRates = getExchangeRateMap()) {
       ? 'No Aplica'
       : row.purchase_order_number,
     payments,
-    costs,
+    costs: costsWithInvoicePercentage,
     ...totals,
   };
 }

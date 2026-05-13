@@ -399,7 +399,7 @@ function projectWorksheetXml(project) {
     ]),
     [],
     ['Gastos registrados'],
-    ['Fecha', 'Tipo', 'Descripcion', 'Importe capturado', 'Moneda', 'Importe MXN'],
+    ['Fecha', 'Tipo', 'Descripcion', 'Importe capturado', 'Moneda', 'Importe MXN', 'Porcentaje vs facturado'],
     ...project.costs.map((cost) => [
       cost.cost_date,
       cost.category,
@@ -407,6 +407,7 @@ function projectWorksheetXml(project) {
       cost.amount,
       cost.currency,
       cost.amount_mxn,
+      formatPercentDecimal(cost.invoice_cost_percentage),
     ]),
   ]);
 }
@@ -650,6 +651,7 @@ function selectClosedProject(projectId) {
         <div>
           <strong>${escapeHtml(cost.category)}: ${formatCapturedAndMxn(cost.amount, cost.currency, cost.amount_mxn)}</strong>
           <small>${escapeHtml(cost.cost_date)} - ${escapeHtml(cost.description)}</small>
+          <small>Porcentaje vs facturado: ${formatPercentDecimal(cost.invoice_cost_percentage)}</small>
         </div>
       </li>
     `,
@@ -717,6 +719,7 @@ function renderDetail(project) {
         <div>
           <strong>${escapeHtml(cost.category)}: ${formatCapturedAndMxn(cost.amount, cost.currency, cost.amount_mxn)}</strong>
           <small>${escapeHtml(cost.cost_date)} - ${escapeHtml(cost.description)}</small>
+          <small>Porcentaje vs facturado: ${formatPercentDecimal(cost.invoice_cost_percentage)}</small>
         </div>
         <button data-action="delete-cost" data-id="${cost.id}" type="button">Eliminar</button>
       </li>
