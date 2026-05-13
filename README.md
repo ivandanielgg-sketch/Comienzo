@@ -45,6 +45,7 @@ ADMIN_USER=admin
 ADMIN_PASSWORD=admin123
 SESSION_SECRET=cambia-este-secreto
 PORT=3000
+TRUST_PROXY=true
 ```
 
 Si no defines variables, se crea automaticamente el usuario `admin` con la
@@ -59,6 +60,33 @@ npm start
 Abre `http://localhost:3000`.
 
 La base de datos SQLite se guarda en `data/app.db`.
+
+## Publicacion en Render u otro hosting con HTTPS
+
+En Render configura estas variables de entorno:
+
+```bash
+NODE_ENV=production
+ADMIN_USER=admin
+ADMIN_PASSWORD=una-contrasena-segura
+SESSION_SECRET=un-texto-largo-y-secreto
+TRUST_PROXY=true
+```
+
+Render publica la app detras de un proxy HTTPS. `TRUST_PROXY=true` permite que
+Express reconozca la conexion segura y mantenga la cookie de sesion despues del
+login.
+
+Si usas SQLite en produccion, configura tambien un disco persistente y apunta la
+base de datos ahi. En ese mismo archivo se guardan proyectos, usuarios y sesiones:
+
+```bash
+DB_PATH=/var/data/app.db
+```
+
+Esto evita la advertencia de `connect.session() MemoryStore` y mantiene la
+sesion activa aunque el servicio reinicie, siempre que `/var/data` sea un disco
+persistente.
 
 ## Pruebas
 

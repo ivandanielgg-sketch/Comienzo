@@ -6,6 +6,7 @@ const session = require('express-session');
 const path = require('node:path');
 const { getDb } = require('./db');
 const { buildProjectTotals } = require('./calculations');
+const { createSqliteSessionStore } = require('./sessionStore');
 
 const app = express();
 const db = getDb();
@@ -14,19 +15,28 @@ const PORT = process.env.PORT || 3000;
 const VALID_STATUSES = ['Pendiente', 'En Proceso', 'Terminado'];
 const VALID_RISKS = ['Alto', 'Medio', 'Bajo'];
 const VALID_COST_CATEGORIES = ['Compra', 'Gasto', 'Salario'];
+const SESSION_TTL_MS = 1000 * 60 * 60 * 8;
+const isProduction = process.env.NODE_ENV === 'production';
+const trustProxy = isProduction || process.env.TRUST_PROXY === 'true';
+
+if (trustProxy) {
+  app.set('trust proxy', 1);
+}
 
 app.use(express.json());
 app.use(
   session({
     name: 'proyectos.sid',
+    store: createSqliteSessionStore(session, db, { ttlMs: SESSION_TTL_MS }),
     secret: process.env.SESSION_SECRET || 'change-this-session-secret',
+    proxy: trustProxy,
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 1000 * 60 * 60 * 8,
+      secure: isProduction,
+      maxAge: SESSION_TTL_MS,
     },
   }),
 );
