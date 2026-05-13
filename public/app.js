@@ -921,10 +921,20 @@ paymentsList.addEventListener('click', async (event) => {
     return;
   }
 
-  await api(`/api/projects/${state.selectedProjectId}/payments/${button.dataset.id}`, {
-    method: 'DELETE',
-  });
-  await loadProjects();
+  const password = window.prompt('Ingresa la contrasena del admin para eliminar el pago:');
+  if (!password) {
+    return;
+  }
+
+  try {
+    await api(`/api/projects/${state.selectedProjectId}/payments/${button.dataset.id}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ password }),
+    });
+    await loadProjects();
+  } catch (error) {
+    window.alert(error.message);
+  }
 });
 
 costsList.addEventListener('click', async (event) => {
@@ -933,10 +943,20 @@ costsList.addEventListener('click', async (event) => {
     return;
   }
 
-  await api(`/api/projects/${state.selectedProjectId}/costs/${button.dataset.id}`, {
-    method: 'DELETE',
-  });
-  await loadProjects();
+  const password = window.prompt('Ingresa la contrasena del admin para eliminar el costo:');
+  if (!password) {
+    return;
+  }
+
+  try {
+    await api(`/api/projects/${state.selectedProjectId}/costs/${button.dataset.id}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ password }),
+    });
+    await loadProjects();
+  } catch (error) {
+    window.alert(error.message);
+  }
 });
 
 api('/api/session')

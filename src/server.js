@@ -671,6 +671,7 @@ app.post('/api/projects/:id/payments', requireAuth, (req, res, next) => {
 app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, (req, res, next) => {
   try {
     getProjectOrFail(req.params.projectId);
+    verifyAdminPassword(req.body);
     db.prepare('DELETE FROM project_payments WHERE id = ? AND project_id = ?').run(
       req.params.paymentId,
       req.params.projectId,
@@ -699,6 +700,7 @@ app.post('/api/projects/:id/costs', requireAuth, (req, res, next) => {
 app.delete('/api/projects/:projectId/costs/:costId', requireAuth, (req, res, next) => {
   try {
     getProjectOrFail(req.params.projectId);
+    verifyAdminPassword(req.body);
     db.prepare('DELETE FROM project_costs WHERE id = ? AND project_id = ?').run(
       req.params.costId,
       req.params.projectId,
