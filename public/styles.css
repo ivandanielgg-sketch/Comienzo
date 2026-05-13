@@ -170,6 +170,15 @@ button.active {
   color: var(--muted);
 }
 
+.project-description {
+  background: #f8fbff;
+  border-left: 4px solid var(--primary);
+  border-radius: 12px;
+  color: #344054;
+  margin-bottom: 0;
+  padding: 12px 14px;
+}
+
 .message {
   color: var(--danger);
   font-weight: 700;
