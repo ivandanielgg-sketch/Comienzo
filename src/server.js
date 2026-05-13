@@ -1,0 +1,463 @@
+require('dotenv').config();
+
+const bcrypt = require('bcryptjs');
+const express = require('express');
+const session = require('express-session');
+const path = require('node:path');
+const { getDb } = require('./db');
+const { buildProjectTotals } = require('./calculations');
+
+const app = express();
+const db = getDb();
+const PORT = process.env.PORT || 3000;
+
+const VALID_STATUSES = ['Pendiente', 'En Proceso', 'Terminado'];
+const VALID_RISKS = ['Alto', 'Medio', 'Bajo'];
+const VALID_COST_CATEGORIES = ['Compra', 'Gasto', 'Salario'];
+
+app.use(express.json());
+app.use(
+  session({
+    name: 'proyectos.sid',
+    secret: process.env.SESSION_SECRET || 'change-this-session-secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 1000 * 60 * 60 * 8,
+    },
+  }),
+);
+
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+function requireAuth(req, res, next) {
+  if (!req.session.userId) {
+    return res.status(401).json({ message: 'Necesitas iniciar sesion.' });
+  }
+
+  return next();
+}
+
+function trim(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function requiredText(body, field, label) {
+  const value = trim(body[field]);
+  if (!value) {
+    throw badRequest(`${label} es obligatorio.`);
+  }
+
+  return value;
+}
+
+function optionalText(body, field) {
+  const value = trim(body[field]);
+  return value || null;
+}
+
+function numberValue(body, field, label, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const value = Number(body[field] ?? 0);
+  if (!Number.isFinite(value) || value < min || value > max) {
+    throw badRequest(`${label} debe ser un numero entre ${min} y ${max}.`);
+  }
+
+  return value;
+}
+
+function enumValue(body, field, label, validValues) {
+  const value = requiredText(body, field, label);
+  if (!validValues.includes(value)) {
+    throw badRequest(`${label} no es valido.`);
+  }
+
+  return value;
+}
+
+function booleanValue(body, field) {
+  return body[field] === true || body[field] === 'true' || body[field] === 1 ? 1 : 0;
+}
+
+function badRequest(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function normalizeProject(body) {
+  const purchaseOrderNotApplicable = booleanValue(body, 'purchase_order_not_applicable');
+  const purchaseOrderNumber = purchaseOrderNotApplicable
+    ? null
+    : requiredText(body, 'purchase_order_number', 'Numero de Orden de Compra');
+
+  return {
+    quote_number: requiredText(body, 'quote_number', 'Numero de cotizacion'),
+    order_number: requiredText(body, 'order_number', 'Numero de Pedido'),
+    purchase_order_number: purchaseOrderNumber,
+    purchase_order_not_applicable: purchaseOrderNotApplicable,
+    seller: requiredText(body, 'seller', 'Vendedor'),
+    client_name: requiredText(body, 'client_name', 'Nombre del Cliente'),
+    expected_margin: numberValue(body, 'expected_margin', 'Margen esperado', {
+      min: 0,
+      max: 100,
+    }),
+    total_invoiced: numberValue(body, 'total_invoiced', 'Total Facturado', { min: 0 }),
+    progress_percent: numberValue(body, 'progress_percent', 'Porcentaje de Avance', {
+      min: 0,
+      max: 100,
+    }),
+    technician_name: requiredText(body, 'technician_name', 'Tecnico Responsable'),
+    promised_delivery_date: requiredText(
+      body,
+      'promised_delivery_date',
+      'Fecha Prometida de entrega',
+    ),
+    status: enumValue(body, 'status', 'Estado', VALID_STATUSES),
+    risk: enumValue(body, 'risk', 'Riesgo', VALID_RISKS),
+    observations: optionalText(body, 'observations'),
+  };
+}
+
+function normalizePayment(body) {
+  return {
+    amount: numberValue(body, 'amount', 'Cantidad cobrada', { min: 0.01 }),
+    payment_date: requiredText(body, 'payment_date', 'Fecha de pago'),
+    notes: optionalText(body, 'notes'),
+  };
+}
+
+function normalizeCost(body) {
+  return {
+    category: enumValue(body, 'category', 'Categoria', VALID_COST_CATEGORIES),
+    description: requiredText(body, 'description', 'Descripcion'),
+    amount: numberValue(body, 'amount', 'Importe gastado', { min: 0.01 }),
+    cost_date: requiredText(body, 'cost_date', 'Fecha del gasto'),
+  };
+}
+
+function normalizeUser(body, { requirePassword = false } = {}) {
+  const username = requiredText(body, 'username', 'Usuario');
+  const password = trim(body.password);
+
+  if (requirePassword && !password) {
+    throw badRequest('Contrasena es obligatoria.');
+  }
+
+  if (password && password.length < 6) {
+    throw badRequest('La contrasena debe tener al menos 6 caracteres.');
+  }
+
+  return {
+    username,
+    password: password || null,
+  };
+}
+
+function mapUser(row) {
+  return {
+    id: row.id,
+    username: row.username,
+    created_at: row.created_at,
+  };
+}
+
+function mapProject(row) {
+  if (!row) {
+    return null;
+  }
+
+  const payments = db
+    .prepare('SELECT * FROM project_payments WHERE project_id = ? ORDER BY payment_date DESC, id DESC')
+    .all(row.id);
+  const costs = db
+    .prepare('SELECT * FROM project_costs WHERE project_id = ? ORDER BY cost_date DESC, id DESC')
+    .all(row.id);
+  const totals = buildProjectTotals(row, payments, costs);
+
+  return {
+    ...row,
+    purchase_order_display: row.purchase_order_not_applicable
+      ? 'No Aplica'
+      : row.purchase_order_number,
+    payments,
+    costs,
+    ...totals,
+  };
+}
+
+function getProjectOrFail(projectId) {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
+  if (!project) {
+    const error = new Error('Proyecto no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return project;
+}
+
+function getUserOrFail(userId) {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!user) {
+    const error = new Error('Usuario no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return user;
+}
+
+app.get('/api/session', (req, res) => {
+  if (!req.session.userId) {
+    return res.json({ authenticated: false });
+  }
+
+  return res.json({
+    authenticated: true,
+    user: { id: req.session.userId, username: req.session.username },
+  });
+});
+
+app.post('/api/login', (req, res, next) => {
+  try {
+    const username = requiredText(req.body, 'username', 'Usuario');
+    const password = requiredText(req.body, 'password', 'Contrasena');
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+
+    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+      throw badRequest('Usuario o contrasena incorrectos.');
+    }
+
+    req.session.userId = user.id;
+    req.session.username = user.username;
+    return res.json({ username: user.username });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/logout', requireAuth, (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie('proyectos.sid');
+    res.status(204).end();
+  });
+});
+
+app.get('/api/users', requireAuth, (req, res) => {
+  const users = db
+    .prepare('SELECT id, username, created_at FROM users ORDER BY username ASC')
+    .all()
+    .map(mapUser);
+  res.json(users);
+});
+
+app.post('/api/users', requireAuth, (req, res, next) => {
+  try {
+    const user = normalizeUser(req.body, { requirePassword: true });
+    const passwordHash = bcrypt.hashSync(user.password, 12);
+    const result = db
+      .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
+      .run(user.username, passwordHash);
+
+    res.status(201).json(mapUser(getUserOrFail(result.lastInsertRowid)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/users/:id', requireAuth, (req, res, next) => {
+  try {
+    getUserOrFail(req.params.id);
+    const user = normalizeUser(req.body);
+
+    if (user.password) {
+      db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?').run(
+        user.username,
+        bcrypt.hashSync(user.password, 12),
+        req.params.id,
+      );
+    } else {
+      db.prepare('UPDATE users SET username = ? WHERE id = ?').run(user.username, req.params.id);
+    }
+
+    if (Number(req.session.userId) === Number(req.params.id)) {
+      req.session.username = user.username;
+    }
+
+    res.json(mapUser(getUserOrFail(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/projects', requireAuth, (req, res) => {
+  const projects = db
+    .prepare('SELECT * FROM projects ORDER BY promised_delivery_date ASC, id DESC')
+    .all()
+    .map(mapProject);
+  res.json(projects);
+});
+
+app.get('/api/projects/:id', requireAuth, (req, res, next) => {
+  try {
+    const project = getProjectOrFail(req.params.id);
+    res.json(mapProject(project));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/projects', requireAuth, (req, res, next) => {
+  try {
+    const project = normalizeProject(req.body);
+    const result = db
+      .prepare(
+        `INSERT INTO projects (
+          quote_number,
+          order_number,
+          purchase_order_number,
+          purchase_order_not_applicable,
+          seller,
+          client_name,
+          expected_margin,
+          total_invoiced,
+          progress_percent,
+          technician_name,
+          promised_delivery_date,
+          status,
+          risk,
+          observations
+        ) VALUES (
+          @quote_number,
+          @order_number,
+          @purchase_order_number,
+          @purchase_order_not_applicable,
+          @seller,
+          @client_name,
+          @expected_margin,
+          @total_invoiced,
+          @progress_percent,
+          @technician_name,
+          @promised_delivery_date,
+          @status,
+          @risk,
+          @observations
+        )`,
+      )
+      .run(project);
+
+    res.status(201).json(mapProject(getProjectOrFail(result.lastInsertRowid)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/projects/:id', requireAuth, (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    const project = normalizeProject(req.body);
+    db.prepare(
+      `UPDATE projects SET
+        quote_number = @quote_number,
+        order_number = @order_number,
+        purchase_order_number = @purchase_order_number,
+        purchase_order_not_applicable = @purchase_order_not_applicable,
+        seller = @seller,
+        client_name = @client_name,
+        expected_margin = @expected_margin,
+        total_invoiced = @total_invoiced,
+        progress_percent = @progress_percent,
+        technician_name = @technician_name,
+        promised_delivery_date = @promised_delivery_date,
+        status = @status,
+        risk = @risk,
+        observations = @observations,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = @id`,
+    ).run({ ...project, id: req.params.id });
+
+    res.json(mapProject(getProjectOrFail(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/projects/:id/payments', requireAuth, (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    const payment = normalizePayment(req.body);
+    db.prepare(
+      `INSERT INTO project_payments (project_id, amount, payment_date, notes)
+       VALUES (@project_id, @amount, @payment_date, @notes)`,
+    ).run({ ...payment, project_id: req.params.id });
+
+    res.status(201).json(mapProject(getProjectOrFail(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.projectId);
+    db.prepare('DELETE FROM project_payments WHERE id = ? AND project_id = ?').run(
+      req.params.paymentId,
+      req.params.projectId,
+    );
+    res.json(mapProject(getProjectOrFail(req.params.projectId)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/projects/:id/costs', requireAuth, (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    const cost = normalizeCost(req.body);
+    db.prepare(
+      `INSERT INTO project_costs (project_id, category, description, amount, cost_date)
+       VALUES (@project_id, @category, @description, @amount, @cost_date)`,
+    ).run({ ...cost, project_id: req.params.id });
+
+    res.status(201).json(mapProject(getProjectOrFail(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/projects/:projectId/costs/:costId', requireAuth, (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.projectId);
+    db.prepare('DELETE FROM project_costs WHERE id = ? AND project_id = ?').run(
+      req.params.costId,
+      req.params.projectId,
+    );
+    res.json(mapProject(getProjectOrFail(req.params.projectId)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use((err, req, res, next) => {
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    const message = err.message.includes('users.username')
+      ? 'El usuario ya existe.'
+      : 'El numero de cotizacion ya existe.';
+    return res.status(400).json({ message });
+  }
+
+  const statusCode = err.statusCode || 500;
+  const message = statusCode === 500 ? 'Ocurrio un error inesperado.' : err.message;
+  return res.status(statusCode).json({ message });
+});
+
+app.listen(PORT, () => {
+  console.log(`Aplicacion de proyectos disponible en http://localhost:${PORT}`);
+});
