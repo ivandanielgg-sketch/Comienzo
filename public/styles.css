@@ -69,6 +69,15 @@ button.secondary:hover {
   background: #d9e4fb;
 }
 
+button.danger {
+  background: #fff1f3;
+  color: var(--danger);
+}
+
+button.danger:hover {
+  background: #ffe4e8;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -293,6 +302,11 @@ button.active {
 
 .table-wrapper {
   overflow-x: auto;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .badge {

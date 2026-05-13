@@ -331,6 +331,19 @@ function getUserOrFail(userId) {
   return user;
 }
 
+function verifyActiveUserPassword(req) {
+  const password = requiredText(req.body, 'password', 'Contrasena');
+  const user = getUserOrFail(req.session.userId);
+
+  if (!bcrypt.compareSync(password, user.password_hash)) {
+    const error = new Error('La contrasena no es correcta.');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return user;
+}
+
 app.get('/api/session', (req, res) => {
   if (!req.session.userId) {
     return res.json({ authenticated: false });
@@ -552,6 +565,17 @@ app.put('/api/projects/:id', requireAuth, (req, res, next) => {
     ).run({ ...project, id: req.params.id });
 
     res.json(mapProject(getProjectOrFail(req.params.id), getExchangeRateMap()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/projects/:id', requireAuth, (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    verifyActiveUserPassword(req);
+    db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
+    res.status(204).end();
   } catch (error) {
     next(error);
   }

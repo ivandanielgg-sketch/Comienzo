@@ -8,6 +8,7 @@ compras/gastos/salarios relacionados con la cotizacion y calcular totales clave.
 
 - Login con usuario y contrasena.
 - Pagina de administracion para agregar y modificar usuarios.
+- Eliminacion de proyectos validando la contrasena del usuario activo.
 - ID unico de proyecto generado automaticamente por consecutivo.
 - Alta y edicion de proyectos con:
   - Numero de cotizacion.

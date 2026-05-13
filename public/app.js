@@ -209,7 +209,12 @@ function renderProjects() {
               ${formatPercentDecimal(project.final_margin)}
             </span>
           </td>
-          <td><button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button></td>
+          <td>
+            <div class="row-actions">
+              <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Eliminar</button>
+              <button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button>
+            </div>
+          </td>
         </tr>
       `,
     )
@@ -417,6 +422,40 @@ function clearSelection() {
   resetProjectForm();
 }
 
+async function deleteProject(projectId) {
+  const project = state.projects.find((item) => item.id === Number(projectId));
+  if (!project) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Se eliminara el proyecto #${project.id} (${project.quote_number}). Esta accion no se puede deshacer.`,
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const password = window.prompt('Ingresa tu contrasena para confirmar la eliminacion:');
+  if (!password) {
+    return;
+  }
+
+  try {
+    await api(`/api/projects/${project.id}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ password }),
+    });
+
+    if (state.selectedProjectId === project.id) {
+      clearSelection();
+    }
+
+    await loadProjects();
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
 function selectUser(userId) {
   const user = state.users.find((item) => item.id === Number(userId));
   if (!user) {
@@ -575,9 +614,15 @@ purchaseOrderNotApplicable.addEventListener('change', togglePurchaseOrder);
 newUserButton.addEventListener('click', resetUserForm);
 
 projectsTable.addEventListener('click', (event) => {
-  const button = event.target.closest('button[data-action="select"]');
-  if (button) {
-    selectProject(button.dataset.id);
+  const selectButton = event.target.closest('button[data-action="select"]');
+  if (selectButton) {
+    selectProject(selectButton.dataset.id);
+    return;
+  }
+
+  const deleteButton = event.target.closest('button[data-action="delete-project"]');
+  if (deleteButton) {
+    deleteProject(deleteButton.dataset.id);
   }
 });
 
