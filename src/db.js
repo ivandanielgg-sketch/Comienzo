@@ -53,6 +53,7 @@ function migrate(database) {
       purchase_order_not_applicable INTEGER NOT NULL DEFAULT 0,
       seller TEXT NOT NULL,
       client_name TEXT NOT NULL,
+      project_description TEXT NOT NULL DEFAULT '',
       expected_margin REAL NOT NULL DEFAULT 0,
       total_invoiced REAL NOT NULL DEFAULT 0,
       total_invoiced_currency TEXT NOT NULL DEFAULT 'MXN',
@@ -100,6 +101,7 @@ function migrate(database) {
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
   `);
+  ensureColumn(database, 'projects', 'project_description', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, 'projects', 'total_invoiced_currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'project_payments', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'project_costs', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");

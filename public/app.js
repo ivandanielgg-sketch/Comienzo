@@ -249,6 +249,7 @@ function exportProjectsToExcel() {
     ['Numero de Orden de Compra', (project) => project.purchase_order_display],
     ['Vendedor', (project) => project.seller],
     ['Cliente', (project) => project.client_name],
+    ['Descripcion del proyecto', (project) => project.project_description || ''],
     ['Margen esperado de utilidad (%)', (project) => project.expected_margin],
     ['Total Cobrado MXN', (project) => project.total_charged],
     ['Gastado MXN', (project) => project.spent],
@@ -384,6 +385,7 @@ function fillProjectForm(project) {
   );
   projectForm.elements.seller.value = project.seller;
   projectForm.elements.client_name.value = project.client_name;
+  projectForm.elements.project_description.value = project.project_description || '';
   projectForm.elements.expected_margin.value = project.expected_margin;
   projectForm.elements.total_invoiced.value = project.total_invoiced;
   projectForm.elements.total_invoiced_currency.value = project.total_invoiced_currency || 'MXN';
@@ -444,6 +446,7 @@ function renderDetail(project) {
   document.querySelector('#detail-title').textContent = `#${project.id} - ${project.client_name}`;
   document.querySelector('#detail-subtitle').textContent =
     `Cotizacion ${project.quote_number} | Pedido ${project.order_number} | Tecnico ${project.technician_name}`;
+  document.querySelector('#detail-description').textContent = project.project_description || '';
   document.querySelector('#detail-po').textContent = project.purchase_order_display;
   document.querySelector('#detail-invoiced').textContent = formatCapturedAndMxn(
     project.total_invoiced,

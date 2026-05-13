@@ -14,6 +14,7 @@ compras/gastos/salarios relacionados con la cotizacion y calcular totales clave.
   - Numero de pedido.
   - Numero de orden de compra o marca de "No Aplica".
   - Vendedor, cliente, tecnico responsable y fecha prometida de entrega.
+  - Descripcion del proyecto para indicar de que trata.
   - Margen esperado, total facturado con IVA y avance manual.
   - Estado: Pendiente, En Proceso o Terminado.
   - Riesgo: Alto, Medio o Bajo.
@@ -92,6 +93,31 @@ DB_PATH=/var/data/app.db
 Esto evita la advertencia de `connect.session() MemoryStore`, conserva usuarios,
 proyectos, tipos de cambio y mantiene la sesion activa aunque el servicio
 reinicie, siempre que `/var/data` sea un disco persistente.
+
+### Configurar disco persistente en Render
+
+Para garantizar que usuarios, proyectos, pagos, gastos, tipos de cambio y
+sesiones se conserven despues de cada deploy:
+
+1. Entra al servicio web en Render.
+2. Abre la seccion **Disks**.
+3. Agrega un disco persistente.
+4. Usa como mount path:
+
+```bash
+/var/data
+```
+
+5. En **Environment** agrega o confirma:
+
+```bash
+DB_PATH=/var/data/app.db
+```
+
+6. Guarda cambios y redeploya el servicio.
+
+No uses `data/app.db` en produccion en Render, porque esa ruta vive dentro del
+filesystem temporal del deploy y puede perderse al actualizar la plataforma.
 
 ## Pruebas
 
