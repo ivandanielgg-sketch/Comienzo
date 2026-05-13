@@ -61,6 +61,14 @@ function requireAuth(req, res, next) {
   return next();
 }
 
+function requireAdminVerified(req, res, next) {
+  if (!req.session.adminVerified) {
+    return res.status(403).json({ message: 'Se requiere autorizacion del admin.' });
+  }
+
+  return next();
+}
+
 function trim(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -331,6 +339,32 @@ function getUserOrFail(userId) {
   return user;
 }
 
+function getAdminUserOrFail() {
+  const adminUsername = process.env.ADMIN_USER || 'admin';
+  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(adminUsername);
+
+  if (!user) {
+    const error = new Error('Usuario admin no encontrado.');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return user;
+}
+
+function verifyAdminPassword(body) {
+  const password = requiredText(body, 'password', 'Contrasena del admin');
+  const adminUser = getAdminUserOrFail();
+
+  if (!bcrypt.compareSync(password, adminUser.password_hash)) {
+    const error = new Error('La contrasena del admin no es correcta.');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return adminUser;
+}
+
 function verifyActiveUserPassword(req) {
   const password = requiredText(req.body, 'password', 'Contrasena');
   const user = getUserOrFail(req.session.userId);
@@ -380,7 +414,17 @@ app.post('/api/logout', requireAuth, (req, res) => {
   });
 });
 
-app.get('/api/users', requireAuth, (req, res) => {
+app.post('/api/admin/verify', requireAuth, (req, res, next) => {
+  try {
+    verifyAdminPassword(req.body);
+    req.session.adminVerified = true;
+    res.json({ authorized: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/users', requireAuth, requireAdminVerified, (req, res) => {
   const users = db
     .prepare('SELECT id, username, created_at FROM users ORDER BY username ASC')
     .all()
@@ -388,7 +432,7 @@ app.get('/api/users', requireAuth, (req, res) => {
   res.json(users);
 });
 
-app.post('/api/users', requireAuth, (req, res, next) => {
+app.post('/api/users', requireAuth, requireAdminVerified, (req, res, next) => {
   try {
     const user = normalizeUser(req.body, { requirePassword: true });
     const passwordHash = bcrypt.hashSync(user.password, 12);
@@ -402,7 +446,7 @@ app.post('/api/users', requireAuth, (req, res, next) => {
   }
 });
 
-app.put('/api/users/:id', requireAuth, (req, res, next) => {
+app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) => {
   try {
     getUserOrFail(req.params.id);
     const user = normalizeUser(req.body);
@@ -474,7 +518,16 @@ app.put('/api/exchange-rates', requireAuth, (req, res, next) => {
 app.get('/api/projects', requireAuth, (req, res) => {
   const exchangeRates = getExchangeRateMap();
   const projects = db
-    .prepare('SELECT * FROM projects ORDER BY promised_delivery_date ASC, id DESC')
+    .prepare('SELECT * FROM projects WHERE closed_at IS NULL ORDER BY promised_delivery_date ASC, id DESC')
+    .all()
+    .map((project) => mapProject(project, exchangeRates));
+  res.json(projects);
+});
+
+app.get('/api/closed-projects', requireAuth, (req, res) => {
+  const exchangeRates = getExchangeRateMap();
+  const projects = db
+    .prepare('SELECT * FROM projects WHERE closed_at IS NOT NULL ORDER BY closed_at DESC, id DESC')
     .all()
     .map((project) => mapProject(project, exchangeRates));
   res.json(projects);
@@ -573,8 +626,27 @@ app.put('/api/projects/:id', requireAuth, (req, res, next) => {
 app.delete('/api/projects/:id', requireAuth, (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
-    verifyActiveUserPassword(req);
-    db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
+    verifyAdminPassword(req.body);
+    db.prepare(
+      `UPDATE projects
+       SET closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND closed_at IS NULL`,
+    ).run(req.params.id);
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/closed-projects/:id', requireAuth, (req, res, next) => {
+  try {
+    const project = getProjectOrFail(req.params.id);
+    if (!project.closed_at) {
+      throw badRequest('El proyecto aun no esta cerrado.');
+    }
+
+    verifyAdminPassword(req.body);
+    db.prepare('DELETE FROM projects WHERE id = ? AND closed_at IS NOT NULL').run(req.params.id);
     res.status(204).end();
   } catch (error) {
     next(error);

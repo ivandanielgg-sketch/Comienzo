@@ -7,8 +7,11 @@ compras/gastos/salarios relacionados con la cotizacion y calcular totales clave.
 ## Funcionalidad incluida
 
 - Login con usuario y contrasena.
-- Pagina de administracion para agregar y modificar usuarios.
-- Eliminacion de proyectos validando la contrasena del usuario activo.
+- Pagina de administracion para agregar y modificar usuarios protegida con
+  contrasena del admin.
+- Cierre de proyectos validando la contrasena del admin.
+- Vista de Proyectos Cerrados para conservar historial de pagos y gastos.
+- Borrado definitivo de proyectos cerrados validando la contrasena del admin.
 - ID unico de proyecto generado automaticamente por consecutivo.
 - Alta y edicion de proyectos con:
   - Numero de cotizacion.
@@ -29,8 +32,8 @@ compras/gastos/salarios relacionados con la cotizacion y calcular totales clave.
   - Pendiente de cobro = Total Facturado - Total Cobrado.
   - Margen Final = 1 - (Gastado / Total Facturado).
 - Etiqueta de color para margen final contra margen esperado.
-- Exportacion del listado de proyectos y sus gastos relacionados a un archivo `.xls`
-  compatible con Excel.
+- Exportacion a Excel con una hoja de listado general y una hoja por proyecto
+  con pagos y gastos relacionados.
 
 ## Requisitos
 

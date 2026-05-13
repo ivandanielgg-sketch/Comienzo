@@ -307,6 +307,7 @@ button.active {
 .row-actions {
   display: flex;
   gap: 8px;
+  white-space: nowrap;
 }
 
 .badge {
