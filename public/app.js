@@ -28,6 +28,7 @@ const projectMessage = document.querySelector('#project-message');
 const projectFormTitle = document.querySelector('#project-form-title');
 const newProjectButton = document.querySelector('#new-project-button');
 const exportProjectsButton = document.querySelector('#export-projects-button');
+const exportClosedProjectsButton = document.querySelector('#export-closed-projects-button');
 const projectsTable = document.querySelector('#projects-table');
 const closedProjectsTable = document.querySelector('#closed-projects-table');
 const detailPanel = document.querySelector('#detail-panel');
@@ -319,7 +320,7 @@ function renderUsers() {
     .join('');
 }
 
-function exportProjectsToExcel() {
+function exportProjectsToExcel(projects, filenamePrefix) {
   const generalColumns = [
     ['ID', (project) => project.id],
     ['Numero de cotizacion', (project) => project.quote_number],
@@ -338,6 +339,7 @@ function exportProjectsToExcel() {
     ['Porcentaje de Avance (%)', (project) => project.progress_percent],
     ['Tecnico Responsable', (project) => project.technician_name],
     ['Fecha Prometida de entrega', (project) => project.promised_delivery_date],
+    ['Fecha de cierre', (project) => project.closed_at || ''],
     ['Estado', (project) => project.status],
     ['Riesgo', (project) => project.risk],
     ['Margen Final (%)', (project) =>
@@ -349,10 +351,10 @@ function exportProjectsToExcel() {
       'Listado',
       [
         generalColumns.map(([label]) => label),
-        ...state.projects.map((project) => generalColumns.map(([, valueGetter]) => valueGetter(project))),
+        ...projects.map((project) => generalColumns.map(([, valueGetter]) => valueGetter(project))),
       ],
     ),
-    ...state.projects.map(projectWorksheetXml),
+    ...projects.map(projectWorksheetXml),
   ];
   const workbookXml = `<?xml version="1.0"?>
 <?mso-application progid="Excel.Sheet"?>
@@ -367,7 +369,7 @@ function exportProjectsToExcel() {
   });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = `proyectos-${today()}.xls`;
+  link.download = `${filenamePrefix}-${today()}.xls`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -379,6 +381,7 @@ function projectWorksheetXml(project) {
     [`Proyecto #${project.id}`],
     ['Cotizacion', project.quote_number],
     ['Cliente', project.client_name],
+    ['Fecha de cierre', project.closed_at || ''],
     ['Descripcion', project.project_description || ''],
     ['Total facturado MXN', project.total_invoiced_mxn],
     ['Total cobrado MXN', project.total_charged],
@@ -786,7 +789,16 @@ usersTab.addEventListener('click', async () => {
     window.alert(error.message);
   }
 });
-exportProjectsButton.addEventListener('click', exportProjectsToExcel);
+exportProjectsButton.addEventListener('click', () =>
+  exportProjectsToExcel(state.projects, 'proyectos'),
+);
+exportClosedProjectsButton.addEventListener('click', async () => {
+  if (!state.closedProjects.length) {
+    await loadClosedProjects();
+  }
+
+  exportProjectsToExcel(state.closedProjects, 'proyectos-cerrados');
+});
 
 exchangeRateForm.addEventListener('submit', async (event) => {
   event.preventDefault();
