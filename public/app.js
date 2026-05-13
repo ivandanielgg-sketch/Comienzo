@@ -204,7 +204,11 @@ function renderProjects() {
           <td>${money.format(project.total_charged)}</td>
           <td>${money.format(project.spent)}</td>
           <td>${money.format(project.pending_collection)}</td>
-          <td>${formatPercentDecimal(project.final_margin)}</td>
+          <td>
+            <span class="badge margin-badge ${marginBadgeClass(project)}" title="Margen esperado: ${escapeHtml(project.expected_margin)}%">
+              ${formatPercentDecimal(project.final_margin)}
+            </span>
+          </td>
           <td><button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button></td>
         </tr>
       `,
@@ -328,6 +332,30 @@ function formatPercentDecimal(value) {
   }
 
   return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function marginBadgeClass(project) {
+  if (project.final_margin === null || project.final_margin === undefined) {
+    return 'margin-neutral';
+  }
+
+  const finalMarginPercent = Number(project.final_margin) * 100;
+  const expectedMarginPercent = Number(project.expected_margin || 0);
+  const deficit = expectedMarginPercent - finalMarginPercent;
+
+  if (finalMarginPercent >= expectedMarginPercent) {
+    return 'margin-good';
+  }
+
+  if (deficit >= 20) {
+    return 'margin-danger';
+  }
+
+  if (deficit >= 5) {
+    return 'margin-warning';
+  }
+
+  return 'margin-neutral';
 }
 
 function formatPercent(value) {

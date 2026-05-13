@@ -80,7 +80,18 @@ function migrate(database) {
     CREATE TABLE IF NOT EXISTS project_costs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL,
-      category TEXT NOT NULL CHECK (category IN ('Compra', 'Gasto', 'Salario')),
+      category TEXT NOT NULL CHECK (
+        category IN (
+          'Compra',
+          'Gasolina',
+          'Casetas',
+          'Viaticos',
+          'Sueldo',
+          'Materiales',
+          'Hospedaje',
+          'Otros'
+        )
+      ),
       description TEXT NOT NULL,
       amount REAL NOT NULL CHECK (amount >= 0),
       currency TEXT NOT NULL DEFAULT 'MXN',
@@ -92,6 +103,7 @@ function migrate(database) {
   ensureColumn(database, 'projects', 'total_invoiced_currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'project_payments', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'project_costs', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
+  migrateCostCategories(database);
   seedExchangeRates(database);
 }
 
@@ -102,6 +114,74 @@ function ensureColumn(database, tableName, columnName, definition) {
   if (!hasColumn) {
     database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
   }
+}
+
+function migrateCostCategories(database) {
+  const table = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_costs'")
+    .get();
+
+  if (!table || table.sql.includes("'Gasolina'")) {
+    return;
+  }
+
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    ALTER TABLE project_costs RENAME TO project_costs_old;
+
+    CREATE TABLE project_costs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      category TEXT NOT NULL CHECK (
+        category IN (
+          'Compra',
+          'Gasolina',
+          'Casetas',
+          'Viaticos',
+          'Sueldo',
+          'Materiales',
+          'Hospedaje',
+          'Otros'
+        )
+      ),
+      description TEXT NOT NULL,
+      amount REAL NOT NULL CHECK (amount >= 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      cost_date TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    INSERT INTO project_costs (
+      id,
+      project_id,
+      category,
+      description,
+      amount,
+      currency,
+      cost_date,
+      created_at
+    )
+    SELECT
+      id,
+      project_id,
+      CASE category
+        WHEN 'Gasto' THEN 'Otros'
+        WHEN 'Salario' THEN 'Sueldo'
+        ELSE category
+      END,
+      description,
+      amount,
+      currency,
+      cost_date,
+      created_at
+    FROM project_costs_old;
+
+    DROP TABLE project_costs_old;
+
+    PRAGMA foreign_keys = ON;
+  `);
 }
 
 function seedExchangeRates(database) {

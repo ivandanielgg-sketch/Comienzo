@@ -14,7 +14,16 @@ const PORT = process.env.PORT || 3000;
 
 const VALID_STATUSES = ['Pendiente', 'En Proceso', 'Terminado'];
 const VALID_RISKS = ['Alto', 'Medio', 'Bajo'];
-const VALID_COST_CATEGORIES = ['Compra', 'Gasto', 'Salario'];
+const VALID_COST_CATEGORIES = [
+  'Compra',
+  'Gasolina',
+  'Casetas',
+  'Viaticos',
+  'Sueldo',
+  'Materiales',
+  'Hospedaje',
+  'Otros',
+];
 const VALID_CURRENCIES = ['MXN', 'USD', 'EUR'];
 const SESSION_TTL_MS = 1000 * 60 * 60 * 8;
 const isProduction = process.env.NODE_ENV === 'production';

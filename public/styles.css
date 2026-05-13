@@ -193,8 +193,14 @@ button.active {
 
 .exchange-form {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 16px;
+}
+
+.exchange-form label,
+.exchange-form input {
+  min-width: 0;
 }
 
 .exchange-form .message {
@@ -306,6 +312,31 @@ button.active {
 .badge.risk-bajo {
   background: #dcfae6;
   color: var(--success);
+}
+
+.margin-badge {
+  min-width: 86px;
+  justify-content: center;
+}
+
+.margin-good {
+  background: #dcfae6;
+  color: var(--success);
+}
+
+.margin-warning {
+  background: #fef0c7;
+  color: var(--warning);
+}
+
+.margin-danger {
+  background: #fee4e2;
+  color: var(--danger);
+}
+
+.margin-neutral {
+  background: #eef2f6;
+  color: #475467;
 }
 
 .detail-grid {
