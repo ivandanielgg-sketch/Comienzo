@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Control de Proyectos</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <section id="login-view" class="auth-card hidden">
+        <div>
+          <p class="eyebrow">Acceso privado</p>
+          <h1>Control de Proyectos</h1>
+          <p class="muted">
+            Ingresa con usuario y contrasena para administrar cotizaciones,
+            pagos, costos y avance de cada proyecto.
+          </p>
+        </div>
+
+        <form id="login-form" class="stack">
+          <label>
+            Usuario
+            <input name="username" autocomplete="username" required />
+          </label>
+          <label>
+            Contrasena
+            <input name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <button type="submit">Entrar</button>
+          <p id="login-message" class="message"></p>
+        </form>
+      </section>
+
+      <section id="app-view" class="hidden">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Panel administrativo</p>
+            <h1>Proyectos</h1>
+          </div>
+          <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
+        </header>
+
+        <section class="cards">
+          <article>
+            <span>Proyectos</span>
+            <strong id="stat-projects">0</strong>
+          </article>
+          <article>
+            <span>Total cobrado</span>
+            <strong id="stat-charged">$0.00</strong>
+          </article>
+          <article>
+            <span>Gastado</span>
+            <strong id="stat-spent">$0.00</strong>
+          </article>
+          <article>
+            <span>Pendiente de cobro</span>
+            <strong id="stat-pending">$0.00</strong>
+          </article>
+        </section>
+
+        <section class="layout">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2 id="project-form-title">Nuevo proyecto</h2>
+                <p class="muted">El ID se genera automaticamente por consecutivo.</p>
+              </div>
+              <button id="new-project-button" class="secondary" type="button">Limpiar</button>
+            </div>
+
+            <form id="project-form" class="grid-form">
+              <input type="hidden" name="id" />
+              <label>
+                Numero de cotizacion
+                <input name="quote_number" required />
+              </label>
+              <label>
+                Numero de pedido
+                <input name="order_number" required />
+              </label>
+              <label>
+                Numero de orden de compra
+                <input name="purchase_order_number" required />
+              </label>
+              <label class="checkbox-row">
+                <input name="purchase_order_not_applicable" type="checkbox" />
+                No Aplica
+              </label>
+              <label>
+                Vendedor que cerro la venta
+                <input name="seller" required />
+              </label>
+              <label>
+                Nombre del cliente
+                <input name="client_name" required />
+              </label>
+              <label>
+                Margen esperado de utilidad (%)
+                <input name="expected_margin" type="number" min="0" max="100" step="0.01" value="0" required />
+              </label>
+              <label>
+                Total facturado con IVA
+                <input name="total_invoiced" type="number" min="0" step="0.01" value="0" required />
+              </label>
+              <label>
+                Avance del proyecto (%)
+                <input name="progress_percent" type="number" min="0" max="100" step="0.01" value="0" required />
+              </label>
+              <label>
+                Tecnico responsable
+                <input name="technician_name" required />
+              </label>
+              <label>
+                Fecha prometida de entrega
+                <input name="promised_delivery_date" type="date" required />
+              </label>
+              <label>
+                Estado
+                <select name="status" required>
+                  <option>Pendiente</option>
+                  <option>En Proceso</option>
+                  <option>Terminado</option>
+                </select>
+              </label>
+              <label>
+                Riesgo
+                <select name="risk" required>
+                  <option>Alto</option>
+                  <option>Medio</option>
+                  <option>Bajo</option>
+                </select>
+              </label>
+              <label class="full">
+                Observaciones
+                <textarea name="observations" rows="3"></textarea>
+              </label>
+              <button type="submit">Guardar proyecto</button>
+              <p id="project-message" class="message"></p>
+            </form>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Listado</h2>
+                <p class="muted">Selecciona un proyecto para agregar pagos, compras, gastos o salarios.</p>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Cotizacion</th>
+                    <th>Cliente</th>
+                    <th>Estado</th>
+                    <th>Riesgo</th>
+                    <th>Cobrado</th>
+                    <th>Gastado</th>
+                    <th>Pendiente</th>
+                    <th>Margen final</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="projects-table"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="detail-panel" class="panel hidden">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Proyecto seleccionado</p>
+              <h2 id="detail-title"></h2>
+              <p id="detail-subtitle" class="muted"></p>
+            </div>
+          </div>
+
+          <div class="detail-grid">
+            <article><span>Orden de compra</span><strong id="detail-po"></strong></article>
+            <article><span>Total facturado</span><strong id="detail-invoiced"></strong></article>
+            <article><span>Pendiente de cobro</span><strong id="detail-pending"></strong></article>
+            <article><span>Avance</span><strong id="detail-progress"></strong></article>
+          </div>
+
+          <div class="layout two-columns">
+            <div>
+              <h3>Agregar pago</h3>
+              <form id="payment-form" class="stack">
+                <label>
+                  Cantidad cobrada
+                  <input name="amount" type="number" min="0.01" step="0.01" required />
+                </label>
+                <label>
+                  Fecha de pago
+                  <input name="payment_date" type="date" required />
+                </label>
+                <label>
+                  Nota
+                  <input name="notes" />
+                </label>
+                <button type="submit">Registrar pago</button>
+              </form>
+              <ul id="payments-list" class="entry-list"></ul>
+            </div>
+
+            <div>
+              <h3>Agregar compra, gasto o salario</h3>
+              <form id="cost-form" class="stack">
+                <label>
+                  Tipo
+                  <select name="category" required>
+                    <option>Compra</option>
+                    <option>Gasto</option>
+                    <option>Salario</option>
+                  </select>
+                </label>
+                <label>
+                  Descripcion
+                  <input name="description" required />
+                </label>
+                <label>
+                  Importe
+                  <input name="amount" type="number" min="0.01" step="0.01" required />
+                </label>
+                <label>
+                  Fecha
+                  <input name="cost_date" type="date" required />
+                </label>
+                <button type="submit">Registrar costo</button>
+              </form>
+              <ul id="costs-list" class="entry-list"></ul>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
