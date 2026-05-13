@@ -35,6 +35,8 @@ compras/gastos/salarios relacionados con la cotizacion y calcular totales clave.
 - Etiqueta de color para margen final contra margen esperado.
 - Exportacion a Excel con una hoja de listado general y una hoja por proyecto
   con pagos y gastos relacionados.
+- Exportacion a Excel de Proyectos Cerrados con la misma estructura multi-hoja.
+- Duracion maxima de sesion de 1 hora.
 
 ## Requisitos
 

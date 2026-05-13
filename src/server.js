@@ -25,7 +25,7 @@ const VALID_COST_CATEGORIES = [
   'Otros',
 ];
 const VALID_CURRENCIES = ['MXN', 'USD', 'EUR'];
-const SESSION_TTL_MS = 1000 * 60 * 60 * 8;
+const SESSION_TTL_MS = 1000 * 60 * 60;
 const isProduction = process.env.NODE_ENV === 'production';
 const trustProxy = isProduction || process.env.TRUST_PROXY === 'true';
 
