@@ -19,11 +19,16 @@ compras/gastos/salarios relacionados con la cotizacion y calcular totales clave.
   - Riesgo: Alto, Medio o Bajo.
   - Observaciones.
 - Registro de pagos para sumar el Total Cobrado.
-- Registro de Compra, Gasto o Salario para sumar el Gastado.
+- Registro de costos por tipo: Compra, Gasolina, Casetas, Viaticos, Sueldo,
+  Materiales, Hospedaje u Otros.
+- Captura de importes en MXN, USD o EUR.
+- Panel de tipo de cambio a pesos mexicanos con fecha de ultima actualizacion.
 - Calculo automatico de:
   - Pendiente de cobro = Total Facturado - Total Cobrado.
   - Margen Final = 1 - (Gastado / Total Facturado).
-- Exportacion del listado de proyectos a un archivo `.xls` compatible con Excel.
+- Etiqueta de color para margen final contra margen esperado.
+- Exportacion del listado de proyectos y sus gastos relacionados a un archivo `.xls`
+  compatible con Excel.
 
 ## Requisitos
 
@@ -84,9 +89,9 @@ base de datos ahi. En ese mismo archivo se guardan proyectos, usuarios y sesione
 DB_PATH=/var/data/app.db
 ```
 
-Esto evita la advertencia de `connect.session() MemoryStore` y mantiene la
-sesion activa aunque el servicio reinicie, siempre que `/var/data` sea un disco
-persistente.
+Esto evita la advertencia de `connect.session() MemoryStore`, conserva usuarios,
+proyectos, tipos de cambio y mantiene la sesion activa aunque el servicio
+reinicie, siempre que `/var/data` sea un disco persistente.
 
 ## Pruebas
 

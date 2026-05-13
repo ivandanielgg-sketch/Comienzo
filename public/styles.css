@@ -187,6 +187,26 @@ button.active {
   margin-bottom: 24px;
 }
 
+.exchange-panel {
+  margin-bottom: 24px;
+}
+
+.exchange-form {
+  display: grid;
+  align-items: end;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.exchange-form label,
+.exchange-form input {
+  min-width: 0;
+}
+
+.exchange-form .message {
+  grid-column: 1 / -1;
+}
+
 .cards article,
 .detail-grid article {
   padding: 18px;
@@ -236,6 +256,21 @@ button.active {
   gap: 14px;
 }
 
+.money-field .money-row {
+  max-width: 520px;
+}
+
+.money-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 112px;
+  gap: 8px;
+  width: 100%;
+}
+
+.money-row input {
+  min-width: 0;
+}
+
 .checkbox-row {
   align-items: center;
   flex-direction: row;
@@ -277,6 +312,31 @@ button.active {
 .badge.risk-bajo {
   background: #dcfae6;
   color: var(--success);
+}
+
+.margin-badge {
+  min-width: 86px;
+  justify-content: center;
+}
+
+.margin-good {
+  background: #dcfae6;
+  color: var(--success);
+}
+
+.margin-warning {
+  background: #fef0c7;
+  color: var(--warning);
+}
+
+.margin-danger {
+  background: #fee4e2;
+  color: var(--danger);
+}
+
+.margin-neutral {
+  background: #eef2f6;
+  color: #475467;
 }
 
 .detail-grid {
@@ -330,6 +390,7 @@ button.active {
   }
 
   .cards,
+  .exchange-form,
   .detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -342,8 +403,13 @@ button.active {
   }
 
   .cards,
+  .exchange-form,
   .detail-grid,
   .grid-form {
+    grid-template-columns: 1fr;
+  }
+
+  .money-row {
     grid-template-columns: 1fr;
   }
 
