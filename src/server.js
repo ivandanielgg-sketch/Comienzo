@@ -14,18 +14,25 @@ const PORT = process.env.PORT || 3000;
 const VALID_STATUSES = ['Pendiente', 'En Proceso', 'Terminado'];
 const VALID_RISKS = ['Alto', 'Medio', 'Bajo'];
 const VALID_COST_CATEGORIES = ['Compra', 'Gasto', 'Salario'];
+const isProduction = process.env.NODE_ENV === 'production';
+const trustProxy = isProduction || process.env.TRUST_PROXY === 'true';
+
+if (trustProxy) {
+  app.set('trust proxy', 1);
+}
 
 app.use(express.json());
 app.use(
   session({
     name: 'proyectos.sid',
     secret: process.env.SESSION_SECRET || 'change-this-session-secret',
+    proxy: trustProxy,
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: isProduction,
       maxAge: 1000 * 60 * 60 * 8,
     },
   }),
