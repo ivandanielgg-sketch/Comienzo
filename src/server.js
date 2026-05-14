@@ -309,7 +309,7 @@ function mapProject(row, exchangeRates = getExchangeRateMap()) {
     ...cost,
     invoice_cost_percentage:
       totals.total_invoiced_mxn > 0
-        ? roundMoney(1 - cost.amount_mxn / totals.total_invoiced_mxn)
+        ? roundMoney(cost.amount_mxn / totals.total_invoiced_mxn)
         : null,
   }));
 

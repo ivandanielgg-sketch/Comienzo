@@ -26,7 +26,7 @@ compras/gastos/salarios relacionados con la cotizacion y calcular totales clave.
 - Registro de pagos para sumar el Total Cobrado.
 - Registro de costos por tipo: Compra, Gasolina, Casetas, Viaticos, Sueldo,
   Materiales, Hospedaje u Otros.
-- Calculo por costo de `1 - (costo / total facturado)` expresado como porcentaje.
+- Calculo por costo de `costo / total facturado` expresado como porcentaje.
 - Eliminacion de pagos y costos validando la contrasena del admin.
 - Captura de importes en MXN, USD o EUR.
 - Panel de tipo de cambio a pesos mexicanos con fecha de ultima actualizacion.
