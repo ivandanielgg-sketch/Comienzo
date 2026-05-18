@@ -379,11 +379,11 @@
                     <th>Nombre</th>
                     <th>Fecha ingreso</th>
                     <th>Antiguedad</th>
-                    <th>Ejercicio</th>
-                    <th>Dias LFT</th>
+                    <th>Estatus</th>
+                    <th>Dias generados acumulados</th>
                     <th>Tomados</th>
                     <th>Programados</th>
-                    <th>Pendientes</th>
+                    <th>Disponibles</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -427,8 +427,18 @@
                 </label>
                 <label class="checkbox-row">
                   <input name="active" type="checkbox" checked />
-                  Activo
+                  Empleado activo
                 </label>
+                <div id="termination-fields" class="hidden full">
+                  <label>
+                    Fecha de baja
+                    <input name="termination_date" type="date" />
+                  </label>
+                  <label>
+                    Motivo de baja (opcional)
+                    <input name="inactive_reason" />
+                  </label>
+                </div>
                 <button type="submit">Guardar empleado</button>
                 <p id="employee-message" class="message"></p>
               </form>

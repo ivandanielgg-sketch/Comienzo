@@ -5,6 +5,8 @@ const {
   calculateBusinessDays,
   getCompletedYears,
   calculateVacationBalance,
+  calculateAnnualVacationEntitlementByYear,
+  calculateAccruedVacationDays,
 } = require('../src/vacations');
 
 describe('calculateVacationEntitlement', () => {
@@ -208,5 +210,60 @@ describe('calculateVacationBalance', () => {
     });
     assert.strictEqual(balance.carriedBalanceFromPreviousExercise, 0);
     assert.strictEqual(balance.availableDays, 14);
+  });
+});
+
+describe('calculateAnnualVacationEntitlementByYear', () => {
+  it('year 0 = 0', () => {
+    assert.strictEqual(calculateAnnualVacationEntitlementByYear(0), 0);
+  });
+  it('year 1 = 12', () => {
+    assert.strictEqual(calculateAnnualVacationEntitlementByYear(1), 12);
+  });
+  it('year 5 = 20', () => {
+    assert.strictEqual(calculateAnnualVacationEntitlementByYear(5), 20);
+  });
+  it('year 6 = 22', () => {
+    assert.strictEqual(calculateAnnualVacationEntitlementByYear(6), 22);
+  });
+  it('year 10 = 22', () => {
+    assert.strictEqual(calculateAnnualVacationEntitlementByYear(10), 22);
+  });
+  it('year 11 = 24', () => {
+    assert.strictEqual(calculateAnnualVacationEntitlementByYear(11), 24);
+  });
+});
+
+describe('calculateAccruedVacationDays', () => {
+  it('case 1: 0 completed years = 0 accrued days', () => {
+    assert.strictEqual(calculateAccruedVacationDays('2026-01-15', '2026-06-01'), 0);
+  });
+
+  it('case 2: 1 completed year = 12 accrued days', () => {
+    assert.strictEqual(calculateAccruedVacationDays('2025-01-15', '2026-01-15'), 12);
+  });
+
+  it('case 3: 2 completed years = 26 accrued days (12+14)', () => {
+    assert.strictEqual(calculateAccruedVacationDays('2024-01-15', '2026-01-15'), 26);
+  });
+
+  it('case 4: 3 completed years = 42 accrued days (12+14+16)', () => {
+    assert.strictEqual(calculateAccruedVacationDays('2023-01-15', '2026-01-15'), 42);
+  });
+
+  it('case 5: 4 completed years = 60 accrued days (12+14+16+18)', () => {
+    assert.strictEqual(calculateAccruedVacationDays('2022-01-15', '2026-01-15'), 60);
+  });
+
+  it('case 6: 5 completed years = 80 accrued days (12+14+16+18+20)', () => {
+    assert.strictEqual(calculateAccruedVacationDays('2021-01-15', '2026-01-15'), 80);
+  });
+
+  it('case 7: inactive employee - calculation stops at termination date', () => {
+    const terminationDate = '2024-01-15';
+    const accruedAtTermination = calculateAccruedVacationDays('2022-01-15', terminationDate);
+    const accruedLater = calculateAccruedVacationDays('2022-01-15', '2026-06-01');
+    assert.strictEqual(accruedAtTermination, 26);
+    assert.notStrictEqual(accruedAtTermination, accruedLater);
   });
 });

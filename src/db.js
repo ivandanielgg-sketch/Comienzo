@@ -140,6 +140,8 @@ function migrate(database) {
   ensureColumn(database, 'project_payments', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'project_costs', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'users', 'role', "TEXT NOT NULL DEFAULT 'user'");
+  ensureColumn(database, 'employees', 'termination_date', 'TEXT');
+  ensureColumn(database, 'employees', 'inactive_reason', 'TEXT');
   ensureColumn(database, 'vacation_requests', 'creates_negative_balance', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'vacation_requests', 'negative_days_generated', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'vacation_requests', 'admin_override_reason', 'TEXT');
