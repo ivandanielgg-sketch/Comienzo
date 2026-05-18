@@ -7,6 +7,7 @@ const path = require('node:path');
 const { getDb } = require('./db');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
+const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance } = require('./vacations');
 
 const app = express();
 const db = getDb();
@@ -64,6 +65,16 @@ function requireAuth(req, res, next) {
 function requireAdminVerified(req, res, next) {
   if (!req.session.adminVerified) {
     return res.status(403).json({ message: 'Se requiere autorizacion del admin.' });
+  }
+
+  return next();
+}
+
+function requireAdmin(req, res, next) {
+  if (req.session.role !== 'admin') {
+    return res.status(403).json({
+      message: 'Acceso restringido. Solo el administrador puede consultar y programar vacaciones.',
+    });
   }
 
   return next();
@@ -392,7 +403,7 @@ app.get('/api/session', (req, res) => {
 
   return res.json({
     authenticated: true,
-    user: { id: req.session.userId, username: req.session.username },
+    user: { id: req.session.userId, username: req.session.username, role: req.session.role || 'user' },
   });
 });
 
@@ -408,7 +419,8 @@ app.post('/api/login', (req, res, next) => {
 
     req.session.userId = user.id;
     req.session.username = user.username;
-    return res.json({ username: user.username });
+    req.session.role = user.role || 'user';
+    return res.json({ username: user.username, role: user.role || 'user' });
   } catch (error) {
     return next(error);
   }
@@ -718,15 +730,390 @@ app.delete('/api/projects/:projectId/costs/:costId', requireAuth, (req, res, nex
   }
 });
 
+// ===================== VACATION MODULE =====================
+
+const VALID_VACATION_STATUSES = ['programada', 'tomada', 'cancelada'];
+
+function getEmployeeOrFail(employeeId) {
+  const employee = db.prepare('SELECT * FROM employees WHERE id = ?').get(employeeId);
+  if (!employee) {
+    const error = new Error('Empleado no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return employee;
+}
+
+function mapEmployee(row) {
+  const today = new Date().toISOString().slice(0, 10);
+  const completedYears = getCompletedYears(new Date(row.hire_date), new Date(today));
+  const exerciseYear = getCurrentExerciseYear(row.hire_date, today);
+
+  const allRequests = db.prepare(
+    'SELECT * FROM vacation_requests WHERE employee_id = ?',
+  ).all(row.id);
+
+  const balance = calculateVacationBalance({
+    hireDate: row.hire_date,
+    exerciseYear,
+    allRequests,
+    referenceDate: today,
+  });
+
+  return {
+    ...row,
+    seniority_years: completedYears,
+    current_exercise_year: exerciseYear,
+    entitlement_days: balance.entitlementDays,
+    days_taken: balance.takenDays,
+    days_scheduled: balance.scheduledDays,
+    days_pending: balance.availableDays,
+    carried_balance: balance.carriedBalanceFromPreviousExercise,
+    negative_carry_to_next: balance.negativeCarryToNextExercise,
+  };
+}
+
+function checkOverlap(employeeId, startDate, endDate, excludeRequestId) {
+  let query = `SELECT id FROM vacation_requests
+    WHERE employee_id = ? AND status != 'cancelada'
+    AND start_date <= ? AND end_date >= ?`;
+  const params = [employeeId, endDate, startDate];
+
+  if (excludeRequestId) {
+    query += ' AND id != ?';
+    params.push(excludeRequestId);
+  }
+
+  return db.prepare(query).get(...params);
+}
+
+app.get('/api/employees', requireAuth, requireAdmin, (req, res) => {
+  const employees = db.prepare('SELECT * FROM employees ORDER BY full_name ASC').all();
+  res.json(employees.map(mapEmployee));
+});
+
+app.get('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    const employee = getEmployeeOrFail(req.params.id);
+    res.json(mapEmployee(employee));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/employees', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    const employeeNumber = requiredText(req.body, 'employee_number', 'Numero de empleado');
+    const fullName = requiredText(req.body, 'full_name', 'Nombre completo');
+    const hireDate = requiredText(req.body, 'hire_date', 'Fecha de ingreso');
+    const department = optionalText(req.body, 'department');
+    const position = optionalText(req.body, 'position');
+    const immediateBoss = optionalText(req.body, 'immediate_boss');
+    const active = req.body.active === false || req.body.active === 0 ? 0 : 1;
+
+    const result = db.prepare(
+      `INSERT INTO employees (employee_number, full_name, hire_date, department, position, immediate_boss, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active);
+
+    res.status(201).json(mapEmployee(getEmployeeOrFail(result.lastInsertRowid)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    getEmployeeOrFail(req.params.id);
+    const employeeNumber = requiredText(req.body, 'employee_number', 'Numero de empleado');
+    const fullName = requiredText(req.body, 'full_name', 'Nombre completo');
+    const hireDate = requiredText(req.body, 'hire_date', 'Fecha de ingreso');
+    const department = optionalText(req.body, 'department');
+    const position = optionalText(req.body, 'position');
+    const immediateBoss = optionalText(req.body, 'immediate_boss');
+    const active = req.body.active === false || req.body.active === 0 ? 0 : 1;
+
+    db.prepare(
+      `UPDATE employees SET
+        employee_number = ?, full_name = ?, hire_date = ?, department = ?,
+        position = ?, immediate_boss = ?, active = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, req.params.id);
+
+    res.json(mapEmployee(getEmployeeOrFail(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    getEmployeeOrFail(req.params.id);
+    const requests = db.prepare(
+      'SELECT * FROM vacation_requests WHERE employee_id = ? ORDER BY start_date DESC',
+    ).all(req.params.id);
+    res.json(requests);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    const employee = getEmployeeOrFail(req.params.id);
+    const startDate = requiredText(req.body, 'start_date', 'Fecha inicial');
+    const endDate = requiredText(req.body, 'end_date', 'Fecha final');
+    const status = enumValue(req.body, 'status', 'Estatus', VALID_VACATION_STATUSES);
+
+    if (new Date(endDate) < new Date(startDate)) {
+      throw badRequest('La fecha final no puede ser menor que la fecha inicial.');
+    }
+
+    const requestedDays = calculateBusinessDays(startDate, endDate);
+    if (requestedDays <= 0) {
+      throw badRequest('Los dias solicitados deben ser mayor a 0 (dias laborables).');
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const exerciseYear = req.body.vacation_exercise_year
+      ? Number(req.body.vacation_exercise_year)
+      : getCurrentExerciseYear(employee.hire_date, today);
+
+    const allRequests = db.prepare(
+      'SELECT * FROM vacation_requests WHERE employee_id = ?',
+    ).all(employee.id);
+
+    const balance = calculateVacationBalance({
+      hireDate: employee.hire_date,
+      exerciseYear,
+      allRequests,
+      referenceDate: today,
+    });
+
+    const available = balance.availableDays;
+    const willCreateNegativeBalance = requestedDays > available;
+    const negativeDaysGenerated = willCreateNegativeBalance ? requestedDays - available : 0;
+    const balanceAfterRequest = available - requestedDays;
+
+    if (willCreateNegativeBalance) {
+      if (!req.body.confirm_negative_balance) {
+        return res.status(409).json({
+          message: `Esta solicitud excede los dias disponibles (${available}). El empleado quedara con saldo negativo por vacaciones anticipadas y se descontara del siguiente ejercicio.`,
+          requires_confirmation: true,
+          available_days: available,
+          requested_days: requestedDays,
+          balance_after: balanceAfterRequest,
+        });
+      }
+      const overrideReason = trim(req.body.admin_override_reason)
+        || 'Vacaciones anticipadas autorizadas por direccion.';
+      if (!overrideReason) {
+        throw badRequest('Se requiere un motivo de autorizacion para vacaciones anticipadas.');
+      }
+    }
+
+    const overlap = checkOverlap(employee.id, startDate, endDate);
+    if (overlap) {
+      throw badRequest('Las fechas se traslapan con otra solicitud activa.');
+    }
+
+    const includeVacationBonus = req.body.include_vacation_bonus === false || req.body.include_vacation_bonus === 0 ? 0 : 1;
+    const notes = optionalText(req.body, 'notes');
+    const adminOverrideReason = willCreateNegativeBalance
+      ? (trim(req.body.admin_override_reason) || 'Vacaciones anticipadas autorizadas por direccion.')
+      : null;
+
+    const existingActiveRequests = allRequests.filter(
+      (r) => r.vacation_exercise_year === exerciseYear && r.status !== 'cancelada',
+    );
+
+    const result = db.prepare(
+      `INSERT INTO vacation_requests
+        (employee_id, start_date, end_date, requested_days, vacation_exercise_year,
+         status, is_first_vacation_of_exercise, include_vacation_bonus,
+         created_by, authorized_by, hr_responsible, notes,
+         creates_negative_balance, negative_days_generated, admin_override_reason, balance_after_request)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      employee.id, startDate, endDate, requestedDays, exerciseYear,
+      status,
+      existingActiveRequests.length === 0 ? 1 : 0,
+      includeVacationBonus,
+      req.session.username,
+      'Ivan Garcia',
+      'Alejandra Gonzalez',
+      notes,
+      willCreateNegativeBalance ? 1 : 0,
+      negativeDaysGenerated,
+      adminOverrideReason,
+      balanceAfterRequest,
+    );
+
+    const newRequest = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(result.lastInsertRowid);
+    res.status(201).json(newRequest);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
+    if (!request) {
+      throw badRequest('Solicitud no encontrada.');
+    }
+
+    const employee = getEmployeeOrFail(request.employee_id);
+    const startDate = requiredText(req.body, 'start_date', 'Fecha inicial');
+    const endDate = requiredText(req.body, 'end_date', 'Fecha final');
+    const status = enumValue(req.body, 'status', 'Estatus', VALID_VACATION_STATUSES);
+
+    if (new Date(endDate) < new Date(startDate)) {
+      throw badRequest('La fecha final no puede ser menor que la fecha inicial.');
+    }
+
+    const requestedDays = calculateBusinessDays(startDate, endDate);
+    if (requestedDays <= 0) {
+      throw badRequest('Los dias solicitados deben ser mayor a 0 (dias laborables).');
+    }
+
+    let willCreateNegativeBalance = false;
+    let negativeDaysGenerated = 0;
+    let balanceAfterRequest = 0;
+
+    if (status !== 'cancelada') {
+      const today = new Date().toISOString().slice(0, 10);
+      const exerciseYear = req.body.vacation_exercise_year
+        ? Number(req.body.vacation_exercise_year)
+        : request.vacation_exercise_year;
+
+      const allRequests = db.prepare(
+        'SELECT * FROM vacation_requests WHERE employee_id = ? AND id != ?',
+      ).all(employee.id, request.id);
+
+      const balance = calculateVacationBalance({
+        hireDate: employee.hire_date,
+        exerciseYear,
+        allRequests,
+        referenceDate: today,
+      });
+
+      const available = balance.availableDays;
+      willCreateNegativeBalance = requestedDays > available;
+      negativeDaysGenerated = willCreateNegativeBalance ? requestedDays - available : 0;
+      balanceAfterRequest = available - requestedDays;
+
+      if (willCreateNegativeBalance && !req.body.confirm_negative_balance) {
+        return res.status(409).json({
+          message: `Esta solicitud excede los dias disponibles (${available}). El empleado quedara con saldo negativo por vacaciones anticipadas.`,
+          requires_confirmation: true,
+          available_days: available,
+          requested_days: requestedDays,
+          balance_after: balanceAfterRequest,
+        });
+      }
+
+      const overlap = checkOverlap(employee.id, startDate, endDate, request.id);
+      if (overlap) {
+        throw badRequest('Las fechas se traslapan con otra solicitud activa.');
+      }
+    }
+
+    const includeVacationBonus = req.body.include_vacation_bonus === false || req.body.include_vacation_bonus === 0 ? 0 : 1;
+    const notes = optionalText(req.body, 'notes');
+    const adminOverrideReason = willCreateNegativeBalance
+      ? (trim(req.body.admin_override_reason) || 'Vacaciones anticipadas autorizadas por direccion.')
+      : null;
+
+    db.prepare(
+      `UPDATE vacation_requests SET
+        start_date = ?, end_date = ?, requested_days = ?, status = ?,
+        include_vacation_bonus = ?, notes = ?,
+        creates_negative_balance = ?, negative_days_generated = ?,
+        admin_override_reason = ?, balance_after_request = ?,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(
+      startDate, endDate, requestedDays, status, includeVacationBonus, notes,
+      willCreateNegativeBalance ? 1 : 0, negativeDaysGenerated,
+      adminOverrideReason, balanceAfterRequest, request.id,
+    );
+
+    res.json(db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(request.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/vacation-requests/:id/cancel', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
+    if (!request) {
+      throw badRequest('Solicitud no encontrada.');
+    }
+
+    db.prepare(
+      "UPDATE vacation_requests SET status = 'cancelada', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(request.id);
+
+    res.json(db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(request.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
+    if (!request) {
+      throw badRequest('Solicitud no encontrada.');
+    }
+
+    const employee = getEmployeeOrFail(request.employee_id);
+    const today = new Date().toISOString().slice(0, 10);
+
+    const allRequests = db.prepare(
+      'SELECT * FROM vacation_requests WHERE employee_id = ?',
+    ).all(employee.id);
+
+    const balance = calculateVacationBalance({
+      hireDate: employee.hire_date,
+      exerciseYear: request.vacation_exercise_year,
+      allRequests,
+      referenceDate: today,
+    });
+
+    res.json({
+      ...request,
+      employee,
+      entitlement_days: balance.entitlementDays,
+      days_taken: balance.takenDays,
+      days_pending: balance.availableDays,
+      carried_balance: balance.carriedBalanceFromPreviousExercise,
+      seniority_years: getCompletedYears(new Date(employee.hire_date), new Date(today)),
+      balance_after_this_request: request.balance_after_request,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ===================== END VACATION MODULE =====================
+
 app.use((err, req, res, next) => {
   if (res.headersSent) {
     return next(err);
   }
 
   if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-    const message = err.message.includes('users.username')
-      ? 'El usuario ya existe.'
-      : 'El numero de cotizacion ya existe.';
+    let message = 'El registro ya existe.';
+    if (err.message.includes('users.username')) {
+      message = 'El usuario ya existe.';
+    } else if (err.message.includes('employees.employee_number')) {
+      message = 'El numero de empleado ya existe.';
+    } else if (err.message.includes('projects.quote_number')) {
+      message = 'El numero de cotizacion ya existe.';
+    }
     return res.status(400).json({ message });
   }
 

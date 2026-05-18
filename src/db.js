@@ -101,12 +101,49 @@ function migrate(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS employees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_number TEXT NOT NULL UNIQUE,
+      full_name TEXT NOT NULL,
+      hire_date TEXT NOT NULL,
+      department TEXT,
+      position TEXT,
+      immediate_boss TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS vacation_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      requested_days INTEGER NOT NULL CHECK (requested_days > 0),
+      vacation_exercise_year INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('programada', 'tomada', 'cancelada')),
+      is_first_vacation_of_exercise INTEGER NOT NULL DEFAULT 0,
+      include_vacation_bonus INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT,
+      authorized_by TEXT DEFAULT 'Ivan Garcia',
+      hr_responsible TEXT DEFAULT 'Alejandra Gonzalez',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+    );
   `);
   ensureColumn(database, 'projects', 'project_description', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, 'projects', 'total_invoiced_currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'projects', 'closed_at', 'TEXT');
   ensureColumn(database, 'project_payments', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'project_costs', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
+  ensureColumn(database, 'users', 'role', "TEXT NOT NULL DEFAULT 'user'");
+  ensureColumn(database, 'vacation_requests', 'creates_negative_balance', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'vacation_requests', 'negative_days_generated', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'vacation_requests', 'admin_override_reason', 'TEXT');
+  ensureColumn(database, 'vacation_requests', 'balance_after_request', 'INTEGER');
   migrateCostCategories(database);
   seedExchangeRates(database);
 }
@@ -201,18 +238,22 @@ function seedExchangeRates(database) {
 }
 
 function seedAdmin(database) {
+  const adminUsername = process.env.ADMIN_USER || 'admin';
   const existingUser = database
-    .prepare('SELECT id FROM users WHERE username = ?')
-    .get(process.env.ADMIN_USER || 'admin');
+    .prepare('SELECT id, role FROM users WHERE username = ?')
+    .get(adminUsername);
 
   if (existingUser) {
+    if (existingUser.role !== 'admin') {
+      database.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(existingUser.id);
+    }
     return;
   }
 
   const passwordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin123', 12);
   database
-    .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
-    .run(process.env.ADMIN_USER || 'admin', passwordHash);
+    .prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')")
+    .run(adminUsername, passwordHash);
 }
 
 module.exports = {

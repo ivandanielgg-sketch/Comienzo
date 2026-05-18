@@ -155,12 +155,15 @@ function switchView(viewName) {
   const showingProjects = viewName === 'projects';
   const showingClosedProjects = viewName === 'closed-projects';
   const showingUsers = viewName === 'users';
+  const showingVacations = viewName === 'vacations';
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
+  if (vacationsView) vacationsView.classList.toggle('hidden', !showingVacations);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
+  if (vacationsTab) vacationsTab.classList.toggle('active', showingVacations);
 }
 
 async function requestAdminAuthorization(message = 'Ingresa la contrasena del admin:') {
@@ -750,10 +753,12 @@ loginForm.addEventListener('submit', async (event) => {
   setMessage(loginMessage, '');
 
   try {
-    await api('/api/login', {
+    const result = await api('/api/login', {
       method: 'POST',
       body: JSON.stringify(simpleFormPayload(loginForm)),
     });
+    state.userRole = result.role || 'user';
+    showVacationsTab();
     loginForm.reset();
     await showApp();
   } catch (error) {
@@ -974,6 +979,397 @@ costsList.addEventListener('click', async (event) => {
   }
 });
 
+// ===================== VACATION MODULE =====================
+
+const vacationsTab = document.querySelector('#vacations-tab');
+const vacationsView = document.querySelector('#vacations-view');
+const employeesTable = document.querySelector('#employees-table');
+const employeeModal = document.querySelector('#employee-modal');
+const employeeForm = document.querySelector('#employee-form');
+const employeeFormTitle = document.querySelector('#employee-form-title');
+const employeeMessage = document.querySelector('#employee-message');
+const newEmployeeButton = document.querySelector('#new-employee-button');
+const vacationModal = document.querySelector('#vacation-modal');
+const vacationModalTitle = document.querySelector('#vacation-modal-title');
+const vacationModalSubtitle = document.querySelector('#vacation-modal-subtitle');
+const vacationEmployeeSummary = document.querySelector('#vacation-employee-summary');
+const vacationRequestsTable = document.querySelector('#vacation-requests-table');
+const vacationRequestForm = document.querySelector('#vacation-request-form');
+const vacationRequestMessage = document.querySelector('#vacation-request-message');
+const saveAndPrintVacation = document.querySelector('#save-and-print-vacation');
+
+state.employees = [];
+state.selectedEmployeeId = null;
+state.userRole = null;
+
+function showVacationsTab() {
+  if (state.userRole === 'admin') {
+    vacationsTab.classList.remove('hidden');
+  } else {
+    vacationsTab.classList.add('hidden');
+  }
+}
+
+async function loadEmployees() {
+  state.employees = await api('/api/employees');
+  renderEmployees();
+}
+
+function renderEmployees() {
+  if (!state.employees.length) {
+    employeesTable.innerHTML = '<tr><td colspan="10" class="muted">No hay empleados registrados.</td></tr>';
+    return;
+  }
+
+  employeesTable.innerHTML = state.employees.map((emp) => {
+    const pendingClass = emp.days_pending < 0 ? 'negative-balance' : '';
+    const pendingLabel = emp.days_pending < 0
+      ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo por vacaciones anticipadas</small>`
+      : `${emp.days_pending}`;
+
+    return `
+      <tr>
+        <td>${escapeHtml(emp.employee_number)}</td>
+        <td>${escapeHtml(emp.full_name)}</td>
+        <td>${escapeHtml(emp.hire_date)}</td>
+        <td>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</td>
+        <td>${emp.current_exercise_year}</td>
+        <td>${emp.entitlement_days}</td>
+        <td>${emp.days_taken}</td>
+        <td>${emp.days_scheduled}</td>
+        <td class="${pendingClass}">${pendingLabel}</td>
+        <td>
+          <div class="row-actions">
+            <button class="secondary" data-action="edit-employee" data-id="${emp.id}" type="button">Editar</button>
+            <button class="secondary" data-action="open-vacations" data-id="${emp.id}" type="button">Vacaciones programadas</button>
+            <button class="secondary" data-action="print-format" data-id="${emp.id}" type="button">Generar formato</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function openEmployeeModal(employee) {
+  employeeModal.classList.remove('hidden');
+  setMessage(employeeMessage, '');
+  if (employee) {
+    employeeFormTitle.textContent = `Editar empleado #${employee.id}`;
+    employeeForm.elements.id.value = employee.id;
+    employeeForm.elements.employee_number.value = employee.employee_number;
+    employeeForm.elements.full_name.value = employee.full_name;
+    employeeForm.elements.hire_date.value = employee.hire_date;
+    employeeForm.elements.department.value = employee.department || '';
+    employeeForm.elements.position.value = employee.position || '';
+    employeeForm.elements.immediate_boss.value = employee.immediate_boss || '';
+    employeeForm.elements.active.checked = Boolean(employee.active);
+  } else {
+    employeeFormTitle.textContent = 'Agregar empleado';
+    employeeForm.reset();
+    employeeForm.elements.id.value = '';
+    employeeForm.elements.active.checked = true;
+  }
+}
+
+function closeEmployeeModal() {
+  employeeModal.classList.add('hidden');
+  employeeForm.reset();
+}
+
+async function openVacationModal(employeeId) {
+  const emp = state.employees.find((e) => e.id === Number(employeeId));
+  if (!emp) return;
+
+  state.selectedEmployeeId = emp.id;
+  vacationModal.classList.remove('hidden');
+  vacationModalTitle.textContent = `Vacaciones - ${emp.full_name}`;
+  vacationModalSubtitle.textContent = `No. ${emp.employee_number} | Ingreso: ${emp.hire_date}`;
+
+  const pendingClass = emp.days_pending < 0 ? 'summary-negative' : '';
+  const carriedInfo = emp.carried_balance < 0
+    ? `<article class="summary-negative"><span>Saldo arrastrado</span><strong>${emp.carried_balance}</strong></article>`
+    : `<article><span>Saldo arrastrado</span><strong>0</strong></article>`;
+  const negativeNote = emp.days_pending < 0
+    ? '<p class="text-negative" style="grid-column:1/-1;margin:0;">Este saldo se descontara automaticamente del siguiente ejercicio vacacional.</p>'
+    : '';
+
+  vacationEmployeeSummary.innerHTML = `
+    <article><span>Antiguedad</span><strong>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</strong></article>
+    <article><span>Dias correspondientes</span><strong>${emp.entitlement_days}</strong></article>
+    ${carriedInfo}
+    <article><span>Dias tomados</span><strong>${emp.days_taken}</strong></article>
+    <article><span>Dias programados</span><strong>${emp.days_scheduled}</strong></article>
+    <article class="${pendingClass}"><span>Dias disponibles</span><strong>${emp.days_pending}</strong></article>
+    ${negativeNote}
+  `;
+
+  setMessage(vacationRequestMessage, '');
+  vacationRequestForm.reset();
+  await loadVacationRequests(emp.id);
+}
+
+async function loadVacationRequests(employeeId) {
+  const requests = await api(`/api/employees/${employeeId}/vacation-requests`);
+  if (!requests.length) {
+    vacationRequestsTable.innerHTML = '<tr><td colspan="8" class="muted">Este empleado aun no tiene vacaciones registradas.</td></tr>';
+    return;
+  }
+
+  vacationRequestsTable.innerHTML = requests.map((req) => `
+    <tr>
+      <td>${escapeHtml(req.start_date)}</td>
+      <td>${escapeHtml(req.end_date)}</td>
+      <td>${req.requested_days}</td>
+      <td>${req.vacation_exercise_year}</td>
+      <td><span class="badge status-${req.status}">${escapeHtml(req.status)}</span></td>
+      <td>${escapeHtml(req.notes || '')}</td>
+      <td>${escapeHtml((req.created_at || '').slice(0, 10))}</td>
+      <td>
+        <div class="row-actions">
+          ${req.status !== 'cancelada' ? `<button class="danger" data-action="cancel-vacation" data-id="${req.id}" type="button">Cancelar</button>` : ''}
+          ${req.status === 'programada' ? `<button class="secondary" data-action="mark-taken" data-id="${req.id}" type="button">Marcar tomada</button>` : ''}
+          <button class="secondary" data-action="print-vacation" data-id="${req.id}" type="button">Formato</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function closeVacationModal() {
+  vacationModal.classList.add('hidden');
+  state.selectedEmployeeId = null;
+}
+
+function calculateDisplayDays() {
+  const startDate = vacationRequestForm.elements.start_date.value;
+  const endDate = vacationRequestForm.elements.end_date.value;
+  if (startDate && endDate && endDate >= startDate) {
+    let count = 0;
+    const current = new Date(startDate + 'T00:00:00');
+    const end = new Date(endDate + 'T00:00:00');
+    while (current <= end) {
+      const day = current.getDay();
+      if (day !== 0 && day !== 6) count++;
+      current.setDate(current.getDate() + 1);
+    }
+    vacationRequestForm.elements.requested_days_display.value = count;
+  } else {
+    vacationRequestForm.elements.requested_days_display.value = '';
+  }
+}
+
+async function submitVacationRequest(andPrint) {
+  if (!state.selectedEmployeeId) return;
+  setMessage(vacationRequestMessage, '');
+
+  const startDate = vacationRequestForm.elements.start_date.value;
+  const endDate = vacationRequestForm.elements.end_date.value;
+  const status = vacationRequestForm.elements.status.value;
+  const includeBonus = vacationRequestForm.elements.include_vacation_bonus.checked;
+  const notes = vacationRequestForm.elements.notes.value;
+
+  if (!startDate || !endDate) {
+    setMessage(vacationRequestMessage, 'Fecha inicial y final son obligatorias.');
+    return;
+  }
+
+  const payload = {
+    start_date: startDate,
+    end_date: endDate,
+    status,
+    include_vacation_bonus: includeBonus,
+    notes: notes || undefined,
+  };
+
+  try {
+    const response = await fetch(`/api/employees/${state.selectedEmployeeId}/vacation-requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+
+    if (response.status === 409 && data.requires_confirmation) {
+      const reason = window.prompt(
+        `${data.message}\n\nDias disponibles: ${data.available_days}\nDias solicitados: ${data.requested_days}\nSaldo posterior: ${data.balance_after}\n\nIngresa el motivo de autorizacion para continuar:`,
+        'Vacaciones anticipadas autorizadas por direccion.',
+      );
+      if (!reason) {
+        setMessage(vacationRequestMessage, 'Solicitud cancelada por el usuario.');
+        return;
+      }
+
+      payload.confirm_negative_balance = true;
+      payload.admin_override_reason = reason;
+
+      const confirmResult = await api(`/api/employees/${state.selectedEmployeeId}/vacation-requests`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      setMessage(vacationRequestMessage, 'Solicitud con saldo negativo guardada correctamente.', true);
+      vacationRequestForm.reset();
+      await loadEmployees();
+      await openVacationModal(state.selectedEmployeeId);
+      if (andPrint) {
+        window.open(`/vacation-print.html?id=${confirmResult.id}`, '_blank');
+      }
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(data.message || 'La operacion no pudo completarse.');
+    }
+
+    setMessage(vacationRequestMessage, 'Solicitud guardada correctamente.', true);
+    vacationRequestForm.reset();
+    await loadEmployees();
+    await openVacationModal(state.selectedEmployeeId);
+
+    if (andPrint) {
+      window.open(`/vacation-print.html?id=${data.id}`, '_blank');
+    }
+  } catch (error) {
+    setMessage(vacationRequestMessage, error.message);
+  }
+}
+
+newEmployeeButton.addEventListener('click', () => openEmployeeModal(null));
+
+employeeForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(employeeMessage, '');
+
+  const id = employeeForm.elements.id.value;
+  const payload = {
+    employee_number: employeeForm.elements.employee_number.value,
+    full_name: employeeForm.elements.full_name.value,
+    hire_date: employeeForm.elements.hire_date.value,
+    department: employeeForm.elements.department.value || undefined,
+    position: employeeForm.elements.position.value || undefined,
+    immediate_boss: employeeForm.elements.immediate_boss.value || undefined,
+    active: employeeForm.elements.active.checked,
+  };
+
+  try {
+    await api(id ? `/api/employees/${id}` : '/api/employees', {
+      method: id ? 'PUT' : 'POST',
+      body: JSON.stringify(payload),
+    });
+    setMessage(employeeMessage, 'Empleado guardado correctamente.', true);
+    await loadEmployees();
+    setTimeout(closeEmployeeModal, 800);
+  } catch (error) {
+    setMessage(employeeMessage, error.message);
+  }
+});
+
+employeeModal.addEventListener('click', (event) => {
+  if (event.target.closest('.modal-close') || event.target === employeeModal) {
+    closeEmployeeModal();
+  }
+});
+
+vacationModal.addEventListener('click', (event) => {
+  if (event.target.closest('.modal-close') || event.target === vacationModal) {
+    closeVacationModal();
+  }
+});
+
+vacationRequestForm.elements.start_date.addEventListener('change', calculateDisplayDays);
+vacationRequestForm.elements.end_date.addEventListener('change', calculateDisplayDays);
+
+vacationRequestForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  submitVacationRequest(false);
+});
+
+saveAndPrintVacation.addEventListener('click', () => {
+  submitVacationRequest(true);
+});
+
+employeesTable.addEventListener('click', (event) => {
+  const editBtn = event.target.closest('[data-action="edit-employee"]');
+  if (editBtn) {
+    const emp = state.employees.find((e) => e.id === Number(editBtn.dataset.id));
+    if (emp) openEmployeeModal(emp);
+    return;
+  }
+
+  const vacBtn = event.target.closest('[data-action="open-vacations"]');
+  if (vacBtn) {
+    openVacationModal(vacBtn.dataset.id);
+    return;
+  }
+
+  const printBtn = event.target.closest('[data-action="print-format"]');
+  if (printBtn) {
+    openVacationModal(printBtn.dataset.id);
+  }
+});
+
+vacationRequestsTable.addEventListener('click', async (event) => {
+  const cancelBtn = event.target.closest('[data-action="cancel-vacation"]');
+  if (cancelBtn) {
+    if (!window.confirm('¿Cancelar esta solicitud de vacaciones?')) return;
+    try {
+      await api(`/api/vacation-requests/${cancelBtn.dataset.id}/cancel`, { method: 'PATCH' });
+      await loadEmployees();
+      await openVacationModal(state.selectedEmployeeId);
+    } catch (error) {
+      window.alert(error.message);
+    }
+    return;
+  }
+
+  const takenBtn = event.target.closest('[data-action="mark-taken"]');
+  if (takenBtn) {
+    try {
+      const reqData = await api(`/api/vacation-requests/${takenBtn.dataset.id}`);
+      await api(`/api/vacation-requests/${takenBtn.dataset.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          start_date: reqData.start_date,
+          end_date: reqData.end_date,
+          status: 'tomada',
+          include_vacation_bonus: Boolean(reqData.include_vacation_bonus),
+          notes: reqData.notes || '',
+        }),
+      });
+      await loadEmployees();
+      await openVacationModal(state.selectedEmployeeId);
+    } catch (error) {
+      window.alert(error.message);
+    }
+    return;
+  }
+
+  const printVacBtn = event.target.closest('[data-action="print-vacation"]');
+  if (printVacBtn) {
+    window.open(`/vacation-print.html?id=${printVacBtn.dataset.id}`, '_blank');
+  }
+});
+
+vacationsTab.addEventListener('click', async () => {
+  if (state.userRole !== 'admin') {
+    window.alert('Acceso restringido. Solo el administrador puede consultar y programar vacaciones.');
+    return;
+  }
+  switchView('vacations');
+  await loadEmployees();
+});
+
+// ===================== END VACATION MODULE =====================
+
 api('/api/session')
-  .then((session) => (session.authenticated ? showApp() : showLogin()))
+  .then((session) => {
+    if (session.authenticated) {
+      state.userRole = session.user.role || 'user';
+      showVacationsTab();
+      showApp();
+    } else {
+      showLogin();
+    }
+  })
   .catch(showLogin);

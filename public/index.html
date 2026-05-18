@@ -41,6 +41,7 @@
           <div class="topbar-actions">
             <button id="projects-tab" class="secondary active" type="button">Proyectos</button>
             <button id="closed-projects-tab" class="secondary" type="button">Proyectos Cerrados</button>
+            <button id="vacations-tab" class="secondary hidden" type="button">Vacaciones</button>
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
             <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
           </div>
@@ -356,6 +357,153 @@
               </div>
             </div>
           </section>
+        </section>
+
+        <section id="vacations-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Modulo de Vacaciones</p>
+                <h2>Empleados</h2>
+                <p class="muted">Consulta y programa vacaciones conforme a la Ley Federal del Trabajo.</p>
+              </div>
+              <div class="row-actions">
+                <button id="new-employee-button" type="button">Agregar empleado</button>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>No. Empleado</th>
+                    <th>Nombre</th>
+                    <th>Fecha ingreso</th>
+                    <th>Antiguedad</th>
+                    <th>Ejercicio</th>
+                    <th>Dias LFT</th>
+                    <th>Tomados</th>
+                    <th>Programados</th>
+                    <th>Pendientes</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="employees-table"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Employee Form Modal -->
+          <div id="employee-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2 id="employee-form-title">Agregar empleado</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="employee-form" class="grid-form">
+                <input type="hidden" name="id" />
+                <label>
+                  Numero de empleado
+                  <input name="employee_number" required />
+                </label>
+                <label>
+                  Nombre completo
+                  <input name="full_name" required />
+                </label>
+                <label>
+                  Fecha de ingreso
+                  <input name="hire_date" type="date" required />
+                </label>
+                <label>
+                  Departamento
+                  <input name="department" />
+                </label>
+                <label>
+                  Puesto
+                  <input name="position" />
+                </label>
+                <label>
+                  Jefe inmediato
+                  <input name="immediate_boss" />
+                </label>
+                <label class="checkbox-row">
+                  <input name="active" type="checkbox" checked />
+                  Activo
+                </label>
+                <button type="submit">Guardar empleado</button>
+                <p id="employee-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+
+          <!-- Vacation Requests Modal -->
+          <div id="vacation-modal" class="modal-overlay hidden">
+            <div class="modal-content panel modal-large">
+              <div class="panel-header">
+                <div>
+                  <h2 id="vacation-modal-title">Vacaciones programadas</h2>
+                  <p id="vacation-modal-subtitle" class="muted"></p>
+                </div>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+
+              <div class="detail-grid" id="vacation-employee-summary"></div>
+
+              <h3>Historial de solicitudes</h3>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha inicio</th>
+                      <th>Fecha fin</th>
+                      <th>Dias</th>
+                      <th>Ejercicio</th>
+                      <th>Estatus</th>
+                      <th>Notas</th>
+                      <th>Registrado</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="vacation-requests-table"></tbody>
+                </table>
+              </div>
+
+              <h3>Nueva solicitud</h3>
+              <form id="vacation-request-form" class="grid-form">
+                <label>
+                  Fecha inicial
+                  <input name="start_date" type="date" required />
+                </label>
+                <label>
+                  Fecha final
+                  <input name="end_date" type="date" required />
+                </label>
+                <label>
+                  Dias solicitados (automatico)
+                  <input name="requested_days_display" type="number" disabled />
+                </label>
+                <label>
+                  Estatus
+                  <select name="status" required>
+                    <option value="programada">Programada</option>
+                    <option value="tomada">Tomada</option>
+                  </select>
+                </label>
+                <label class="checkbox-row">
+                  <input name="include_vacation_bonus" type="checkbox" checked />
+                  Incluir prima vacacional
+                </label>
+                <label class="full">
+                  Notas
+                  <textarea name="notes" rows="2"></textarea>
+                </label>
+                <div class="row-actions full">
+                  <button type="submit">Guardar</button>
+                  <button type="button" id="save-and-print-vacation">Guardar y generar formato</button>
+                </div>
+                <p id="vacation-request-message" class="message"></p>
+              </form>
+            </div>
+          </div>
         </section>
 
         <section id="users-view" class="layout hidden">
