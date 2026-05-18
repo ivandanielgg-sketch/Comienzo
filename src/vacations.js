@@ -96,9 +96,87 @@ function getCurrentExerciseYear(hireDate, referenceDate) {
   return completedYears;
 }
 
+/**
+ * Calculates the full vacation balance for an employee in a given exercise year,
+ * including carry-over from previous exercises.
+ *
+ * @param {object} params
+ * @param {string} params.hireDate - Employee hire date
+ * @param {number} params.exerciseYear - The exercise year to compute
+ * @param {Array} params.allRequests - All vacation_requests for this employee (all years)
+ * @param {string} [params.referenceDate] - Reference date (default: today)
+ * @returns {object} Balance breakdown
+ */
+function calculateVacationBalance({ hireDate, exerciseYear, allRequests, referenceDate }) {
+  const refDate = referenceDate || new Date().toISOString().slice(0, 10);
+
+  const entitlementDays = calculateVacationEntitlement(hireDate, refDate);
+
+  const carriedBalanceFromPreviousExercise = computeCarriedBalance(
+    hireDate, exerciseYear, allRequests, refDate,
+  );
+
+  const exerciseRequests = allRequests.filter(
+    (r) => r.vacation_exercise_year === exerciseYear && r.status !== 'cancelada',
+  );
+  const takenDays = exerciseRequests
+    .filter((r) => r.status === 'tomada')
+    .reduce((sum, r) => sum + r.requested_days, 0);
+  const scheduledDays = exerciseRequests
+    .filter((r) => r.status === 'programada')
+    .reduce((sum, r) => sum + r.requested_days, 0);
+
+  const availableDays = entitlementDays + carriedBalanceFromPreviousExercise - takenDays - scheduledDays;
+  const negativeCarryToNextExercise = availableDays < 0 ? availableDays : 0;
+
+  return {
+    entitlementDays,
+    takenDays,
+    scheduledDays,
+    carriedBalanceFromPreviousExercise,
+    availableDays,
+    balanceAfterRequests: availableDays,
+    negativeCarryToNextExercise,
+  };
+}
+
+/**
+ * Recursively computes the carried balance from previous exercise years.
+ * Only negative balances carry over.
+ */
+function computeCarriedBalance(hireDate, exerciseYear, allRequests, referenceDate) {
+  if (exerciseYear <= 1) {
+    return 0;
+  }
+
+  const prevYear = exerciseYear - 1;
+  const prevEntitlement = calculateEntitlementForExercise(hireDate, prevYear);
+
+  const prevCarried = computeCarriedBalance(hireDate, prevYear, allRequests, referenceDate);
+
+  const prevRequests = allRequests.filter(
+    (r) => r.vacation_exercise_year === prevYear && r.status !== 'cancelada',
+  );
+  const prevUsed = prevRequests.reduce((sum, r) => sum + r.requested_days, 0);
+
+  const prevBalance = prevEntitlement + prevCarried - prevUsed;
+  return prevBalance < 0 ? prevBalance : 0;
+}
+
+/**
+ * Calculates entitlement for a specific exercise year number (1-based).
+ */
+function calculateEntitlementForExercise(hireDate, exerciseYear) {
+  if (exerciseYear < 1) return 0;
+  if (exerciseYear <= 5) return 10 + exerciseYear * 2;
+  return 22 + Math.floor((exerciseYear - 6) / 5) * 2;
+}
+
 module.exports = {
   calculateVacationEntitlement,
   calculateBusinessDays,
   getCompletedYears,
   getCurrentExerciseYear,
+  calculateVacationBalance,
+  calculateEntitlementForExercise,
 };

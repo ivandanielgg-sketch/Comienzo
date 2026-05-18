@@ -4,6 +4,7 @@ const {
   calculateVacationEntitlement,
   calculateBusinessDays,
   getCompletedYears,
+  calculateVacationBalance,
 } = require('../src/vacations');
 
 describe('calculateVacationEntitlement', () => {
@@ -113,5 +114,99 @@ describe('getCompletedYears', () => {
 
   it('exactly one year = 1 year', () => {
     assert.strictEqual(getCompletedYears(new Date('2020-06-15'), new Date('2021-06-15')), 1);
+  });
+});
+
+describe('calculateVacationBalance', () => {
+  const hireDate = '2023-01-15';
+
+  it('case 1: entitlement 12, taken 10, new request 2 = balance 0', () => {
+    const allRequests = [
+      { vacation_exercise_year: 1, status: 'tomada', requested_days: 10 },
+    ];
+    const balance = calculateVacationBalance({
+      hireDate,
+      exerciseYear: 1,
+      allRequests,
+      referenceDate: '2024-01-15',
+    });
+    assert.strictEqual(balance.entitlementDays, 12);
+    assert.strictEqual(balance.availableDays, 2);
+    assert.strictEqual(balance.negativeCarryToNextExercise, 0);
+  });
+
+  it('case 2: entitlement 12, taken 10, request 4 would yield -2', () => {
+    const allRequests = [
+      { vacation_exercise_year: 1, status: 'tomada', requested_days: 10 },
+      { vacation_exercise_year: 1, status: 'programada', requested_days: 4 },
+    ];
+    const balance = calculateVacationBalance({
+      hireDate,
+      exerciseYear: 1,
+      allRequests,
+      referenceDate: '2024-01-15',
+    });
+    assert.strictEqual(balance.entitlementDays, 12);
+    assert.strictEqual(balance.availableDays, -2);
+    assert.strictEqual(balance.negativeCarryToNextExercise, -2);
+  });
+
+  it('case 3: next exercise inherits negative carry from previous', () => {
+    const allRequests = [
+      { vacation_exercise_year: 1, status: 'tomada', requested_days: 14 },
+    ];
+    const balance = calculateVacationBalance({
+      hireDate,
+      exerciseYear: 2,
+      allRequests,
+      referenceDate: '2025-01-15',
+    });
+    assert.strictEqual(balance.entitlementDays, 14);
+    assert.strictEqual(balance.carriedBalanceFromPreviousExercise, -2);
+    assert.strictEqual(balance.availableDays, 12);
+  });
+
+  it('case 4: cancelled request does not reduce balance', () => {
+    const allRequests = [
+      { vacation_exercise_year: 1, status: 'tomada', requested_days: 10 },
+      { vacation_exercise_year: 1, status: 'cancelada', requested_days: 5 },
+    ];
+    const balance = calculateVacationBalance({
+      hireDate,
+      exerciseYear: 1,
+      allRequests,
+      referenceDate: '2024-01-15',
+    });
+    assert.strictEqual(balance.availableDays, 2);
+  });
+
+  it('case 5: programada and tomada both count toward used days without duplication', () => {
+    const allRequests = [
+      { vacation_exercise_year: 1, status: 'programada', requested_days: 5 },
+      { vacation_exercise_year: 1, status: 'tomada', requested_days: 5 },
+    ];
+    const balance = calculateVacationBalance({
+      hireDate,
+      exerciseYear: 1,
+      allRequests,
+      referenceDate: '2024-01-15',
+    });
+    assert.strictEqual(balance.takenDays, 5);
+    assert.strictEqual(balance.scheduledDays, 5);
+    assert.strictEqual(balance.availableDays, 2);
+  });
+
+  it('zero carry when previous exercise had positive balance', () => {
+    const allRequests = [
+      { vacation_exercise_year: 1, status: 'tomada', requested_days: 5 },
+    ];
+    const balance = calculateVacationBalance({
+      hireDate,
+      exerciseYear: 2,
+      allRequests,
+      referenceDate: '2025-01-15',
+    });
+    assert.strictEqual(balance.carriedBalanceFromPreviousExercise, 0);
+    assert.strictEqual(balance.availableDays, 14);
   });
 });

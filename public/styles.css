@@ -460,6 +460,31 @@ button.active {
   color: #b42318;
 }
 
+.badge-negative {
+  background: #fee4e2;
+  color: #b42318;
+  font-weight: 800;
+}
+
+.negative-balance {
+  color: #b42318;
+}
+
+.text-negative {
+  color: #b42318;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.summary-negative {
+  background: #fff1f3 !important;
+  border-color: #fecdd3 !important;
+}
+
+.summary-negative strong {
+  color: #b42318;
+}
+
 @media (max-width: 700px) {
   main {
     width: min(100% - 20px, 1440px);

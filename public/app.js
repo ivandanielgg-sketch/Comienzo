@@ -1021,26 +1021,33 @@ function renderEmployees() {
     return;
   }
 
-  employeesTable.innerHTML = state.employees.map((emp) => `
-    <tr>
-      <td>${escapeHtml(emp.employee_number)}</td>
-      <td>${escapeHtml(emp.full_name)}</td>
-      <td>${escapeHtml(emp.hire_date)}</td>
-      <td>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</td>
-      <td>${emp.current_exercise_year}</td>
-      <td>${emp.entitlement_days}</td>
-      <td>${emp.days_taken}</td>
-      <td>${emp.days_scheduled}</td>
-      <td>${emp.days_pending}</td>
-      <td>
-        <div class="row-actions">
-          <button class="secondary" data-action="edit-employee" data-id="${emp.id}" type="button">Editar</button>
-          <button class="secondary" data-action="open-vacations" data-id="${emp.id}" type="button">Vacaciones programadas</button>
-          <button class="secondary" data-action="print-format" data-id="${emp.id}" type="button">Generar formato</button>
-        </div>
-      </td>
-    </tr>
-  `).join('');
+  employeesTable.innerHTML = state.employees.map((emp) => {
+    const pendingClass = emp.days_pending < 0 ? 'negative-balance' : '';
+    const pendingLabel = emp.days_pending < 0
+      ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo por vacaciones anticipadas</small>`
+      : `${emp.days_pending}`;
+
+    return `
+      <tr>
+        <td>${escapeHtml(emp.employee_number)}</td>
+        <td>${escapeHtml(emp.full_name)}</td>
+        <td>${escapeHtml(emp.hire_date)}</td>
+        <td>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</td>
+        <td>${emp.current_exercise_year}</td>
+        <td>${emp.entitlement_days}</td>
+        <td>${emp.days_taken}</td>
+        <td>${emp.days_scheduled}</td>
+        <td class="${pendingClass}">${pendingLabel}</td>
+        <td>
+          <div class="row-actions">
+            <button class="secondary" data-action="edit-employee" data-id="${emp.id}" type="button">Editar</button>
+            <button class="secondary" data-action="open-vacations" data-id="${emp.id}" type="button">Vacaciones programadas</button>
+            <button class="secondary" data-action="print-format" data-id="${emp.id}" type="button">Generar formato</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 function openEmployeeModal(employee) {
@@ -1078,12 +1085,22 @@ async function openVacationModal(employeeId) {
   vacationModalTitle.textContent = `Vacaciones - ${emp.full_name}`;
   vacationModalSubtitle.textContent = `No. ${emp.employee_number} | Ingreso: ${emp.hire_date}`;
 
+  const pendingClass = emp.days_pending < 0 ? 'summary-negative' : '';
+  const carriedInfo = emp.carried_balance < 0
+    ? `<article class="summary-negative"><span>Saldo arrastrado</span><strong>${emp.carried_balance}</strong></article>`
+    : `<article><span>Saldo arrastrado</span><strong>0</strong></article>`;
+  const negativeNote = emp.days_pending < 0
+    ? '<p class="text-negative" style="grid-column:1/-1;margin:0;">Este saldo se descontara automaticamente del siguiente ejercicio vacacional.</p>'
+    : '';
+
   vacationEmployeeSummary.innerHTML = `
     <article><span>Antiguedad</span><strong>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</strong></article>
     <article><span>Dias correspondientes</span><strong>${emp.entitlement_days}</strong></article>
+    ${carriedInfo}
     <article><span>Dias tomados</span><strong>${emp.days_taken}</strong></article>
     <article><span>Dias programados</span><strong>${emp.days_scheduled}</strong></article>
-    <article><span>Dias pendientes</span><strong>${emp.days_pending}</strong></article>
+    <article class="${pendingClass}"><span>Dias disponibles</span><strong>${emp.days_pending}</strong></article>
+    ${negativeNote}
   `;
 
   setMessage(vacationRequestMessage, '');
@@ -1156,17 +1173,54 @@ async function submitVacationRequest(andPrint) {
     return;
   }
 
+  const payload = {
+    start_date: startDate,
+    end_date: endDate,
+    status,
+    include_vacation_bonus: includeBonus,
+    notes: notes || undefined,
+  };
+
   try {
-    const result = await api(`/api/employees/${state.selectedEmployeeId}/vacation-requests`, {
+    const response = await fetch(`/api/employees/${state.selectedEmployeeId}/vacation-requests`, {
       method: 'POST',
-      body: JSON.stringify({
-        start_date: startDate,
-        end_date: endDate,
-        status,
-        include_vacation_bonus: includeBonus,
-        notes: notes || undefined,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
+
+    const data = await response.json();
+
+    if (response.status === 409 && data.requires_confirmation) {
+      const reason = window.prompt(
+        `${data.message}\n\nDias disponibles: ${data.available_days}\nDias solicitados: ${data.requested_days}\nSaldo posterior: ${data.balance_after}\n\nIngresa el motivo de autorizacion para continuar:`,
+        'Vacaciones anticipadas autorizadas por direccion.',
+      );
+      if (!reason) {
+        setMessage(vacationRequestMessage, 'Solicitud cancelada por el usuario.');
+        return;
+      }
+
+      payload.confirm_negative_balance = true;
+      payload.admin_override_reason = reason;
+
+      const confirmResult = await api(`/api/employees/${state.selectedEmployeeId}/vacation-requests`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      setMessage(vacationRequestMessage, 'Solicitud con saldo negativo guardada correctamente.', true);
+      vacationRequestForm.reset();
+      await loadEmployees();
+      await openVacationModal(state.selectedEmployeeId);
+      if (andPrint) {
+        window.open(`/vacation-print.html?id=${confirmResult.id}`, '_blank');
+      }
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(data.message || 'La operacion no pudo completarse.');
+    }
 
     setMessage(vacationRequestMessage, 'Solicitud guardada correctamente.', true);
     vacationRequestForm.reset();
@@ -1174,7 +1228,7 @@ async function submitVacationRequest(andPrint) {
     await openVacationModal(state.selectedEmployeeId);
 
     if (andPrint) {
-      window.open(`/vacation-print.html?id=${result.id}`, '_blank');
+      window.open(`/vacation-print.html?id=${data.id}`, '_blank');
     }
   } catch (error) {
     setMessage(vacationRequestMessage, error.message);

@@ -74,6 +74,7 @@
       <tr><th>Correspondiente al ejercicio vacacional</th><td id="print-exercise"></td></tr>
       <tr><th>Vacaciones tomadas hasta el momento</th><td id="print-taken"></td></tr>
       <tr><th>Vacaciones pendientes del ejercicio</th><td id="print-pending"></td></tr>
+      <tr><th>Saldo posterior a esta solicitud</th><td id="print-balance-after"></td></tr>
     </table>
 
     <div class="section-title">FIRMAS</div>
@@ -155,6 +156,15 @@
           document.getElementById('print-pending').textContent = `${data.days_pending} dias`;
           document.getElementById('print-employee-sign').textContent = emp.full_name;
           document.getElementById('print-boss').textContent = emp.immediate_boss || 'Pendiente de asignar';
+
+          const balanceAfter = data.balance_after_this_request !== null && data.balance_after_this_request !== undefined
+            ? data.balance_after_this_request
+            : data.days_pending;
+          const balanceEl = document.getElementById('print-balance-after');
+          balanceEl.textContent = `${balanceAfter} dias`;
+          if (balanceAfter < 0) {
+            balanceEl.innerHTML = `<strong>${balanceAfter} dias</strong><br><small>Saldo negativo por vacaciones anticipadas. Se descontara del siguiente ejercicio vacacional.</small>`;
+          }
         } catch (error) {
           document.body.innerHTML = `<p>Error: ${error.message}</p>`;
         }
