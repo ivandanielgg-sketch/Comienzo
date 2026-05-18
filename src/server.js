@@ -730,6 +730,207 @@ app.delete('/api/projects/:projectId/costs/:costId', requireAuth, (req, res, nex
   }
 });
 
+// ===================== REPORTS MODULE =====================
+
+function generateReportFolio(projectId) {
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const existing = db.prepare(
+    'SELECT COUNT(*) as count FROM project_reports WHERE project_id = ?',
+  ).get(projectId);
+  const counter = (existing.count || 0) + 1;
+  return `REP-${projectId}-${dateStr}-${String(counter).padStart(3, '0')}`;
+}
+
+app.get('/api/reports', requireAuth, (req, res) => {
+  const reports = db.prepare(
+    `SELECT r.*, p.quote_number, p.order_number, p.client_name AS project_client,
+            p.project_description, p.status AS project_status, p.closed_at
+     FROM project_reports r
+     JOIN projects p ON r.project_id = p.id
+     ORDER BY r.created_at DESC`,
+  ).all();
+  res.json(reports);
+});
+
+app.get('/api/projects/:id/reports', requireAuth, (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    const reports = db.prepare(
+      'SELECT * FROM project_reports WHERE project_id = ? ORDER BY created_at DESC',
+    ).all(req.params.id);
+    res.json(reports);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/reports/:id', requireAuth, (req, res, next) => {
+  try {
+    const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
+    if (!report) {
+      const error = new Error('Reporte no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(report.project_id);
+    res.json({ ...report, project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/reports', requireAuth, (req, res, next) => {
+  try {
+    const projectId = req.body.project_id;
+    if (!projectId) {
+      throw badRequest('El proyecto es obligatorio.');
+    }
+    getProjectOrFail(projectId);
+
+    const clientName = requiredText(req.body, 'client_name', 'Cliente');
+    const serviceName = requiredText(req.body, 'service_name', 'Nombre de servicio');
+    const reportDate = requiredText(req.body, 'report_date', 'Fecha del reporte');
+
+    let reportFolio = trim(req.body.report_folio);
+    if (!reportFolio) {
+      reportFolio = generateReportFolio(projectId);
+    }
+
+    const existing = db.prepare('SELECT id FROM project_reports WHERE report_folio = ?').get(reportFolio);
+    if (existing) {
+      throw badRequest('El folio de reporte ya existe. Usa un folio diferente.');
+    }
+
+    const safetyTests = req.body.safety_tests ? JSON.stringify(req.body.safety_tests) : null;
+    const emissionsLow = req.body.emissions_low_fire ? JSON.stringify(req.body.emissions_low_fire) : null;
+    const emissionsHigh = req.body.emissions_high_fire ? JSON.stringify(req.body.emissions_high_fire) : null;
+
+    const result = db.prepare(
+      `INSERT INTO project_reports (
+        project_id, report_folio, client_name, client_address, service_name,
+        report_date, assigned_technicians, burner_model, equipment_model_serial,
+        pumps_motors_model, fuel, voltage, gas_pressure_inh2o, liquid_fuel_pressure_psi,
+        working_pressure, pump_amperage, fan_amperage, condensate_tank_temp_c,
+        operating_output_temp_c, flue_gas_temp_c, safety_tests, comments,
+        emissions_low_fire, emissions_high_fire, technician_name, plant_manager_name,
+        created_by, updated_by
+      ) VALUES (
+        @project_id, @report_folio, @client_name, @client_address, @service_name,
+        @report_date, @assigned_technicians, @burner_model, @equipment_model_serial,
+        @pumps_motors_model, @fuel, @voltage, @gas_pressure_inh2o, @liquid_fuel_pressure_psi,
+        @working_pressure, @pump_amperage, @fan_amperage, @condensate_tank_temp_c,
+        @operating_output_temp_c, @flue_gas_temp_c, @safety_tests, @comments,
+        @emissions_low_fire, @emissions_high_fire, @technician_name, @plant_manager_name,
+        @created_by, @updated_by
+      )`,
+    ).run({
+      project_id: projectId,
+      report_folio: reportFolio,
+      client_name: clientName,
+      client_address: optionalText(req.body, 'client_address'),
+      service_name: serviceName,
+      report_date: reportDate,
+      assigned_technicians: optionalText(req.body, 'assigned_technicians'),
+      burner_model: optionalText(req.body, 'burner_model'),
+      equipment_model_serial: optionalText(req.body, 'equipment_model_serial'),
+      pumps_motors_model: optionalText(req.body, 'pumps_motors_model'),
+      fuel: optionalText(req.body, 'fuel'),
+      voltage: optionalText(req.body, 'voltage'),
+      gas_pressure_inh2o: optionalText(req.body, 'gas_pressure_inh2o'),
+      liquid_fuel_pressure_psi: optionalText(req.body, 'liquid_fuel_pressure_psi'),
+      working_pressure: optionalText(req.body, 'working_pressure'),
+      pump_amperage: optionalText(req.body, 'pump_amperage'),
+      fan_amperage: optionalText(req.body, 'fan_amperage'),
+      condensate_tank_temp_c: optionalText(req.body, 'condensate_tank_temp_c'),
+      operating_output_temp_c: optionalText(req.body, 'operating_output_temp_c'),
+      flue_gas_temp_c: optionalText(req.body, 'flue_gas_temp_c'),
+      safety_tests: safetyTests,
+      comments: optionalText(req.body, 'comments'),
+      emissions_low_fire: emissionsLow,
+      emissions_high_fire: emissionsHigh,
+      technician_name: optionalText(req.body, 'technician_name'),
+      plant_manager_name: optionalText(req.body, 'plant_manager_name'),
+      created_by: req.session.username,
+      updated_by: req.session.username,
+    });
+
+    const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(result.lastInsertRowid);
+    res.status(201).json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/reports/:id', requireAuth, (req, res, next) => {
+  try {
+    const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
+    if (!report) {
+      const error = new Error('Reporte no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const clientName = requiredText(req.body, 'client_name', 'Cliente');
+    const serviceName = requiredText(req.body, 'service_name', 'Nombre de servicio');
+    const reportDate = requiredText(req.body, 'report_date', 'Fecha del reporte');
+
+    const safetyTests = req.body.safety_tests ? JSON.stringify(req.body.safety_tests) : null;
+    const emissionsLow = req.body.emissions_low_fire ? JSON.stringify(req.body.emissions_low_fire) : null;
+    const emissionsHigh = req.body.emissions_high_fire ? JSON.stringify(req.body.emissions_high_fire) : null;
+
+    db.prepare(
+      `UPDATE project_reports SET
+        client_name = @client_name, client_address = @client_address,
+        service_name = @service_name, report_date = @report_date,
+        assigned_technicians = @assigned_technicians, burner_model = @burner_model,
+        equipment_model_serial = @equipment_model_serial, pumps_motors_model = @pumps_motors_model,
+        fuel = @fuel, voltage = @voltage, gas_pressure_inh2o = @gas_pressure_inh2o,
+        liquid_fuel_pressure_psi = @liquid_fuel_pressure_psi, working_pressure = @working_pressure,
+        pump_amperage = @pump_amperage, fan_amperage = @fan_amperage,
+        condensate_tank_temp_c = @condensate_tank_temp_c, operating_output_temp_c = @operating_output_temp_c,
+        flue_gas_temp_c = @flue_gas_temp_c, safety_tests = @safety_tests, comments = @comments,
+        emissions_low_fire = @emissions_low_fire, emissions_high_fire = @emissions_high_fire,
+        technician_name = @technician_name, plant_manager_name = @plant_manager_name,
+        updated_by = @updated_by, updated_at = CURRENT_TIMESTAMP
+      WHERE id = @id`,
+    ).run({
+      id: req.params.id,
+      client_name: clientName,
+      client_address: optionalText(req.body, 'client_address'),
+      service_name: serviceName,
+      report_date: reportDate,
+      assigned_technicians: optionalText(req.body, 'assigned_technicians'),
+      burner_model: optionalText(req.body, 'burner_model'),
+      equipment_model_serial: optionalText(req.body, 'equipment_model_serial'),
+      pumps_motors_model: optionalText(req.body, 'pumps_motors_model'),
+      fuel: optionalText(req.body, 'fuel'),
+      voltage: optionalText(req.body, 'voltage'),
+      gas_pressure_inh2o: optionalText(req.body, 'gas_pressure_inh2o'),
+      liquid_fuel_pressure_psi: optionalText(req.body, 'liquid_fuel_pressure_psi'),
+      working_pressure: optionalText(req.body, 'working_pressure'),
+      pump_amperage: optionalText(req.body, 'pump_amperage'),
+      fan_amperage: optionalText(req.body, 'fan_amperage'),
+      condensate_tank_temp_c: optionalText(req.body, 'condensate_tank_temp_c'),
+      operating_output_temp_c: optionalText(req.body, 'operating_output_temp_c'),
+      flue_gas_temp_c: optionalText(req.body, 'flue_gas_temp_c'),
+      safety_tests: safetyTests,
+      comments: optionalText(req.body, 'comments'),
+      emissions_low_fire: emissionsLow,
+      emissions_high_fire: emissionsHigh,
+      technician_name: optionalText(req.body, 'technician_name'),
+      plant_manager_name: optionalText(req.body, 'plant_manager_name'),
+      updated_by: req.session.username,
+    });
+
+    const updated = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ===================== END REPORTS MODULE =====================
+
 // ===================== VACATION MODULE =====================
 
 const VALID_VACATION_STATUSES = ['programada', 'tomada', 'cancelada'];
