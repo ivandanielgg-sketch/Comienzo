@@ -38,6 +38,12 @@ compras/gastos/salarios relacionados con la cotizacion y calcular totales clave.
   con pagos y gastos relacionados.
 - Exportacion a Excel de Proyectos Cerrados con la misma estructura multi-hoja.
 - Duracion maxima de sesion de 1 hora.
+- Modulo de Vacaciones solo para admin:
+  - Alta y edicion de empleados.
+  - Calculo de antiguedad y dias conforme a LFT.
+  - Registro de vacaciones programadas, tomadas y canceladas.
+  - Validacion de dias laborables, saldo pendiente y traslapes.
+  - Formato imprimible de solicitud de vacaciones a nombre de REVRAM.
 
 ## Requisitos
 

@@ -41,6 +41,7 @@
           <div class="topbar-actions">
             <button id="projects-tab" class="secondary active" type="button">Proyectos</button>
             <button id="closed-projects-tab" class="secondary" type="button">Proyectos Cerrados</button>
+            <button id="vacations-tab" class="secondary hidden" type="button">Vacaciones</button>
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
             <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
           </div>
@@ -353,6 +354,164 @@
               <div>
                 <h3>Gastos registrados</h3>
                 <ul id="closed-costs-list" class="entry-list"></ul>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="vacations-view" class="hidden">
+          <section class="layout">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">REVRAM</p>
+                  <h2 id="employee-form-title">Agregar empleado</h2>
+                  <p class="muted">Administra empleados para cálculo de vacaciones conforme a LFT.</p>
+                </div>
+                <button id="new-employee-button" class="secondary" type="button">Agregar empleado</button>
+              </div>
+              <form id="employee-form" class="grid-form">
+                <input type="hidden" name="id" />
+                <label>
+                  Número de empleado
+                  <input name="employeeNumber" required />
+                </label>
+                <label>
+                  Nombre completo
+                  <input name="fullName" required />
+                </label>
+                <label>
+                  Fecha de ingreso
+                  <input name="hireDate" type="date" required />
+                </label>
+                <label>
+                  Departamento
+                  <input name="department" />
+                </label>
+                <label>
+                  Puesto
+                  <input name="position" />
+                </label>
+                <label>
+                  Jefe inmediato
+                  <input name="immediateBoss" placeholder="N/A" />
+                </label>
+                <label class="checkbox-row">
+                  <input name="active" type="checkbox" checked />
+                  Activo
+                </label>
+                <button type="submit">Guardar empleado</button>
+                <p id="employee-message" class="message"></p>
+              </form>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Empleados</h2>
+                  <p class="muted">Consulta saldos, programa vacaciones y genera formatos.</p>
+                </div>
+              </div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Número</th>
+                      <th>Empleado</th>
+                      <th>Ingreso</th>
+                      <th>Antigüedad</th>
+                      <th>Ejercicio</th>
+                      <th>Días LFT</th>
+                      <th>Tomados</th>
+                      <th>Programados</th>
+                      <th>Pendientes</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="employees-table"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section id="vacation-detail-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Vacaciones programadas</p>
+                <h2 id="vacation-detail-title"></h2>
+                <p id="vacation-detail-summary" class="muted"></p>
+              </div>
+            </div>
+
+            <div class="detail-grid">
+              <article><span>Días correspondientes</span><strong id="vacation-days-corresponding">0</strong></article>
+              <article><span>Tomados</span><strong id="vacation-days-taken">0</strong></article>
+              <article><span>Programados</span><strong id="vacation-days-scheduled">0</strong></article>
+              <article><span>Pendientes</span><strong id="vacation-days-pending">0</strong></article>
+            </div>
+
+            <div class="layout two-columns">
+              <div>
+                <h3>Nueva solicitud</h3>
+                <form id="vacation-request-form" class="stack">
+                  <input type="hidden" name="id" />
+                  <label>
+                    Fecha inicial
+                    <input name="startDate" type="date" required />
+                  </label>
+                  <label>
+                    Fecha final
+                    <input name="endDate" type="date" required />
+                  </label>
+                  <label>
+                    Días solicitados
+                    <input name="requestedDays" readonly />
+                  </label>
+                  <label>
+                    Estatus
+                    <select name="status" required>
+                      <option value="programada">programada</option>
+                      <option value="tomada">tomada</option>
+                    </select>
+                  </label>
+                  <label>
+                    ¿Se incluye prima vacacional?
+                    <select name="includeVacationBonus" required>
+                      <option value="true">Sí</option>
+                      <option value="false">No</option>
+                    </select>
+                  </label>
+                  <label>
+                    Notas
+                    <textarea name="notes" rows="3"></textarea>
+                  </label>
+                  <div class="row-actions">
+                    <button type="submit">Guardar</button>
+                    <button id="save-print-vacation-button" class="secondary" type="button">Guardar y generar formato</button>
+                  </div>
+                  <p id="vacation-request-message" class="message"></p>
+                </form>
+              </div>
+
+              <div>
+                <h3>Historial de solicitudes</h3>
+                <div class="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Inicio</th>
+                        <th>Fin</th>
+                        <th>Días</th>
+                        <th>Ejercicio</th>
+                        <th>Estatus</th>
+                        <th>Notas</th>
+                        <th>Registro</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="vacation-requests-table"></tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </section>

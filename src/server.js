@@ -7,6 +7,12 @@ const path = require('node:path');
 const { getDb } = require('./db');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
+const {
+  calculateBusinessDays,
+  calculateVacationEntitlement,
+  calculateVacationSummary,
+  validateVacationRequest,
+} = require('./vacations');
 
 const app = express();
 const db = getDb();
@@ -25,6 +31,7 @@ const VALID_COST_CATEGORIES = [
   'Otros',
 ];
 const VALID_CURRENCIES = ['MXN', 'USD', 'EUR'];
+const VALID_VACATION_STATUSES = ['programada', 'tomada', 'cancelada'];
 const SESSION_TTL_MS = 1000 * 60 * 60;
 const isProduction = process.env.NODE_ENV === 'production';
 const trustProxy = isProduction || process.env.TRUST_PROXY === 'true';
@@ -66,6 +73,18 @@ function requireAdminVerified(req, res, next) {
     return res.status(403).json({ message: 'Se requiere autorizacion del admin.' });
   }
 
+  return next();
+}
+
+function requireAdminRole(req, res, next) {
+  const user = getUserOrFail(req.session.userId);
+  if (user.role !== 'admin') {
+    return res.status(403).json({
+      message: 'Acceso restringido. Solo el administrador puede consultar y programar vacaciones.',
+    });
+  }
+
+  req.session.role = user.role;
   return next();
 }
 
@@ -222,6 +241,28 @@ function normalizeCost(body) {
   };
 }
 
+function normalizeEmployee(body) {
+  return {
+    employee_number: requiredText(body, 'employeeNumber', 'Numero de empleado'),
+    full_name: requiredText(body, 'fullName', 'Nombre completo'),
+    hire_date: requiredText(body, 'hireDate', 'Fecha de ingreso'),
+    department: optionalText(body, 'department'),
+    position: optionalText(body, 'position'),
+    immediate_boss: optionalText(body, 'immediateBoss') || 'N/A',
+    active: booleanValue(body, 'active'),
+  };
+}
+
+function normalizeVacationRequest(body) {
+  return {
+    startDate: requiredText(body, 'startDate', 'Fecha inicial'),
+    endDate: requiredText(body, 'endDate', 'Fecha final'),
+    status: enumValue(body, 'status', 'Estatus', VALID_VACATION_STATUSES),
+    includeVacationBonus: body.includeVacationBonus === true || body.includeVacationBonus === 'true',
+    notes: optionalText(body, 'notes'),
+  };
+}
+
 function normalizeUser(body, { requirePassword = false } = {}) {
   const username = requiredText(body, 'username', 'Usuario');
   const password = trim(body.password);
@@ -244,6 +285,7 @@ function mapUser(row) {
   return {
     id: row.id,
     username: row.username,
+    role: row.role || 'user',
     created_at: row.created_at,
   };
 }
@@ -285,6 +327,80 @@ function mapMoneyEntry(row, exchangeRates) {
     currency: row.currency || 'MXN',
     amount_mxn: convertAmountToMxn(row.amount, row.currency || 'MXN', exchangeRates),
   };
+}
+
+function mapEmployee(row, requests = [], referenceDate = new Date()) {
+  const employee = {
+    id: row.id,
+    employeeNumber: row.employee_number,
+    fullName: row.full_name,
+    hireDate: row.hire_date,
+    department: row.department || '',
+    position: row.position || '',
+    immediateBoss: row.immediate_boss || 'N/A',
+    active: Boolean(row.active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  const summary = calculateVacationSummary(employee, requests, referenceDate);
+
+  return {
+    ...employee,
+    ...summary,
+  };
+}
+
+function mapVacationRequest(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    requestedDays: row.requested_days,
+    vacationExerciseYear: row.vacation_exercise_year,
+    status: row.status,
+    isFirstVacationOfExercise: Boolean(row.is_first_vacation_of_exercise),
+    includeVacationBonus: Boolean(row.include_vacation_bonus),
+    createdBy: row.created_by,
+    authorizedBy: row.authorized_by || 'Iván García',
+    hrResponsible: row.hr_responsible || 'Alejandra Gonzalez',
+    notes: row.notes || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function getEmployeeOrFail(employeeId) {
+  const employee = db.prepare('SELECT * FROM employees WHERE id = ?').get(employeeId);
+  if (!employee) {
+    const error = new Error('Empleado no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return employee;
+}
+
+function getVacationRequestOrFail(requestId) {
+  const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(requestId);
+  if (!request) {
+    const error = new Error('Solicitud de vacaciones no encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return request;
+}
+
+function getVacationRequestsForEmployee(employeeId) {
+  return db
+    .prepare(
+      `SELECT * FROM vacation_requests
+       WHERE employee_id = ?
+       ORDER BY start_date DESC, id DESC`,
+    )
+    .all(employeeId)
+    .map(mapVacationRequest);
 }
 
 function mapProject(row, exchangeRates = getExchangeRateMap()) {
@@ -392,7 +508,11 @@ app.get('/api/session', (req, res) => {
 
   return res.json({
     authenticated: true,
-    user: { id: req.session.userId, username: req.session.username },
+    user: {
+      id: req.session.userId,
+      username: req.session.username,
+      role: req.session.role || 'user',
+    },
   });
 });
 
@@ -408,7 +528,8 @@ app.post('/api/login', (req, res, next) => {
 
     req.session.userId = user.id;
     req.session.username = user.username;
-    return res.json({ username: user.username });
+    req.session.role = user.role || 'user';
+    return res.json({ user: { id: user.id, username: user.username, role: req.session.role } });
   } catch (error) {
     return next(error);
   }
@@ -473,6 +594,221 @@ app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) =>
     }
 
     res.json(mapUser(getUserOrFail(req.params.id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/vacations/employees', requireAuth, requireAdminRole, (req, res) => {
+  const employees = db
+    .prepare('SELECT * FROM employees ORDER BY active DESC, full_name ASC')
+    .all()
+    .map((employee) =>
+      mapEmployee(employee, getVacationRequestsForEmployee(employee.id)),
+    );
+  res.json(employees);
+});
+
+app.post('/api/vacations/employees', requireAuth, requireAdminRole, (req, res, next) => {
+  try {
+    const employee = normalizeEmployee(req.body);
+    const result = db
+      .prepare(
+        `INSERT INTO employees (
+          employee_number,
+          full_name,
+          hire_date,
+          department,
+          position,
+          immediate_boss,
+          active
+        ) VALUES (
+          @employee_number,
+          @full_name,
+          @hire_date,
+          @department,
+          @position,
+          @immediate_boss,
+          @active
+        )`,
+      )
+      .run(employee);
+
+    const savedEmployee = getEmployeeOrFail(result.lastInsertRowid);
+    res.status(201).json(mapEmployee(savedEmployee, []));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/vacations/employees/:id', requireAuth, requireAdminRole, (req, res, next) => {
+  try {
+    getEmployeeOrFail(req.params.id);
+    const employee = normalizeEmployee(req.body);
+    db.prepare(
+      `UPDATE employees SET
+        employee_number = @employee_number,
+        full_name = @full_name,
+        hire_date = @hire_date,
+        department = @department,
+        position = @position,
+        immediate_boss = @immediate_boss,
+        active = @active,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = @id`,
+    ).run({ ...employee, id: req.params.id });
+
+    const savedEmployee = getEmployeeOrFail(req.params.id);
+    res.json(mapEmployee(savedEmployee, getVacationRequestsForEmployee(savedEmployee.id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/vacations/employees/:id/requests', requireAuth, requireAdminRole, (req, res, next) => {
+  try {
+    const employee = getEmployeeOrFail(req.params.id);
+    const requests = getVacationRequestsForEmployee(employee.id);
+    res.json({
+      employee: mapEmployee(employee, requests),
+      requests,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/vacations/employees/:id/requests', requireAuth, requireAdminRole, (req, res, next) => {
+  try {
+    const employeeRow = getEmployeeOrFail(req.params.id);
+    const employee = mapEmployee(employeeRow, []);
+    const existingRequests = getVacationRequestsForEmployee(employee.id);
+    const request = normalizeVacationRequest(req.body);
+    const validation = validateVacationRequest({
+      employee,
+      existingRequests,
+      startDate: request.startDate,
+      endDate: request.endDate,
+      status: request.status,
+    });
+    const hasExistingInExercise = existingRequests.some(
+      (existingRequest) =>
+        existingRequest.status !== 'cancelada' &&
+        Number(existingRequest.vacationExerciseYear) === Number(validation.vacationExerciseYear),
+    );
+    const result = db
+      .prepare(
+        `INSERT INTO vacation_requests (
+          employee_id,
+          start_date,
+          end_date,
+          requested_days,
+          vacation_exercise_year,
+          status,
+          is_first_vacation_of_exercise,
+          include_vacation_bonus,
+          created_by,
+          authorized_by,
+          hr_responsible,
+          notes
+        ) VALUES (
+          @employee_id,
+          @start_date,
+          @end_date,
+          @requested_days,
+          @vacation_exercise_year,
+          @status,
+          @is_first_vacation_of_exercise,
+          @include_vacation_bonus,
+          @created_by,
+          @authorized_by,
+          @hr_responsible,
+          @notes
+        )`,
+      )
+      .run({
+        employee_id: employee.id,
+        start_date: request.startDate,
+        end_date: request.endDate,
+        requested_days: validation.requestedDays,
+        vacation_exercise_year: validation.vacationExerciseYear,
+        status: request.status,
+        is_first_vacation_of_exercise: hasExistingInExercise ? 0 : 1,
+        include_vacation_bonus: request.includeVacationBonus ? 1 : 0,
+        created_by: req.session.userId,
+        authorized_by: 'Iván García',
+        hr_responsible: 'Alejandra Gonzalez',
+        notes: request.notes,
+      });
+
+    res.status(201).json(mapVacationRequest(getVacationRequestOrFail(result.lastInsertRowid)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/vacations/requests/:id', requireAuth, requireAdminRole, (req, res, next) => {
+  try {
+    const existingRow = getVacationRequestOrFail(req.params.id);
+    const existingRequest = mapVacationRequest(existingRow);
+    const employeeRow = getEmployeeOrFail(existingRequest.employeeId);
+    const employee = mapEmployee(employeeRow, []);
+    const existingRequests = getVacationRequestsForEmployee(employee.id);
+    const request = {
+      startDate: trim(req.body.startDate) || existingRequest.startDate,
+      endDate: trim(req.body.endDate) || existingRequest.endDate,
+      status: trim(req.body.status) || existingRequest.status,
+      includeVacationBonus:
+        req.body.includeVacationBonus === undefined
+          ? existingRequest.includeVacationBonus
+          : req.body.includeVacationBonus === true || req.body.includeVacationBonus === 'true',
+      notes: req.body.notes === undefined ? existingRequest.notes : optionalText(req.body, 'notes'),
+    };
+    const validation = validateVacationRequest({
+      employee,
+      existingRequests,
+      startDate: request.startDate,
+      endDate: request.endDate,
+      status: request.status,
+      excludeRequestId: existingRequest.id,
+    });
+    db.prepare(
+      `UPDATE vacation_requests SET
+        start_date = @start_date,
+        end_date = @end_date,
+        requested_days = @requested_days,
+        vacation_exercise_year = @vacation_exercise_year,
+        status = @status,
+        include_vacation_bonus = @include_vacation_bonus,
+        notes = @notes,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = @id`,
+    ).run({
+      id: existingRequest.id,
+      start_date: request.startDate,
+      end_date: request.endDate,
+      requested_days: validation.requestedDays,
+      vacation_exercise_year: validation.vacationExerciseYear,
+      status: request.status,
+      include_vacation_bonus: request.includeVacationBonus ? 1 : 0,
+      notes: request.notes,
+    });
+
+    res.json(mapVacationRequest(getVacationRequestOrFail(existingRequest.id)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/vacations/requests/:id', requireAuth, requireAdminRole, (req, res, next) => {
+  try {
+    const request = mapVacationRequest(getVacationRequestOrFail(req.params.id));
+    const employee = getEmployeeOrFail(request.employeeId);
+    const requests = getVacationRequestsForEmployee(employee.id);
+    res.json({
+      employee: mapEmployee(employee, requests),
+      request,
+    });
   } catch (error) {
     next(error);
   }
@@ -718,15 +1054,134 @@ app.delete('/api/projects/:projectId/costs/:costId', requireAuth, (req, res, nex
   }
 });
 
+app.get('/vacaciones/solicitud/:id/print', requireAuth, requireAdminRole, (req, res, next) => {
+  try {
+    const request = mapVacationRequest(getVacationRequestOrFail(req.params.id));
+    const employeeRow = getEmployeeOrFail(request.employeeId);
+    const requests = getVacationRequestsForEmployee(employeeRow.id);
+    const employee = mapEmployee(employeeRow, requests);
+
+    res.type('html').send(renderVacationPrintHtml(employee, request));
+  } catch (error) {
+    next(error);
+  }
+});
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function renderVacationPrintHtml(employee, request) {
+  const generatedAt = new Date().toLocaleDateString('es-MX');
+  const vacationBonus = request.includeVacationBonus ? 'Sí' : 'No';
+  const immediateBoss =
+    employee.immediateBoss && employee.immediateBoss !== 'N/A'
+      ? employee.immediateBoss
+      : 'Pendiente de asignar';
+
+  return `<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Solicitud de vacaciones ${request.id}</title>
+    <style>
+      @page { size: letter; margin: 14mm; }
+      * { box-sizing: border-box; }
+      body { color: #111; font-family: Arial, Helvetica, sans-serif; font-size: 12px; margin: 0; }
+      .toolbar { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 16px; }
+      button { border: 1px solid #111; background: #fff; border-radius: 4px; cursor: pointer; padding: 8px 12px; }
+      .sheet { border: 1px solid #111; padding: 18px; }
+      h1, h2, p { margin-top: 0; }
+      h1 { font-size: 17px; letter-spacing: 0.04em; text-align: center; }
+      h2 { font-size: 14px; margin-bottom: 6px; }
+      .company { font-size: 18px; font-weight: 700; text-align: center; }
+      .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+      table { border-collapse: collapse; margin-bottom: 12px; page-break-inside: avoid; width: 100%; }
+      th, td { border: 1px solid #333; padding: 7px; text-align: left; vertical-align: top; }
+      th { background: #eee; font-weight: 700; }
+      .signatures { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 34px; }
+      .signature { border-top: 1px solid #111; padding-top: 8px; text-align: center; }
+      .footer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 22px; }
+      @media print {
+        .toolbar { display: none; }
+        body { font-size: 11px; }
+        .sheet { border: 0; padding: 0; }
+        table, .signatures, .footer-grid { break-inside: avoid; page-break-inside: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button onclick="window.print()">Imprimir / Guardar PDF</button>
+      <button onclick="window.close()">Cerrar</button>
+    </div>
+    <main class="sheet">
+      <p class="company">REVRAM</p>
+      <h1>SOLICITUD DE VACACIONES O AUSENTISMOS</h1>
+      <div class="meta">
+        <div><strong>Folio interno de solicitud:</strong> ${escapeHtml(request.id)}</div>
+        <div><strong>Fecha de generación:</strong> ${escapeHtml(generatedAt)}</div>
+      </div>
+
+      <h2>Datos del empleado</h2>
+      <table>
+        <tbody>
+          <tr><th>Fecha de alta del empleado</th><td>${escapeHtml(employee.hireDate)}</td><th>Empleado</th><td>${escapeHtml(employee.fullName)}</td></tr>
+          <tr><th>Fecha de registro</th><td>${escapeHtml(request.createdAt)}</td><th>Número de empleado</th><td>${escapeHtml(employee.employeeNumber)}</td></tr>
+          <tr><th>Días solicitados</th><td>${escapeHtml(request.requestedDays)}</td><th>A partir del día</th><td>${escapeHtml(request.startDate)}</td></tr>
+          <tr><th>Al día</th><td>${escapeHtml(request.endDate)}</td><th>Se considera como permiso</th><td>N/A</td></tr>
+          <tr><th>Se paga como vacación</th><td>Sí</td><th>Se incluye prima vacacional</th><td>${escapeHtml(vacationBonus)}</td></tr>
+          <tr><th>Correspondiente al ejercicio vacacional</th><td>${escapeHtml(request.vacationExerciseYear)}</td><th>Vacaciones tomadas hasta el momento</th><td>${escapeHtml(employee.takenDays)}</td></tr>
+          <tr><th>Vacaciones pendientes del ejercicio</th><td>${escapeHtml(employee.pendingDays)}</td><th>Jefe inmediato</th><td>${escapeHtml(immediateBoss)}</td></tr>
+        </tbody>
+      </table>
+
+      <div class="signatures">
+        <div class="signature">Firma del solicitante</div>
+        <div class="signature">Firma departamento RH</div>
+        <div class="signature">Jefe inmediato</div>
+        <div class="signature">Supervisor</div>
+      </div>
+
+      <div class="footer-grid">
+        <table>
+          <tbody>
+            <tr><th>Elaboró</th><td>Alejandra Gonzalez</td></tr>
+            <tr><th>Autorizó</th><td>Iván García</td></tr>
+            <tr><th>Autorizó supervisor</th><td>N/A</td></tr>
+          </tbody>
+        </table>
+        <table>
+          <tbody>
+            <tr><th>Cargo RH</th><td>Gerente RH</td></tr>
+            <tr><th>Cargo jefe inmediato</th><td>Jefe inmediato</td></tr>
+            <tr><th>Cargo supervisor</th><td>Supervisor</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </body>
+</html>`;
+}
+
 app.use((err, req, res, next) => {
   if (res.headersSent) {
     return next(err);
   }
 
   if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-    const message = err.message.includes('users.username')
-      ? 'El usuario ya existe.'
-      : 'El numero de cotizacion ya existe.';
+    let message = 'El numero de cotizacion ya existe.';
+    if (err.message.includes('users.username')) {
+      message = 'El usuario ya existe.';
+    }
+    if (err.message.includes('employees.employee_number')) {
+      message = 'Ya existe un empleado activo con ese numero.';
+    }
     return res.status(400).json({ message });
   }
 

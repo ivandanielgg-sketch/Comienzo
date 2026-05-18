@@ -28,6 +28,7 @@ function migrate(database) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -101,14 +102,54 @@ function migrate(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS employees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_number TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      hire_date TEXT NOT NULL,
+      department TEXT,
+      position TEXT,
+      immediate_boss TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_active_number
+      ON employees (employee_number)
+      WHERE active = 1;
+
+    CREATE TABLE IF NOT EXISTS vacation_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      requested_days INTEGER NOT NULL CHECK (requested_days > 0),
+      vacation_exercise_year INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('programada', 'tomada', 'cancelada')),
+      is_first_vacation_of_exercise INTEGER NOT NULL DEFAULT 0,
+      include_vacation_bonus INTEGER NOT NULL DEFAULT 0,
+      created_by INTEGER,
+      authorized_by TEXT NOT NULL DEFAULT 'Iván García',
+      hr_responsible TEXT NOT NULL DEFAULT 'Alejandra Gonzalez',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    );
   `);
+  ensureColumn(database, 'users', 'role', "TEXT NOT NULL DEFAULT 'user'");
   ensureColumn(database, 'projects', 'project_description', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, 'projects', 'total_invoiced_currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'projects', 'closed_at', 'TEXT');
   ensureColumn(database, 'project_payments', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
   ensureColumn(database, 'project_costs', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
+  ensureColumn(database, 'vacation_requests', 'is_first_vacation_of_exercise', 'INTEGER NOT NULL DEFAULT 0');
   migrateCostCategories(database);
   seedExchangeRates(database);
+  ensureAdminRole(database);
 }
 
 function ensureColumn(database, tableName, columnName, definition) {
@@ -200,6 +241,12 @@ function seedExchangeRates(database) {
   seedRate.run('EUR', Number(process.env.EUR_TO_MXN || 19));
 }
 
+function ensureAdminRole(database) {
+  database
+    .prepare('UPDATE users SET role = ? WHERE username = ?')
+    .run('admin', process.env.ADMIN_USER || 'admin');
+}
+
 function seedAdmin(database) {
   const existingUser = database
     .prepare('SELECT id FROM users WHERE username = ?')
@@ -211,8 +258,8 @@ function seedAdmin(database) {
 
   const passwordHash = bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin123', 12);
   database
-    .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
-    .run(process.env.ADMIN_USER || 'admin', passwordHash);
+    .prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
+    .run(process.env.ADMIN_USER || 'admin', passwordHash, 'admin');
 }
 
 module.exports = {
