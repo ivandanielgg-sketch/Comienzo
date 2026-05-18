@@ -7,7 +7,7 @@ const path = require('node:path');
 const { getDb } = require('./db');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
-const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance } = require('./vacations');
+const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
 
 const app = express();
 const db = getDb();
@@ -746,30 +746,30 @@ function getEmployeeOrFail(employeeId) {
 
 function mapEmployee(row) {
   const today = new Date().toISOString().slice(0, 10);
-  const completedYears = getCompletedYears(new Date(row.hire_date), new Date(today));
-  const exerciseYear = getCurrentExerciseYear(row.hire_date, today);
+  const referenceDate = row.active ? today : (row.termination_date || today);
+  const completedYears = getCompletedYears(new Date(row.hire_date), new Date(referenceDate));
+  const accruedDays = calculateAccruedVacationDays(row.hire_date, referenceDate);
 
   const allRequests = db.prepare(
     'SELECT * FROM vacation_requests WHERE employee_id = ?',
   ).all(row.id);
 
-  const balance = calculateVacationBalance({
-    hireDate: row.hire_date,
-    exerciseYear,
-    allRequests,
-    referenceDate: today,
-  });
+  const activeRequests = allRequests.filter((r) => r.status !== 'cancelada');
+  const daysTaken = activeRequests
+    .filter((r) => r.status === 'tomada')
+    .reduce((sum, r) => sum + r.requested_days, 0);
+  const daysScheduled = activeRequests
+    .filter((r) => r.status === 'programada')
+    .reduce((sum, r) => sum + r.requested_days, 0);
+  const daysAvailable = accruedDays - daysTaken - daysScheduled;
 
   return {
     ...row,
     seniority_years: completedYears,
-    current_exercise_year: exerciseYear,
-    entitlement_days: balance.entitlementDays,
-    days_taken: balance.takenDays,
-    days_scheduled: balance.scheduledDays,
-    days_pending: balance.availableDays,
-    carried_balance: balance.carriedBalanceFromPreviousExercise,
-    negative_carry_to_next: balance.negativeCarryToNextExercise,
+    accrued_days: accruedDays,
+    days_taken: daysTaken,
+    days_scheduled: daysScheduled,
+    days_pending: daysAvailable,
   };
 }
 
@@ -788,7 +788,9 @@ function checkOverlap(employeeId, startDate, endDate, excludeRequestId) {
 }
 
 app.get('/api/employees', requireAuth, requireAdmin, (req, res) => {
-  const employees = db.prepare('SELECT * FROM employees ORDER BY full_name ASC').all();
+  const employees = db.prepare(
+    'SELECT * FROM employees ORDER BY active DESC, full_name ASC',
+  ).all();
   res.json(employees.map(mapEmployee));
 });
 
@@ -810,11 +812,24 @@ app.post('/api/employees', requireAuth, requireAdmin, (req, res, next) => {
     const position = optionalText(req.body, 'position');
     const immediateBoss = optionalText(req.body, 'immediate_boss');
     const active = req.body.active === false || req.body.active === 0 ? 0 : 1;
+    let terminationDate = optionalText(req.body, 'termination_date');
+    const inactiveReason = optionalText(req.body, 'inactive_reason');
+
+    if (!active) {
+      if (!terminationDate) {
+        throw badRequest('La fecha de baja es obligatoria para empleados inactivos.');
+      }
+      if (new Date(terminationDate) < new Date(hireDate)) {
+        throw badRequest('La fecha de baja no puede ser anterior a la fecha de ingreso.');
+      }
+    } else {
+      terminationDate = null;
+    }
 
     const result = db.prepare(
-      `INSERT INTO employees (employee_number, full_name, hire_date, department, position, immediate_boss, active)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active);
+      `INSERT INTO employees (employee_number, full_name, hire_date, department, position, immediate_boss, active, termination_date, inactive_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, terminationDate, inactiveReason);
 
     res.status(201).json(mapEmployee(getEmployeeOrFail(result.lastInsertRowid)));
   } catch (error) {
@@ -832,13 +847,27 @@ app.put('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
     const position = optionalText(req.body, 'position');
     const immediateBoss = optionalText(req.body, 'immediate_boss');
     const active = req.body.active === false || req.body.active === 0 ? 0 : 1;
+    let terminationDate = optionalText(req.body, 'termination_date');
+    const inactiveReason = optionalText(req.body, 'inactive_reason');
+
+    if (!active) {
+      if (!terminationDate) {
+        throw badRequest('La fecha de baja es obligatoria para empleados inactivos.');
+      }
+      if (new Date(terminationDate) < new Date(hireDate)) {
+        throw badRequest('La fecha de baja no puede ser anterior a la fecha de ingreso.');
+      }
+    } else {
+      terminationDate = null;
+    }
 
     db.prepare(
       `UPDATE employees SET
         employee_number = ?, full_name = ?, hire_date = ?, department = ?,
-        position = ?, immediate_boss = ?, active = ?, updated_at = CURRENT_TIMESTAMP
+        position = ?, immediate_boss = ?, active = ?,
+        termination_date = ?, inactive_reason = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, req.params.id);
+    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, terminationDate, inactiveReason, req.params.id);
 
     res.json(mapEmployee(getEmployeeOrFail(req.params.id)));
   } catch (error) {
@@ -861,6 +890,9 @@ app.get('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req,
 app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req, res, next) => {
   try {
     const employee = getEmployeeOrFail(req.params.id);
+    if (!employee.active) {
+      throw badRequest('No se pueden crear solicitudes para empleados inactivos.');
+    }
     const startDate = requiredText(req.body, 'start_date', 'Fecha inicial');
     const endDate = requiredText(req.body, 'end_date', 'Fecha final');
     const status = enumValue(req.body, 'status', 'Estatus', VALID_VACATION_STATUSES);
@@ -879,18 +911,14 @@ app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req
       ? Number(req.body.vacation_exercise_year)
       : getCurrentExerciseYear(employee.hire_date, today);
 
+    const accruedDays = calculateAccruedVacationDays(employee.hire_date, today);
     const allRequests = db.prepare(
       'SELECT * FROM vacation_requests WHERE employee_id = ?',
     ).all(employee.id);
+    const activeRequests = allRequests.filter((r) => r.status !== 'cancelada');
+    const usedDays = activeRequests.reduce((sum, r) => sum + r.requested_days, 0);
+    const available = accruedDays - usedDays;
 
-    const balance = calculateVacationBalance({
-      hireDate: employee.hire_date,
-      exerciseYear,
-      allRequests,
-      referenceDate: today,
-    });
-
-    const available = balance.availableDays;
     const willCreateNegativeBalance = requestedDays > available;
     const negativeDaysGenerated = willCreateNegativeBalance ? requestedDays - available : 0;
     const balanceAfterRequest = available - requestedDays;
@@ -923,8 +951,8 @@ app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req
       ? (trim(req.body.admin_override_reason) || 'Vacaciones anticipadas autorizadas por direccion.')
       : null;
 
-    const existingActiveRequests = allRequests.filter(
-      (r) => r.vacation_exercise_year === exerciseYear && r.status !== 'cancelada',
+    const existingActiveRequests = activeRequests.filter(
+      (r) => r.vacation_exercise_year === exerciseYear,
     );
 
     const result = db.prepare(
@@ -983,22 +1011,15 @@ app.put('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next
 
     if (status !== 'cancelada') {
       const today = new Date().toISOString().slice(0, 10);
-      const exerciseYear = req.body.vacation_exercise_year
-        ? Number(req.body.vacation_exercise_year)
-        : request.vacation_exercise_year;
+      const refDate = employee.active ? today : (employee.termination_date || today);
+      const accruedDays = calculateAccruedVacationDays(employee.hire_date, refDate);
 
-      const allRequests = db.prepare(
-        'SELECT * FROM vacation_requests WHERE employee_id = ? AND id != ?',
-      ).all(employee.id, request.id);
+      const otherRequests = db.prepare(
+        'SELECT * FROM vacation_requests WHERE employee_id = ? AND id != ? AND status != ?',
+      ).all(employee.id, request.id, 'cancelada');
+      const usedDays = otherRequests.reduce((sum, r) => sum + r.requested_days, 0);
+      const available = accruedDays - usedDays;
 
-      const balance = calculateVacationBalance({
-        hireDate: employee.hire_date,
-        exerciseYear,
-        allRequests,
-        referenceDate: today,
-      });
-
-      const available = balance.availableDays;
       willCreateNegativeBalance = requestedDays > available;
       negativeDaysGenerated = willCreateNegativeBalance ? requestedDays - available : 0;
       balanceAfterRequest = available - requestedDays;
@@ -1071,26 +1092,29 @@ app.get('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next
 
     const employee = getEmployeeOrFail(request.employee_id);
     const today = new Date().toISOString().slice(0, 10);
+    const referenceDate = employee.active ? today : (employee.termination_date || today);
+    const accruedDays = calculateAccruedVacationDays(employee.hire_date, referenceDate);
+    const completedYears = getCompletedYears(new Date(employee.hire_date), new Date(referenceDate));
 
     const allRequests = db.prepare(
-      'SELECT * FROM vacation_requests WHERE employee_id = ?',
-    ).all(employee.id);
-
-    const balance = calculateVacationBalance({
-      hireDate: employee.hire_date,
-      exerciseYear: request.vacation_exercise_year,
-      allRequests,
-      referenceDate: today,
-    });
+      'SELECT * FROM vacation_requests WHERE employee_id = ? AND status != ?',
+    ).all(employee.id, 'cancelada');
+    const daysTaken = allRequests
+      .filter((r) => r.status === 'tomada')
+      .reduce((sum, r) => sum + r.requested_days, 0);
+    const daysScheduled = allRequests
+      .filter((r) => r.status === 'programada')
+      .reduce((sum, r) => sum + r.requested_days, 0);
+    const daysAvailable = accruedDays - daysTaken - daysScheduled;
 
     res.json({
       ...request,
       employee,
-      entitlement_days: balance.entitlementDays,
-      days_taken: balance.takenDays,
-      days_pending: balance.availableDays,
-      carried_balance: balance.carriedBalanceFromPreviousExercise,
-      seniority_years: getCompletedYears(new Date(employee.hire_date), new Date(today)),
+      accrued_days: accruedDays,
+      days_taken: daysTaken,
+      days_scheduled: daysScheduled,
+      days_pending: daysAvailable,
+      seniority_years: completedYears,
       balance_after_this_request: request.balance_after_request,
     });
   } catch (error) {

@@ -165,11 +165,46 @@ function computeCarriedBalance(hireDate, exerciseYear, allRequests, referenceDat
 
 /**
  * Calculates entitlement for a specific exercise year number (1-based).
+ * Returns the days corresponding to that single service year.
  */
 function calculateEntitlementForExercise(hireDate, exerciseYear) {
-  if (exerciseYear < 1) return 0;
-  if (exerciseYear <= 5) return 10 + exerciseYear * 2;
-  return 22 + Math.floor((exerciseYear - 6) / 5) * 2;
+  return calculateAnnualVacationEntitlementByYear(exerciseYear);
+}
+
+/**
+ * Returns vacation days entitled for a specific service year (1-based).
+ * LFT table:
+ *  Year 1=12, 2=14, 3=16, 4=18, 5=20,
+ *  6-10=22, 11-15=24, 16-20=26, 21-25=28, 26-30=30, 31-35=32, ...
+ */
+function calculateAnnualVacationEntitlementByYear(serviceYear) {
+  if (serviceYear < 1) return 0;
+  if (serviceYear <= 5) return 10 + serviceYear * 2;
+  return 22 + Math.floor((serviceYear - 6) / 5) * 2;
+}
+
+/**
+ * Calculates total ACCRUED (accumulated) vacation days from hire date
+ * to reference date. Sums entitlements for every completed year.
+ *
+ * @param {string|Date} hireDate
+ * @param {string|Date} referenceDate - cutoff date (today for active, termination date for inactive)
+ * @returns {number} Total accumulated days
+ */
+function calculateAccruedVacationDays(hireDate, referenceDate) {
+  const hire = new Date(hireDate);
+  const ref = new Date(referenceDate);
+
+  if (Number.isNaN(hire.getTime()) || Number.isNaN(ref.getTime())) {
+    throw new Error('Fechas invalidas.');
+  }
+
+  const completedYears = getCompletedYears(hire, ref);
+  let total = 0;
+  for (let year = 1; year <= completedYears; year++) {
+    total += calculateAnnualVacationEntitlementByYear(year);
+  }
+  return total;
 }
 
 module.exports = {
@@ -179,4 +214,6 @@ module.exports = {
   getCurrentExerciseYear,
   calculateVacationBalance,
   calculateEntitlementForExercise,
+  calculateAnnualVacationEntitlementByYear,
+  calculateAccruedVacationDays,
 };

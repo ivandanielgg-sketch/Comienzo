@@ -1022,19 +1022,24 @@ function renderEmployees() {
   }
 
   employeesTable.innerHTML = state.employees.map((emp) => {
+    const isInactive = !emp.active;
+    const rowClass = isInactive ? 'row-inactive' : '';
     const pendingClass = emp.days_pending < 0 ? 'negative-balance' : '';
     const pendingLabel = emp.days_pending < 0
       ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo por vacaciones anticipadas</small>`
       : `${emp.days_pending}`;
+    const statusBadge = isInactive
+      ? `<span class="badge badge-inactive">INACTIVO</span>${emp.termination_date ? `<br><small class="muted">${escapeHtml(emp.termination_date)}</small>` : ''}`
+      : '<span class="badge badge-active">Activo</span>';
 
     return `
-      <tr>
+      <tr class="${rowClass}">
         <td>${escapeHtml(emp.employee_number)}</td>
         <td>${escapeHtml(emp.full_name)}</td>
         <td>${escapeHtml(emp.hire_date)}</td>
         <td>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</td>
-        <td>${emp.current_exercise_year}</td>
-        <td>${emp.entitlement_days}</td>
+        <td>${statusBadge}</td>
+        <td>${emp.accrued_days}</td>
         <td>${emp.days_taken}</td>
         <td>${emp.days_scheduled}</td>
         <td class="${pendingClass}">${pendingLabel}</td>
@@ -1042,7 +1047,6 @@ function renderEmployees() {
           <div class="row-actions">
             <button class="secondary" data-action="edit-employee" data-id="${emp.id}" type="button">Editar</button>
             <button class="secondary" data-action="open-vacations" data-id="${emp.id}" type="button">Vacaciones programadas</button>
-            <button class="secondary" data-action="print-format" data-id="${emp.id}" type="button">Generar formato</button>
           </div>
         </td>
       </tr>
@@ -1063,11 +1067,24 @@ function openEmployeeModal(employee) {
     employeeForm.elements.position.value = employee.position || '';
     employeeForm.elements.immediate_boss.value = employee.immediate_boss || '';
     employeeForm.elements.active.checked = Boolean(employee.active);
+    employeeForm.elements.termination_date.value = employee.termination_date || '';
+    employeeForm.elements.inactive_reason.value = employee.inactive_reason || '';
   } else {
     employeeFormTitle.textContent = 'Agregar empleado';
     employeeForm.reset();
     employeeForm.elements.id.value = '';
     employeeForm.elements.active.checked = true;
+  }
+  toggleTerminationFields();
+}
+
+function toggleTerminationFields() {
+  const terminationFields = document.getElementById('termination-fields');
+  const isActive = employeeForm.elements.active.checked;
+  terminationFields.classList.toggle('hidden', isActive);
+  if (isActive) {
+    employeeForm.elements.termination_date.value = '';
+    employeeForm.elements.inactive_reason.value = '';
   }
 }
 
@@ -1086,21 +1103,21 @@ async function openVacationModal(employeeId) {
   vacationModalSubtitle.textContent = `No. ${emp.employee_number} | Ingreso: ${emp.hire_date}`;
 
   const pendingClass = emp.days_pending < 0 ? 'summary-negative' : '';
-  const carriedInfo = emp.carried_balance < 0
-    ? `<article class="summary-negative"><span>Saldo arrastrado</span><strong>${emp.carried_balance}</strong></article>`
-    : `<article><span>Saldo arrastrado</span><strong>0</strong></article>`;
   const negativeNote = emp.days_pending < 0
-    ? '<p class="text-negative" style="grid-column:1/-1;margin:0;">Este saldo se descontara automaticamente del siguiente ejercicio vacacional.</p>'
+    ? '<p class="text-negative" style="grid-column:1/-1;margin:0;">Saldo negativo por vacaciones anticipadas. Se descontara del siguiente ejercicio vacacional.</p>'
+    : '';
+  const inactiveNote = !emp.active
+    ? `<p class="text-negative" style="grid-column:1/-1;margin:0;">Empleado inactivo. Calculo realizado hasta la fecha de baja (${escapeHtml(emp.termination_date || '')}).</p>`
     : '';
 
   vacationEmployeeSummary.innerHTML = `
     <article><span>Antiguedad</span><strong>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</strong></article>
-    <article><span>Dias correspondientes</span><strong>${emp.entitlement_days}</strong></article>
-    ${carriedInfo}
+    <article><span>Dias generados acumulados</span><strong>${emp.accrued_days}</strong></article>
     <article><span>Dias tomados</span><strong>${emp.days_taken}</strong></article>
     <article><span>Dias programados</span><strong>${emp.days_scheduled}</strong></article>
     <article class="${pendingClass}"><span>Dias disponibles</span><strong>${emp.days_pending}</strong></article>
     ${negativeNote}
+    ${inactiveNote}
   `;
 
   setMessage(vacationRequestMessage, '');
@@ -1236,10 +1253,17 @@ async function submitVacationRequest(andPrint) {
 }
 
 newEmployeeButton.addEventListener('click', () => openEmployeeModal(null));
+employeeForm.elements.active.addEventListener('change', toggleTerminationFields);
 
 employeeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   setMessage(employeeMessage, '');
+
+  const isActive = employeeForm.elements.active.checked;
+  if (!isActive && !employeeForm.elements.termination_date.value) {
+    setMessage(employeeMessage, 'La fecha de baja es obligatoria para empleados inactivos.');
+    return;
+  }
 
   const id = employeeForm.elements.id.value;
   const payload = {
@@ -1249,7 +1273,9 @@ employeeForm.addEventListener('submit', async (event) => {
     department: employeeForm.elements.department.value || undefined,
     position: employeeForm.elements.position.value || undefined,
     immediate_boss: employeeForm.elements.immediate_boss.value || undefined,
-    active: employeeForm.elements.active.checked,
+    active: isActive,
+    termination_date: !isActive ? employeeForm.elements.termination_date.value : undefined,
+    inactive_reason: !isActive ? (employeeForm.elements.inactive_reason.value || undefined) : undefined,
   };
 
   try {

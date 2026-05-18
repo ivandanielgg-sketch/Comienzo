@@ -485,6 +485,26 @@ button.active {
   color: #b42318;
 }
 
+.row-inactive {
+  background: #fff5f5;
+  border-left: 3px solid #b42318;
+}
+
+.row-inactive td {
+  opacity: 0.85;
+}
+
+.badge-inactive {
+  background: #fee4e2;
+  color: #b42318;
+  font-weight: 800;
+}
+
+.badge-active {
+  background: #dcfae6;
+  color: #087443;
+}
+
 @media (max-width: 700px) {
   main {
     width: min(100% - 20px, 1440px);
