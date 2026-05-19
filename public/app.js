@@ -8,6 +8,12 @@ const state = {
   selectedClosedProjectId: null,
   selectedUserId: null,
   adminVerified: false,
+  projectsPagination: { page: 1, limit: 15 },
+  closedProjectsPagination: { page: 1, limit: 15 },
+  employeesPagination: { page: 1, limit: 15 },
+  vacationRequestsPagination: { page: 1, limit: 15 },
+  reportsProjectsPagination: { page: 1, limit: 15 },
+  reportListPagination: { page: 1, limit: 15 },
 };
 
 const loginView = document.querySelector('#login-view');
@@ -69,6 +75,52 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function renderPaginationControls(containerId, pagination, onPageChange, onLimitChange) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  if (!pagination || pagination.totalRecords === 0) {
+    container.innerHTML = '';
+    return;
+  }
+  const { page, limit, totalRecords, totalPages, hasNextPage, hasPreviousPage } = pagination;
+  const start = (page - 1) * limit + 1;
+  const end = Math.min(page * limit, totalRecords);
+
+  container.innerHTML = `
+    <span class="pagination-info">Mostrando ${start}-${end} de ${totalRecords} registros</span>
+    <div class="pagination-buttons">
+      <button class="secondary" data-pg-action="first" ${!hasPreviousPage ? 'disabled' : ''} type="button">Primera</button>
+      <button class="secondary" data-pg-action="prev" ${!hasPreviousPage ? 'disabled' : ''} type="button">Anterior</button>
+      <span class="pagination-current">Pagina ${page} de ${totalPages}</span>
+      <button class="secondary" data-pg-action="next" ${!hasNextPage ? 'disabled' : ''} type="button">Siguiente</button>
+      <button class="secondary" data-pg-action="last" ${!hasNextPage ? 'disabled' : ''} type="button">Ultima</button>
+    </div>
+    <div class="pagination-limit">
+      <span>Mostrar</span>
+      <select data-pg-action="limit">
+        <option value="15" ${limit === 15 ? 'selected' : ''}>15</option>
+        <option value="30" ${limit === 30 ? 'selected' : ''}>30</option>
+        <option value="50" ${limit === 50 ? 'selected' : ''}>50</option>
+      </select>
+    </div>
+  `;
+
+  container.onclick = (e) => {
+    const btn = e.target.closest('[data-pg-action]');
+    if (!btn || btn.disabled) return;
+    const action = btn.dataset.pgAction;
+    if (action === 'first') onPageChange(1);
+    else if (action === 'prev') onPageChange(page - 1);
+    else if (action === 'next') onPageChange(page + 1);
+    else if (action === 'last') onPageChange(totalPages);
+  };
+
+  const limitSelect = container.querySelector('[data-pg-action="limit"]');
+  if (limitSelect) {
+    limitSelect.onchange = () => onLimitChange(Number(limitSelect.value));
+  }
 }
 
 async function api(path, options = {}) {
@@ -202,39 +254,44 @@ function renderExchangeRates() {
 }
 
 async function loadProjects() {
-  state.projects = await api('/api/projects');
+  const pg = state.projectsPagination;
+  const result = await api(`/api/projects?page=${pg.page}&limit=${pg.limit}`);
+  state.projects = result.data;
+  state.projectsTotals = result.totals;
+  state.projectsPaginationMeta = result.pagination;
   renderProjects();
 
   if (state.selectedProjectId) {
     const current = state.projects.find((project) => project.id === state.selectedProjectId);
-    current ? selectProject(current.id) : clearSelection();
+    if (!current) clearSelection();
   }
 }
 
 async function loadClosedProjects() {
-  state.closedProjects = await api('/api/closed-projects');
+  const pg = state.closedProjectsPagination;
+  const result = await api(`/api/closed-projects?page=${pg.page}&limit=${pg.limit}`);
+  state.closedProjects = result.data;
+  state.closedProjectsPaginationMeta = result.pagination;
   renderClosedProjects();
 
   if (state.selectedClosedProjectId) {
     const current = state.closedProjects.find(
       (project) => project.id === state.selectedClosedProjectId,
     );
-    current ? selectClosedProject(current.id) : clearClosedSelection();
+    if (!current) clearClosedSelection();
   }
 }
 
 function renderProjects() {
-  document.querySelector('#stat-projects').textContent = state.projects.length;
-  document.querySelector('#stat-charged').textContent = money.format(
-    sum(state.projects, 'total_charged'),
-  );
-  document.querySelector('#stat-spent').textContent = money.format(sum(state.projects, 'spent'));
-  document.querySelector('#stat-pending').textContent = money.format(
-    sum(state.projects, 'pending_collection'),
-  );
+  const totals = state.projectsTotals || {};
+  document.querySelector('#stat-projects').textContent = totals.count || state.projects.length;
+  document.querySelector('#stat-charged').textContent = money.format(totals.total_charged || 0);
+  document.querySelector('#stat-spent').textContent = money.format(totals.spent || 0);
+  document.querySelector('#stat-pending').textContent = money.format(totals.pending_collection || 0);
 
   if (!state.projects.length) {
     projectsTable.innerHTML = `<tr><td colspan="10" class="muted">No hay proyectos registrados.</td></tr>`;
+    renderPaginationControls('projects-pagination', null);
     return;
   }
 
@@ -265,11 +322,17 @@ function renderProjects() {
       `,
     )
     .join('');
+
+  renderPaginationControls('projects-pagination', state.projectsPaginationMeta,
+    (p) => { state.projectsPagination.page = p; loadProjects(); },
+    (l) => { state.projectsPagination.limit = l; state.projectsPagination.page = 1; loadProjects(); },
+  );
 }
 
 function renderClosedProjects() {
   if (!state.closedProjects.length) {
     closedProjectsTable.innerHTML = `<tr><td colspan="9" class="muted">No hay proyectos cerrados.</td></tr>`;
+    renderPaginationControls('closed-projects-pagination', null);
     return;
   }
 
@@ -299,6 +362,11 @@ function renderClosedProjects() {
       `,
     )
     .join('');
+
+  renderPaginationControls('closed-projects-pagination', state.closedProjectsPaginationMeta,
+    (p) => { state.closedProjectsPagination.page = p; loadClosedProjects(); },
+    (l) => { state.closedProjectsPagination.limit = l; state.closedProjectsPagination.page = 1; loadClosedProjects(); },
+  );
 }
 
 async function loadUsers() {
@@ -497,10 +565,14 @@ function formatPercent(value) {
   return `${Number(value || 0).toFixed(2)}%`;
 }
 
-function selectProject(projectId) {
-  const project = state.projects.find((item) => item.id === Number(projectId));
+async function selectProject(projectId) {
+  let project = state.projects.find((item) => item.id === Number(projectId));
   if (!project) {
-    return;
+    try {
+      project = await api(`/api/projects/${projectId}`);
+    } catch (_e) {
+      return;
+    }
   }
 
   state.selectedProjectId = project.id;
@@ -811,15 +883,27 @@ usersTab.addEventListener('click', async () => {
     window.alert(error.message);
   }
 });
-exportProjectsButton.addEventListener('click', () =>
-  exportProjectsToExcel(state.projects, 'proyectos'),
-);
-exportClosedProjectsButton.addEventListener('click', async () => {
-  if (!state.closedProjects.length) {
-    await loadClosedProjects();
+exportProjectsButton.addEventListener('click', async () => {
+  const result = await api('/api/projects?page=1&limit=50');
+  let allProjects = result.data;
+  let pg = result.pagination;
+  while (pg.hasNextPage) {
+    const next = await api(`/api/projects?page=${pg.page + 1}&limit=50`);
+    allProjects = allProjects.concat(next.data);
+    pg = next.pagination;
   }
-
-  exportProjectsToExcel(state.closedProjects, 'proyectos-cerrados');
+  exportProjectsToExcel(allProjects, 'proyectos');
+});
+exportClosedProjectsButton.addEventListener('click', async () => {
+  const result = await api('/api/closed-projects?page=1&limit=50');
+  let allProjects = result.data;
+  let pg = result.pagination;
+  while (pg.hasNextPage) {
+    const next = await api(`/api/closed-projects?page=${pg.page + 1}&limit=50`);
+    allProjects = allProjects.concat(next.data);
+    pg = next.pagination;
+  }
+  exportProjectsToExcel(allProjects, 'proyectos-cerrados');
 });
 
 exchangeRateForm.addEventListener('submit', async (event) => {
@@ -1025,13 +1109,17 @@ function showVacationsTab() {
 }
 
 async function loadEmployees() {
-  state.employees = await api('/api/employees');
+  const pg = state.employeesPagination;
+  const result = await api(`/api/employees?page=${pg.page}&limit=${pg.limit}`);
+  state.employees = result.data;
+  state.employeesPaginationMeta = result.pagination;
   renderEmployees();
 }
 
 function renderEmployees() {
   if (!state.employees.length) {
     employeesTable.innerHTML = '<tr><td colspan="10" class="muted">No hay empleados registrados.</td></tr>';
+    renderPaginationControls('employees-pagination', null);
     return;
   }
 
@@ -1066,6 +1154,11 @@ function renderEmployees() {
       </tr>
     `;
   }).join('');
+
+  renderPaginationControls('employees-pagination', state.employeesPaginationMeta,
+    (p) => { state.employeesPagination.page = p; loadEmployees(); },
+    (l) => { state.employeesPagination.limit = l; state.employeesPagination.page = 1; loadEmployees(); },
+  );
 }
 
 function openEmployeeModal(employee) {
@@ -1112,6 +1205,7 @@ async function openVacationModal(employeeId) {
   if (!emp) return;
 
   state.selectedEmployeeId = emp.id;
+  state.vacationRequestsPagination = { page: 1, limit: 15 };
   vacationModal.classList.remove('hidden');
   vacationModalTitle.textContent = `Vacaciones - ${emp.full_name}`;
   vacationModalSubtitle.textContent = `No. ${emp.employee_number} | Ingreso: ${emp.hire_date}`;
@@ -1140,9 +1234,12 @@ async function openVacationModal(employeeId) {
 }
 
 async function loadVacationRequests(employeeId) {
-  const requests = await api(`/api/employees/${employeeId}/vacation-requests`);
+  const pg = state.vacationRequestsPagination;
+  const result = await api(`/api/employees/${employeeId}/vacation-requests?page=${pg.page}&limit=${pg.limit}`);
+  const requests = result.data;
   if (!requests.length) {
     vacationRequestsTable.innerHTML = '<tr><td colspan="8" class="muted">Este empleado aun no tiene vacaciones registradas.</td></tr>';
+    renderPaginationControls('vacation-requests-pagination', null);
     return;
   }
 
@@ -1164,6 +1261,11 @@ async function loadVacationRequests(employeeId) {
       </td>
     </tr>
   `).join('');
+
+  renderPaginationControls('vacation-requests-pagination', result.pagination,
+    (p) => { state.vacationRequestsPagination.page = p; loadVacationRequests(employeeId); },
+    (l) => { state.vacationRequestsPagination.limit = l; state.vacationRequestsPagination.page = 1; loadVacationRequests(employeeId); },
+  );
 }
 
 function closeVacationModal() {
@@ -1439,50 +1541,24 @@ if (safetyOtrasCheckbox) {
 }
 
 async function loadAllProjectsForReports() {
-  const [active, closed] = await Promise.all([
-    api('/api/projects'),
-    api('/api/closed-projects'),
-  ]);
-  state.reportsAllProjects = [...active, ...closed];
+  const pg = state.reportsProjectsPagination;
+  const search = (reportSearch ? reportSearch.value : '') || '';
+  const statusFilter = (reportStatusFilter ? reportStatusFilter.value : '') || '';
+  const result = await api(`/api/all-projects?page=${pg.page}&limit=${pg.limit}&search=${encodeURIComponent(search)}&status=${encodeURIComponent(statusFilter)}`);
+  state.reportsAllProjects = result.data;
+  state.reportsProjectsPaginationMeta = result.pagination;
   renderReportsProjectsTable();
 }
 
-function filterReportsProjects() {
-  const search = (reportSearch.value || '').toLowerCase();
-  const statusFilter = reportStatusFilter.value;
-  return state.reportsAllProjects.filter((p) => {
-    if (statusFilter && p.status !== statusFilter) return false;
-    if (search) {
-      const haystack = [
-        p.client_name, p.project_description, p.quote_number,
-        p.order_number, String(p.id),
-      ].join(' ').toLowerCase();
-      if (!haystack.includes(search)) return false;
-    }
-    return true;
-  });
-}
-
 function renderReportsProjectsTable() {
-  const projects = filterReportsProjects();
+  const projects = state.reportsAllProjects;
 
   if (!projects.length) {
     reportsProjectsTable.innerHTML = '<tr><td colspan="7" class="muted">No hay proyectos disponibles para generar reportes.</td></tr>';
+    renderPaginationControls('reports-projects-pagination', null);
     return;
   }
 
-  const reportCounts = {};
-  state.reportsAllProjects.forEach((p) => { reportCounts[p.id] = 0; });
-
-  api('/api/reports').then((reports) => {
-    reports.forEach((r) => {
-      reportCounts[r.project_id] = (reportCounts[r.project_id] || 0) + 1;
-    });
-    renderProjectRows(projects, reportCounts);
-  }).catch(() => renderProjectRows(projects, reportCounts));
-}
-
-function renderProjectRows(projects, reportCounts) {
   reportsProjectsTable.innerHTML = projects.map((p) => `
     <tr>
       <td>${p.id}</td>
@@ -1490,7 +1566,7 @@ function renderProjectRows(projects, reportCounts) {
       <td>${escapeHtml(p.client_name)}</td>
       <td>${escapeHtml(p.project_description || '')}</td>
       <td><span class="badge status">${escapeHtml(p.status)}</span></td>
-      <td>${reportCounts[p.id] || 0}</td>
+      <td>${p.report_count || 0}</td>
       <td>
         <div class="row-actions">
           <button class="secondary" data-action="report-new" data-id="${p.id}" type="button">Generar reporte</button>
@@ -1499,6 +1575,11 @@ function renderProjectRows(projects, reportCounts) {
       </td>
     </tr>
   `).join('');
+
+  renderPaginationControls('reports-projects-pagination', state.reportsProjectsPaginationMeta,
+    (p) => { state.reportsProjectsPagination.page = p; loadAllProjectsForReports(); },
+    (l) => { state.reportsProjectsPagination.limit = l; state.reportsProjectsPagination.page = 1; loadAllProjectsForReports(); },
+  );
 }
 
 function showReportsMainList() {
@@ -1638,6 +1719,7 @@ async function openReportListForProject(projectId) {
   if (!project) return;
 
   state.currentReportProjectId = Number(projectId);
+  state.reportListPagination = { page: 1, limit: 15 };
   reportsProjectsTable.closest('.panel').classList.add('hidden');
   reportFormPanel.classList.add('hidden');
   reportListPanel.classList.remove('hidden');
@@ -1645,18 +1727,26 @@ async function openReportListForProject(projectId) {
   reportListTitle.textContent = `Reportes - Proyecto #${project.id}`;
   reportListSubtitle.textContent = `${project.client_name} | ${project.project_description || ''}`;
 
+  await loadReportListPage(projectId);
+}
+
+async function loadReportListPage(projectId) {
+  const pid = projectId || state.currentReportProjectId;
+  const pg = state.reportListPagination;
   try {
-    const reports = await api('/api/projects/' + projectId + '/reports');
-    state.reportsProjectReports = reports;
-    renderReportList(reports);
+    const result = await api(`/api/projects/${pid}/reports?page=${pg.page}&limit=${pg.limit}`);
+    state.reportsProjectReports = result.data;
+    renderReportList(result.data, result.pagination);
   } catch (error) {
     reportListTable.innerHTML = '<tr><td colspan="5" class="muted">Error al cargar reportes.</td></tr>';
+    renderPaginationControls('report-list-pagination', null);
   }
 }
 
-function renderReportList(reports) {
+function renderReportList(reports, pagination) {
   if (!reports.length) {
     reportListTable.innerHTML = '<tr><td colspan="5" class="muted">Este proyecto aun no tiene reportes generados.</td></tr>';
+    renderPaginationControls('report-list-pagination', null);
     return;
   }
 
@@ -1674,11 +1764,17 @@ function renderReportList(reports) {
       </td>
     </tr>
   `).join('');
+
+  renderPaginationControls('report-list-pagination', pagination,
+    (p) => { state.reportListPagination.page = p; loadReportListPage(); },
+    (l) => { state.reportListPagination.limit = l; state.reportListPagination.page = 1; loadReportListPage(); },
+  );
 }
 
 async function renderDetailReports(projectId, listElement) {
   try {
-    const reports = await api('/api/projects/' + projectId + '/reports');
+    const result = await api('/api/projects/' + projectId + '/reports?limit=50');
+    const reports = result.data || result;
     if (!reports.length) {
       listElement.innerHTML = '<li class="muted">Sin reportes generados.</li>';
       return;
@@ -1709,10 +1805,16 @@ if (reportsTab) {
 }
 
 if (reportSearch) {
-  reportSearch.addEventListener('input', renderReportsProjectsTable);
+  reportSearch.addEventListener('input', () => {
+    state.reportsProjectsPagination.page = 1;
+    loadAllProjectsForReports();
+  });
 }
 if (reportStatusFilter) {
-  reportStatusFilter.addEventListener('change', renderReportsProjectsTable);
+  reportStatusFilter.addEventListener('change', () => {
+    state.reportsProjectsPagination.page = 1;
+    loadAllProjectsForReports();
+  });
 }
 
 if (reportsProjectsTable) {

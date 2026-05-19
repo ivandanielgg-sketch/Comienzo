@@ -531,6 +531,64 @@ button.active {
   padding-top: 16px;
 }
 
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 0 4px;
+  font-size: 0.88rem;
+}
+
+.pagination-controls:empty {
+  display: none;
+}
+
+.pagination-controls .pagination-info {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.pagination-controls .pagination-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination-controls button {
+  padding: 7px 12px;
+  font-size: 0.82rem;
+  border-radius: 8px;
+}
+
+.pagination-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pagination-controls .pagination-current {
+  font-weight: 700;
+  color: var(--text);
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.pagination-controls .pagination-limit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.pagination-controls .pagination-limit select {
+  width: auto;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
 @media (max-width: 700px) {
   main {
     width: min(100% - 20px, 1440px);
