@@ -1,77 +1,129 @@
-function calculateEcovisAccountSummary(projects, payments, allocations, movements) {
-  const activeProjects = projects.filter(p => p.status !== 'cancelado' && !p.is_cancelled);
-
-  const totalProjectsAmount = activeProjects.reduce((s, p) => s + p.total_amount, 0);
-
-  const projectAllocations = allocations.filter(a => a.allocation_type === 'proyecto' && !a.is_cancelled);
-  const totalPaidToProjects = projectAllocations.reduce((s, a) => s + a.amount, 0);
-
-  const totalPendingProjects = Math.max(0, totalProjectsAmount - totalPaidToProjects);
-
-  const loanMovements = movements.filter(m => m.movement_type === 'prestamo_ecovis_a_revram' && !m.is_cancelled);
-  const loanRepayments = movements.filter(m => m.movement_type === 'devolucion' && !m.is_cancelled);
-  const totalLoansFromEcovisToRevram = loanMovements.reduce((s, m) => s + m.amount, 0);
-  const totalLoanRepayments = loanRepayments.reduce((s, m) => s + m.amount, 0);
-  const outstandingLoans = Math.max(0, totalLoansFromEcovisToRevram - totalLoanRepayments);
-
-  const totalUnallocatedPayments = payments
-    .filter(p => !p.is_cancelled)
-    .reduce((s, p) => s + (p.unallocated_amount || 0), 0);
-
-  const saldoFavorAllocations = allocations.filter(a => a.allocation_type === 'saldo_a_favor' && !a.is_cancelled);
-  const totalCreditAllocated = saldoFavorAllocations.reduce((s, a) => s + a.amount, 0);
-  const saldoFavorApplied = movements.filter(m => m.movement_type === 'saldo_a_favor' && m.direction === 'ecovis_debe_a_revram' && !m.is_cancelled);
-  const totalCreditApplied = saldoFavorApplied.reduce((s, m) => s + m.amount, 0);
-  const ecovisCreditBalance = Math.max(0, totalCreditAllocated + totalUnallocatedPayments - totalCreditApplied);
-
-  const revramPayableToEcovis = outstandingLoans;
-
-  const ecovisOwesToRevram = totalPendingProjects;
-  const netBalance = ecovisOwesToRevram - revramPayableToEcovis - ecovisCreditBalance;
-
-  const projectsCount = activeProjects.length;
-  const pendingProjectsCount = activeProjects.filter(p => p.status === 'pendiente' || p.status === 'parcialmente_pagado').length;
-  const paidProjectsCount = activeProjects.filter(p => p.status === 'pagado').length;
-
-  return {
-    totalProjectsAmount: round2(totalProjectsAmount),
-    totalPaidToProjects: round2(totalPaidToProjects),
-    totalPendingProjects: round2(totalPendingProjects),
-    totalLoansFromEcovisToRevram: round2(outstandingLoans),
-    totalUnallocatedPayments: round2(totalUnallocatedPayments),
-    ecovisCreditBalance: round2(ecovisCreditBalance),
-    revramPayableToEcovis: round2(revramPayableToEcovis),
-    netBalance: round2(netBalance),
-    projectsCount,
-    pendingProjectsCount,
-    paidProjectsCount,
-  };
+function roundMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
-function calculateProjectPaidAmount(projectId, allocations) {
-  return round2(
+function calculateProjectPaidAmount(allocations) {
+  return roundMoney(
     allocations
-      .filter(a => a.ecovis_project_id === projectId && !a.is_cancelled)
-      .reduce((s, a) => s + a.amount, 0)
+      .filter((a) => a.allocation_type === 'proyecto')
+      .reduce((sum, a) => sum + Number(a.amount || 0), 0),
   );
 }
 
-function calculateProjectStatus(totalAmount, paidAmount, currentStatus) {
-  if (currentStatus === 'cancelado') return 'cancelado';
-  if (paidAmount <= 0) return 'pendiente';
-  if (paidAmount >= totalAmount) return 'pagado';
-  return 'parcialmente_pagado';
+function calculateProjectStatus(project, paidAmount) {
+  if (project.is_cancelled) {
+    return 'cancelado';
+  }
+
+  const total = Number(project.total_amount || 0);
+  if (total <= 0) {
+    return 'pendiente';
+  }
+
+  if (paidAmount >= total) {
+    return 'pagado';
+  }
+
+  if (paidAmount > 0) {
+    return 'parcialmente_pagado';
+  }
+
+  return 'pendiente';
 }
 
 function calculatePaymentUnallocated(payment, allocations) {
-  const allocated = allocations
-    .filter(a => a.payment_id === payment.id && !a.is_cancelled)
-    .reduce((s, a) => s + a.amount, 0);
-  return round2(Math.max(0, payment.amount - allocated));
+  const totalAllocated = roundMoney(
+    allocations.reduce((sum, a) => sum + Number(a.amount || 0), 0),
+  );
+  return roundMoney(Number(payment.amount || 0) - totalAllocated);
 }
 
-function round2(val) {
-  return Math.round((Number(val) + Number.EPSILON) * 100) / 100;
+function calculateEcovisAccountSummary(projects, payments, allocations, movements) {
+  const activeProjects = projects.filter((p) => !p.is_cancelled);
+
+  const totalProjected = roundMoney(
+    activeProjects.reduce((sum, p) => sum + Number(p.total_amount || 0), 0),
+  );
+
+  const totalPaidToProjects = roundMoney(
+    allocations
+      .filter((a) => a.allocation_type === 'proyecto')
+      .reduce((sum, a) => sum + Number(a.amount || 0), 0),
+  );
+
+  const totalPaymentsReceived = roundMoney(
+    payments
+      .filter((p) => !p.is_cancelled)
+      .reduce((sum, p) => sum + Number(p.amount || 0), 0),
+  );
+
+  const totalAllocated = roundMoney(
+    allocations.reduce((sum, a) => sum + Number(a.amount || 0), 0),
+  );
+
+  const creditBalance = roundMoney(
+    allocations
+      .filter((a) => a.allocation_type === 'saldo_a_favor')
+      .reduce((sum, a) => sum + Number(a.amount || 0), 0),
+  );
+
+  const totalLoans = roundMoney(
+    movements
+      .filter((m) => m.movement_type === 'prestamo_ecovis_a_revram')
+      .reduce((sum, m) => sum + Number(m.amount || 0), 0),
+  );
+
+  const totalRepayments = roundMoney(
+    movements
+      .filter((m) => m.movement_type === 'devolucion')
+      .reduce((sum, m) => sum + Number(m.amount || 0), 0),
+  );
+
+  const pendingProjectAmount = roundMoney(totalProjected - totalPaidToProjects);
+
+  const creditFromMovements = roundMoney(
+    movements
+      .filter((m) => m.movement_type === 'saldo_a_favor' && m.direction === 'ecovis_debe_a_revram')
+      .reduce((sum, m) => sum + Number(m.amount || 0), 0),
+  );
+
+  const availableCredit = roundMoney(creditBalance - creditFromMovements);
+
+  const adjustments = roundMoney(
+    movements
+      .filter((m) => m.movement_type === 'ajuste')
+      .reduce((sum, m) => {
+        if (m.direction === 'ecovis_debe_a_revram') {
+          return sum + Number(m.amount || 0);
+        }
+        if (m.direction === 'revram_debe_a_ecovis') {
+          return sum - Number(m.amount || 0);
+        }
+        return sum;
+      }, 0),
+  );
+
+  const ecovisDebt = roundMoney(pendingProjectAmount + adjustments);
+  const revramDebt = roundMoney(totalLoans - totalRepayments);
+  const netBalance = roundMoney(ecovisDebt - revramDebt);
+
+  return {
+    total_projected: totalProjected,
+    total_paid_to_projects: totalPaidToProjects,
+    pending_project_amount: pendingProjectAmount,
+    total_payments_received: totalPaymentsReceived,
+    total_allocated: totalAllocated,
+    credit_balance: availableCredit,
+    total_loans: totalLoans,
+    total_repayments: totalRepayments,
+    outstanding_loans: revramDebt,
+    adjustments,
+    ecovis_owes_revram: ecovisDebt,
+    revram_owes_ecovis: revramDebt,
+    net_balance: netBalance,
+    active_projects: activeProjects.length,
+    total_projects: projects.length,
+  };
 }
 
 module.exports = {
@@ -79,5 +131,4 @@ module.exports = {
   calculateProjectPaidAmount,
   calculateProjectStatus,
   calculatePaymentUnallocated,
-  round2,
 };
