@@ -645,6 +645,26 @@ button.active {
   border-radius: 8px;
 }
 
+.ecovis-cards {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.ecovis-balance-card {
+  grid-column: 1 / -1;
+}
+
+.ecovis-subtabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.ecovis-status-pendiente { background: #fef0c7; color: #b54708; }
+.ecovis-status-parcialmente_pagado { background: #e0f2fe; color: #075985; }
+.ecovis-status-pagado { background: #dcfae6; color: #087443; }
+.ecovis-status-cancelado { background: #fee4e2; color: #b42318; }
+
 .search-bar {
   display: flex;
   align-items: center;

@@ -29,6 +29,14 @@ state.reportsProjPag = { page: 1, limit: 15 };
 state.reportsProjSearch = '';
 state.reportsProjStatus = '';
 state.projReportsPag = { page: 1, limit: 15 };
+state.ecovisProjectsPag = { page: 1, limit: 15 };
+state.ecovisProjectsSearch = '';
+state.ecovisPaymentsPag = { page: 1, limit: 15 };
+state.ecovisLoansPag = { page: 1, limit: 15 };
+state.ecovisMovementsPag = { page: 1, limit: 15 };
+state.ecovisMovementsSearch = '';
+state.ecovisMovementsTypeFilter = '';
+state.selectedEcovisPaymentId = null;
 
 const loginView = document.querySelector('#login-view');
 const appView = document.querySelector('#app-view');
@@ -244,16 +252,19 @@ function switchView(viewName) {
   const showingUsers = viewName === 'users';
   const showingVacations = viewName === 'vacations';
   const showingReports = viewName === 'reports';
+  const showingEcovis = viewName === 'ecovis';
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
   if (vacationsView) vacationsView.classList.toggle('hidden', !showingVacations);
   if (reportsView) reportsView.classList.toggle('hidden', !showingReports);
+  if (ecovisView) ecovisView.classList.toggle('hidden', !showingEcovis);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
   if (vacationsTab) vacationsTab.classList.toggle('active', showingVacations);
   if (reportsTab) reportsTab.classList.toggle('active', showingReports);
+  if (ecovisTab) ecovisTab.classList.toggle('active', showingEcovis);
 }
 
 async function requestAdminAuthorization(message = 'Ingresa la contrasena del admin:') {
@@ -900,6 +911,7 @@ loginForm.addEventListener('submit', async (event) => {
     });
     state.userRole = result.role || 'user';
     showVacationsTab();
+    showEcovisTab();
     loginForm.reset();
     await showApp();
   } catch (error) {
@@ -2053,11 +2065,794 @@ if (closedDetailNewReport) {
 
 // ===================== END REPORTS MODULE =====================
 
+// ===================== ECOVIS MODULE =====================
+
+const ecovisTab = document.querySelector('#ecovis-tab');
+const ecovisView = document.querySelector('#ecovis-view');
+const ecovisProjectsTable = document.querySelector('#ecovis-projects-table');
+const ecovisPaymentsTable = document.querySelector('#ecovis-payments-table');
+const ecovisLoansTable = document.querySelector('#ecovis-loans-table');
+const ecovisMovementsTable = document.querySelector('#ecovis-movements-table');
+const ecovisProjectModal = document.querySelector('#ecovis-project-modal');
+const ecovisProjectForm = document.querySelector('#ecovis-project-form');
+const ecovisProjectFormTitle = document.querySelector('#ecovis-project-form-title');
+const ecovisProjectMessage = document.querySelector('#ecovis-project-message');
+const ecovisPaymentModal = document.querySelector('#ecovis-payment-modal');
+const ecovisPaymentForm = document.querySelector('#ecovis-payment-form');
+const ecovisPaymentMessage = document.querySelector('#ecovis-payment-message');
+const ecovisAllocationModal = document.querySelector('#ecovis-allocation-modal');
+const ecovisAllocationForm = document.querySelector('#ecovis-allocation-form');
+const ecovisAllocationMessage = document.querySelector('#ecovis-allocation-message');
+const ecovisAllocationSubtitle = document.querySelector('#ecovis-allocation-subtitle');
+const ecovisAllocationSummary = document.querySelector('#ecovis-allocation-summary');
+const ecovisAllocationsList = document.querySelector('#ecovis-allocations-list');
+const ecovisAllocationProjectLabel = document.querySelector('#ecovis-allocation-project-label');
+const ecovisAllocationProjectSelect = document.querySelector('#ecovis-allocation-project-select');
+const ecovisLoanModal = document.querySelector('#ecovis-loan-modal');
+const ecovisLoanForm = document.querySelector('#ecovis-loan-form');
+const ecovisLoanFormTitle = document.querySelector('#ecovis-loan-form-title');
+const ecovisLoanMessage = document.querySelector('#ecovis-loan-message');
+const ecovisAdjustmentModal = document.querySelector('#ecovis-adjustment-modal');
+const ecovisAdjustmentForm = document.querySelector('#ecovis-adjustment-form');
+const ecovisAdjustmentMessage = document.querySelector('#ecovis-adjustment-message');
+const ecovisApplyCreditModal = document.querySelector('#ecovis-apply-credit-modal');
+const ecovisApplyCreditForm = document.querySelector('#ecovis-apply-credit-form');
+const ecovisApplyCreditMessage = document.querySelector('#ecovis-apply-credit-message');
+const ecovisCreditAvailable = document.querySelector('#ecovis-credit-available');
+const ecovisCreditProjectSelect = document.querySelector('#ecovis-credit-project-select');
+const ecovisProjectsSearchInput = document.querySelector('#ecovis-projects-search');
+const ecovisMovementsSearchInput = document.querySelector('#ecovis-movements-search');
+const ecovisMovementsTypeFilterSelect = document.querySelector('#ecovis-movements-type-filter');
+
+const ECOVIS_MOVEMENT_TYPE_LABELS = {
+  proyecto: 'Proyecto',
+  pago_recibido: 'Pago recibido',
+  prestamo_ecovis_a_revram: 'Préstamo',
+  aplicacion_a_proyecto: 'Aplicación a proyecto',
+  saldo_a_favor: 'Saldo a favor',
+  devolucion: 'Devolución',
+  ajuste: 'Ajuste',
+  cancelacion: 'Cancelación',
+};
+
+const ECOVIS_DIRECTION_LABELS = {
+  ecovis_debe_a_revram: 'ECOVIS debe a REVRAM',
+  revram_debe_a_ecovis: 'REVRAM debe a ECOVIS',
+  neutral: 'Neutral',
+};
+
+function showEcovisTab() {
+  if (state.userRole === 'admin') {
+    ecovisTab.classList.remove('hidden');
+    document.getElementById('export-general-excel').classList.remove('hidden');
+  } else {
+    ecovisTab.classList.add('hidden');
+    document.getElementById('export-general-excel').classList.add('hidden');
+  }
+}
+
+function switchEcovisSubtab(name) {
+  const sections = ['projects', 'payments', 'loans', 'movements'];
+  sections.forEach((s) => {
+    const section = document.getElementById('ecovis-' + s + '-section');
+    const btn = document.getElementById('ecovis-subtab-' + s);
+    if (section) section.classList.toggle('hidden', s !== name);
+    if (btn) btn.classList.toggle('active', s === name);
+  });
+}
+
+document.getElementById('ecovis-subtab-projects').addEventListener('click', () => {
+  switchEcovisSubtab('projects');
+  loadEcovisProjects();
+});
+document.getElementById('ecovis-subtab-payments').addEventListener('click', () => {
+  switchEcovisSubtab('payments');
+  loadEcovisPayments();
+});
+document.getElementById('ecovis-subtab-loans').addEventListener('click', () => {
+  switchEcovisSubtab('loans');
+  loadEcovisLoans();
+});
+document.getElementById('ecovis-subtab-movements').addEventListener('click', () => {
+  switchEcovisSubtab('movements');
+  loadEcovisMovements();
+});
+
+async function loadEcovisSummary() {
+  try {
+    const summary = await api('/api/ecovis/summary');
+    document.getElementById('ecovis-stat-projects').textContent = money.format(summary.total_projected || 0);
+    document.getElementById('ecovis-stat-paid').textContent = money.format(summary.total_paid_to_projects || 0);
+    document.getElementById('ecovis-stat-pending').textContent = money.format(summary.pending_project_amount || 0);
+    document.getElementById('ecovis-stat-loans').textContent = money.format(summary.outstanding_loans || 0);
+    document.getElementById('ecovis-stat-credit').textContent = money.format(summary.credit_balance || 0);
+    const unallocated = (summary.total_payments_received || 0) - (summary.total_allocated || 0);
+    document.getElementById('ecovis-stat-unallocated').textContent = money.format(unallocated);
+    document.getElementById('ecovis-stat-balance').textContent = money.format(summary.net_balance || 0);
+    state.ecovisSummary = summary;
+  } catch (error) {
+    console.error('Error loading ECOVIS summary:', error);
+  }
+}
+
+async function loadEcovisProjects() {
+  const params = new URLSearchParams({
+    page: state.ecovisProjectsPag.page,
+    limit: state.ecovisProjectsPag.limit,
+    search: state.ecovisProjectsSearch,
+  });
+  const result = await api('/api/ecovis/projects?' + params);
+  renderEcovisProjects(result.data, result.pagination);
+}
+
+function renderEcovisProjects(projects, pagination) {
+  if (!projects.length) {
+    const emptyMsg = state.ecovisProjectsSearch
+      ? 'No se encontraron proyectos ECOVIS con los filtros actuales.'
+      : 'No hay proyectos ECOVIS registrados.';
+    ecovisProjectsTable.innerHTML = '<tr><td colspan="10" class="muted">' + emptyMsg + '</td></tr>';
+  } else {
+    ecovisProjectsTable.innerHTML = projects.map((p) => {
+      const paid = Number(p.paid_amount || 0);
+      const total = Number(p.total_amount || 0);
+      const pending = Math.max(0, total - paid);
+      const statusLabel = p.status || 'pendiente';
+      return '<tr>' +
+        '<td>' + escapeHtml(p.project_date || '') + '</td>' +
+        '<td>' + escapeHtml(p.project_name) + '</td>' +
+        '<td>' + escapeHtml(p.quote_number || '') + '</td>' +
+        '<td>' + escapeHtml(p.purchase_order_number || '') + '</td>' +
+        '<td>' + escapeHtml(p.invoice_number || '') + '</td>' +
+        '<td>' + money.format(total) + '</td>' +
+        '<td>' + money.format(paid) + '</td>' +
+        '<td>' + money.format(pending) + '</td>' +
+        '<td><span class="badge ecovis-status-' + escapeHtml(statusLabel) + '">' + escapeHtml(statusLabel) + '</span></td>' +
+        '<td><div class="row-actions">' +
+          '<button class="secondary" data-action="ecovis-edit-project" data-id="' + p.id + '" type="button">Editar</button>' +
+          (statusLabel !== 'cancelado'
+            ? '<button class="danger" data-action="ecovis-cancel-project" data-id="' + p.id + '" type="button">Cancelar</button>'
+            : '') +
+          '<button class="secondary" data-action="ecovis-apply-credit" data-id="' + p.id + '" type="button">Saldo a favor</button>' +
+        '</div></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  renderPaginationControls(
+    'ecovis-projects-pagination',
+    pagination || defaultPagination,
+    (newPage) => { state.ecovisProjectsPag.page = newPage; loadEcovisProjects(); },
+    (newLimit) => { state.ecovisProjectsPag.limit = newLimit; state.ecovisProjectsPag.page = 1; loadEcovisProjects(); },
+  );
+}
+
+async function loadEcovisPayments() {
+  const params = new URLSearchParams({
+    page: state.ecovisPaymentsPag.page,
+    limit: state.ecovisPaymentsPag.limit,
+  });
+  const result = await api('/api/ecovis/payments?' + params);
+  renderEcovisPayments(result.data, result.pagination);
+}
+
+function renderEcovisPayments(payments, pagination) {
+  if (!payments.length) {
+    ecovisPaymentsTable.innerHTML = '<tr><td colspan="9" class="muted">No hay pagos registrados.</td></tr>';
+  } else {
+    ecovisPaymentsTable.innerHTML = payments.map((p) => {
+      const allocated = Number(p.amount || 0) - Number(p.unallocated_amount || 0);
+      const statusLabel = p.is_cancelled ? 'cancelado' : (Number(p.unallocated_amount || 0) > 0 ? 'parcial' : 'asignado');
+      return '<tr>' +
+        '<td>' + escapeHtml(p.payment_date || '') + '</td>' +
+        '<td>' + money.format(Number(p.amount || 0)) + '</td>' +
+        '<td>' + escapeHtml(p.currency || 'MXN') + '</td>' +
+        '<td>' + escapeHtml(p.payment_method || '') + '</td>' +
+        '<td>' + escapeHtml(p.bank_reference || '') + '</td>' +
+        '<td>' + money.format(allocated) + '</td>' +
+        '<td>' + money.format(Number(p.unallocated_amount || 0)) + '</td>' +
+        '<td><span class="badge ecovis-status-' + (p.is_cancelled ? 'cancelado' : 'pendiente') + '">' + escapeHtml(statusLabel) + '</span></td>' +
+        '<td><div class="row-actions">' +
+          '<button class="secondary" data-action="ecovis-allocate-payment" data-id="' + p.id + '" type="button">Asignar</button>' +
+        '</div></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  renderPaginationControls(
+    'ecovis-payments-pagination',
+    pagination || defaultPagination,
+    (newPage) => { state.ecovisPaymentsPag.page = newPage; loadEcovisPayments(); },
+    (newLimit) => { state.ecovisPaymentsPag.limit = newLimit; state.ecovisPaymentsPag.page = 1; loadEcovisPayments(); },
+  );
+}
+
+async function loadEcovisLoans() {
+  const params = new URLSearchParams({
+    page: state.ecovisLoansPag.page,
+    limit: state.ecovisLoansPag.limit,
+  });
+  const result = await api('/api/ecovis/loans?' + params);
+  renderEcovisLoans(result.data, result.pagination);
+}
+
+function renderEcovisLoans(loans, pagination) {
+  if (!loans.length) {
+    ecovisLoansTable.innerHTML = '<tr><td colspan="6" class="muted">No hay prestamos registrados.</td></tr>';
+  } else {
+    ecovisLoansTable.innerHTML = loans.map((l) => {
+      return '<tr>' +
+        '<td>' + escapeHtml(l.movement_date || '') + '</td>' +
+        '<td>' + money.format(Number(l.amount || 0)) + '</td>' +
+        '<td>' + escapeHtml(l.currency || 'MXN') + '</td>' +
+        '<td>' + escapeHtml(l.reference || '') + '</td>' +
+        '<td>' + escapeHtml(l.description || '') + '</td>' +
+        '<td><div class="row-actions">' +
+          '<button class="secondary" data-action="ecovis-repay-loan" data-id="' + l.id + '" type="button">Devolucion</button>' +
+        '</div></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  renderPaginationControls(
+    'ecovis-loans-pagination',
+    pagination || defaultPagination,
+    (newPage) => { state.ecovisLoansPag.page = newPage; loadEcovisLoans(); },
+    (newLimit) => { state.ecovisLoansPag.limit = newLimit; state.ecovisLoansPag.page = 1; loadEcovisLoans(); },
+  );
+}
+
+async function loadEcovisMovements() {
+  const params = new URLSearchParams({
+    page: state.ecovisMovementsPag.page,
+    limit: state.ecovisMovementsPag.limit,
+    search: state.ecovisMovementsSearch,
+  });
+  if (state.ecovisMovementsTypeFilter) {
+    params.set('type', state.ecovisMovementsTypeFilter);
+  }
+  const result = await api('/api/ecovis/movements?' + params);
+  renderEcovisMovements(result.data, result.pagination);
+}
+
+function renderEcovisMovements(movements, pagination) {
+  if (!movements.length) {
+    ecovisMovementsTable.innerHTML = '<tr><td colspan="7" class="muted">No hay movimientos registrados.</td></tr>';
+  } else {
+    ecovisMovementsTable.innerHTML = movements.map((m) => {
+      return '<tr>' +
+        '<td>' + escapeHtml(m.movement_date || '') + '</td>' +
+        '<td>' + escapeHtml(ECOVIS_MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type) + '</td>' +
+        '<td>' + escapeHtml(m.description || '') + '</td>' +
+        '<td>' + money.format(Number(m.amount || 0)) + '</td>' +
+        '<td>' + escapeHtml(ECOVIS_DIRECTION_LABELS[m.direction] || m.direction) + '</td>' +
+        '<td>' + escapeHtml(m.reference || '') + '</td>' +
+        '<td>' + escapeHtml(m.created_by || '') + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  renderPaginationControls(
+    'ecovis-movements-pagination',
+    pagination || defaultPagination,
+    (newPage) => { state.ecovisMovementsPag.page = newPage; loadEcovisMovements(); },
+    (newLimit) => { state.ecovisMovementsPag.limit = newLimit; state.ecovisMovementsPag.page = 1; loadEcovisMovements(); },
+  );
+}
+
+ecovisTab.addEventListener('click', async () => {
+  if (state.userRole !== 'admin') {
+    window.alert('Acceso restringido. Solo el administrador puede consultar la cuenta ECOVIS.');
+    return;
+  }
+  switchView('ecovis');
+  switchEcovisSubtab('projects');
+  await loadEcovisSummary();
+  await loadEcovisProjects();
+});
+
+document.getElementById('ecovis-new-project-btn').addEventListener('click', () => {
+  ecovisProjectForm.reset();
+  ecovisProjectForm.elements.id.value = '';
+  ecovisProjectFormTitle.textContent = 'Agregar proyecto ECOVIS';
+  ecovisProjectForm.elements.project_date.value = today();
+  setMessage(ecovisProjectMessage, '');
+  ecovisProjectModal.classList.remove('hidden');
+});
+
+ecovisProjectForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(ecovisProjectMessage, '');
+  const payload = simpleFormPayload(ecovisProjectForm);
+  try {
+    const id = ecovisProjectForm.elements.id.value;
+    await api(id ? '/api/ecovis/projects/' + id : '/api/ecovis/projects', {
+      method: id ? 'PUT' : 'POST',
+      body: JSON.stringify(payload),
+    });
+    setMessage(ecovisProjectMessage, 'Proyecto ECOVIS guardado correctamente.', true);
+    await loadEcovisSummary();
+    await loadEcovisProjects();
+    setTimeout(() => { ecovisProjectModal.classList.add('hidden'); }, 600);
+  } catch (error) {
+    setMessage(ecovisProjectMessage, error.message);
+  }
+});
+
+ecovisProjectModal.addEventListener('click', (event) => {
+  if (event.target.closest('.modal-close') || event.target === ecovisProjectModal) {
+    ecovisProjectModal.classList.add('hidden');
+  }
+});
+
+ecovisProjectsTable.addEventListener('click', async (event) => {
+  const editBtn = event.target.closest('[data-action="ecovis-edit-project"]');
+  if (editBtn) {
+    try {
+      const projects = (await api('/api/ecovis/projects?limit=9999')).data;
+      const project = projects.find((p) => p.id === Number(editBtn.dataset.id));
+      if (!project) return;
+      ecovisProjectFormTitle.textContent = 'Editar proyecto ECOVIS #' + project.id;
+      ecovisProjectForm.elements.id.value = project.id;
+      ecovisProjectForm.elements.project_name.value = project.project_name || '';
+      ecovisProjectForm.elements.project_date.value = project.project_date || '';
+      ecovisProjectForm.elements.quote_number.value = project.quote_number || '';
+      ecovisProjectForm.elements.purchase_order_number.value = project.purchase_order_number || '';
+      ecovisProjectForm.elements.invoice_number.value = project.invoice_number || '';
+      ecovisProjectForm.elements.total_amount.value = project.total_amount || '';
+      ecovisProjectForm.elements.currency.value = project.currency || 'MXN';
+      ecovisProjectForm.elements.description.value = project.description || '';
+      ecovisProjectForm.elements.notes.value = project.notes || '';
+      setMessage(ecovisProjectMessage, '');
+      ecovisProjectModal.classList.remove('hidden');
+    } catch (error) {
+      window.alert(error.message);
+    }
+    return;
+  }
+
+  const cancelBtn = event.target.closest('[data-action="ecovis-cancel-project"]');
+  if (cancelBtn) {
+    const reason = window.prompt('Motivo de cancelacion del proyecto ECOVIS:');
+    if (!reason) return;
+    try {
+      await api('/api/ecovis/projects/' + cancelBtn.dataset.id + '/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ cancellation_reason: reason }),
+      });
+      await loadEcovisSummary();
+      await loadEcovisProjects();
+    } catch (error) {
+      window.alert(error.message);
+    }
+    return;
+  }
+
+  const creditBtn = event.target.closest('[data-action="ecovis-apply-credit"]');
+  if (creditBtn) {
+    openApplyCreditModal(creditBtn.dataset.id);
+  }
+});
+
+document.getElementById('ecovis-new-payment-btn').addEventListener('click', () => {
+  ecovisPaymentForm.reset();
+  ecovisPaymentForm.elements.payment_date.value = today();
+  setMessage(ecovisPaymentMessage, '');
+  ecovisPaymentModal.classList.remove('hidden');
+});
+
+ecovisPaymentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(ecovisPaymentMessage, '');
+  const payload = simpleFormPayload(ecovisPaymentForm);
+  try {
+    await api('/api/ecovis/payments', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    setMessage(ecovisPaymentMessage, 'Pago registrado correctamente.', true);
+    await loadEcovisSummary();
+    await loadEcovisPayments();
+    setTimeout(() => { ecovisPaymentModal.classList.add('hidden'); }, 600);
+  } catch (error) {
+    setMessage(ecovisPaymentMessage, error.message);
+  }
+});
+
+ecovisPaymentModal.addEventListener('click', (event) => {
+  if (event.target.closest('.modal-close') || event.target === ecovisPaymentModal) {
+    ecovisPaymentModal.classList.add('hidden');
+  }
+});
+
+ecovisPaymentsTable.addEventListener('click', async (event) => {
+  const allocBtn = event.target.closest('[data-action="ecovis-allocate-payment"]');
+  if (allocBtn) {
+    await openAllocationModal(allocBtn.dataset.id);
+  }
+});
+
+async function openAllocationModal(paymentId) {
+  state.selectedEcovisPaymentId = Number(paymentId);
+  setMessage(ecovisAllocationMessage, '');
+  ecovisAllocationForm.reset();
+  ecovisAllocationModal.classList.remove('hidden');
+
+  try {
+    const payments = (await api('/api/ecovis/payments?limit=9999')).data;
+    const payment = payments.find((p) => p.id === Number(paymentId));
+    if (!payment) return;
+
+    ecovisAllocationSubtitle.textContent = 'Pago #' + payment.id + ' — ' + money.format(Number(payment.amount || 0)) + ' (' + (payment.currency || 'MXN') + ')';
+    ecovisAllocationSummary.innerHTML =
+      '<article><span>Monto total</span><strong>' + money.format(Number(payment.amount || 0)) + '</strong></article>' +
+      '<article><span>Asignado</span><strong>' + money.format(Number(payment.amount || 0) - Number(payment.unallocated_amount || 0)) + '</strong></article>' +
+      '<article><span>Sin asignar</span><strong>' + money.format(Number(payment.unallocated_amount || 0)) + '</strong></article>';
+
+    const allocations = payment.allocations || [];
+    if (!allocations.length) {
+      ecovisAllocationsList.innerHTML = '<tr><td colspan="4" class="muted">Sin asignaciones.</td></tr>';
+    } else {
+      ecovisAllocationsList.innerHTML = allocations.map((a) => {
+        return '<tr>' +
+          '<td>' + escapeHtml(a.allocation_type || '') + '</td>' +
+          '<td>' + (a.ecovis_project_id || '-') + '</td>' +
+          '<td>' + money.format(Number(a.amount || 0)) + '</td>' +
+          '<td>' + escapeHtml(a.notes || '') + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    const projects = (await api('/api/ecovis/projects?limit=9999')).data;
+    ecovisAllocationProjectSelect.innerHTML = projects
+      .filter((p) => p.status !== 'cancelado')
+      .map((p) => '<option value="' + p.id + '">' + escapeHtml(p.project_name) + ' (' + money.format(Number(p.total_amount || 0)) + ')</option>')
+      .join('');
+
+    toggleAllocationProjectField();
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
+function toggleAllocationProjectField() {
+  const type = ecovisAllocationForm.elements.allocation_type.value;
+  ecovisAllocationProjectLabel.classList.toggle('hidden', type !== 'proyecto');
+}
+
+ecovisAllocationForm.elements.allocation_type.addEventListener('change', toggleAllocationProjectField);
+
+ecovisAllocationForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(ecovisAllocationMessage, '');
+  const payload = simpleFormPayload(ecovisAllocationForm);
+  if (payload.allocation_type !== 'proyecto') {
+    delete payload.ecovis_project_id;
+  }
+  try {
+    await api('/api/ecovis/payments/' + state.selectedEcovisPaymentId + '/allocations', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    setMessage(ecovisAllocationMessage, 'Asignacion registrada correctamente.', true);
+    await loadEcovisSummary();
+    await loadEcovisPayments();
+    await openAllocationModal(state.selectedEcovisPaymentId);
+  } catch (error) {
+    setMessage(ecovisAllocationMessage, error.message);
+  }
+});
+
+ecovisAllocationModal.addEventListener('click', (event) => {
+  if (event.target.closest('.modal-close') || event.target === ecovisAllocationModal) {
+    ecovisAllocationModal.classList.add('hidden');
+    state.selectedEcovisPaymentId = null;
+  }
+});
+
+document.getElementById('ecovis-new-loan-btn').addEventListener('click', () => {
+  ecovisLoanForm.reset();
+  ecovisLoanFormTitle.textContent = 'Registrar prestamo';
+  ecovisLoanForm.elements.movement_date.value = today();
+  setMessage(ecovisLoanMessage, '');
+  ecovisLoanModal.classList.remove('hidden');
+});
+
+ecovisLoanForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(ecovisLoanMessage, '');
+  const payload = simpleFormPayload(ecovisLoanForm);
+  try {
+    await api('/api/ecovis/loans', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    setMessage(ecovisLoanMessage, 'Prestamo registrado correctamente.', true);
+    await loadEcovisSummary();
+    await loadEcovisLoans();
+    setTimeout(() => { ecovisLoanModal.classList.add('hidden'); }, 600);
+  } catch (error) {
+    setMessage(ecovisLoanMessage, error.message);
+  }
+});
+
+ecovisLoanModal.addEventListener('click', (event) => {
+  if (event.target.closest('.modal-close') || event.target === ecovisLoanModal) {
+    ecovisLoanModal.classList.add('hidden');
+  }
+});
+
+ecovisLoansTable.addEventListener('click', async (event) => {
+  const repayBtn = event.target.closest('[data-action="ecovis-repay-loan"]');
+  if (repayBtn) {
+    const amountStr = window.prompt('Monto de devolucion:');
+    if (!amountStr) return;
+    const description = window.prompt('Descripcion de la devolucion:');
+    if (!description) return;
+    try {
+      await api('/api/ecovis/loans/' + repayBtn.dataset.id + '/repayment', {
+        method: 'POST',
+        body: JSON.stringify({ amount: amountStr, description }),
+      });
+      await loadEcovisSummary();
+      await loadEcovisLoans();
+    } catch (error) {
+      window.alert(error.message);
+    }
+  }
+});
+
+document.getElementById('ecovis-adjustment-btn').addEventListener('click', () => {
+  ecovisAdjustmentForm.reset();
+  ecovisAdjustmentForm.elements.movement_date.value = today();
+  setMessage(ecovisAdjustmentMessage, '');
+  ecovisAdjustmentModal.classList.remove('hidden');
+});
+
+ecovisAdjustmentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(ecovisAdjustmentMessage, '');
+  const payload = simpleFormPayload(ecovisAdjustmentForm);
+  try {
+    await api('/api/ecovis/adjustments', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    setMessage(ecovisAdjustmentMessage, 'Ajuste registrado correctamente.', true);
+    await loadEcovisSummary();
+    await loadEcovisMovements();
+    setTimeout(() => { ecovisAdjustmentModal.classList.add('hidden'); }, 600);
+  } catch (error) {
+    setMessage(ecovisAdjustmentMessage, error.message);
+  }
+});
+
+ecovisAdjustmentModal.addEventListener('click', (event) => {
+  if (event.target.closest('.modal-close') || event.target === ecovisAdjustmentModal) {
+    ecovisAdjustmentModal.classList.add('hidden');
+  }
+});
+
+async function openApplyCreditModal(projectId) {
+  ecovisApplyCreditForm.reset();
+  ecovisApplyCreditForm.elements.movement_date.value = today();
+  setMessage(ecovisApplyCreditMessage, '');
+
+  try {
+    const summary = await api('/api/ecovis/summary');
+    ecovisCreditAvailable.textContent = 'Saldo a favor disponible: ' + money.format(summary.credit_balance || 0);
+
+    const projects = (await api('/api/ecovis/projects?limit=9999')).data;
+    ecovisCreditProjectSelect.innerHTML = projects
+      .filter((p) => p.status !== 'cancelado')
+      .map((p) => '<option value="' + p.id + '"' + (Number(p.id) === Number(projectId) ? ' selected' : '') + '>' +
+        escapeHtml(p.project_name) + ' (' + money.format(Number(p.total_amount || 0)) + ')</option>')
+      .join('');
+
+    ecovisApplyCreditModal.classList.remove('hidden');
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
+ecovisApplyCreditForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setMessage(ecovisApplyCreditMessage, '');
+  const payload = simpleFormPayload(ecovisApplyCreditForm);
+  try {
+    await api('/api/ecovis/apply-credit', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    setMessage(ecovisApplyCreditMessage, 'Saldo a favor aplicado correctamente.', true);
+    await loadEcovisSummary();
+    await loadEcovisProjects();
+    setTimeout(() => { ecovisApplyCreditModal.classList.add('hidden'); }, 600);
+  } catch (error) {
+    setMessage(ecovisApplyCreditMessage, error.message);
+  }
+});
+
+ecovisApplyCreditModal.addEventListener('click', (event) => {
+  if (event.target.closest('.modal-close') || event.target === ecovisApplyCreditModal) {
+    ecovisApplyCreditModal.classList.add('hidden');
+  }
+});
+
+if (ecovisProjectsSearchInput) {
+  ecovisProjectsSearchInput.addEventListener('input', debounce(() => {
+    state.ecovisProjectsSearch = ecovisProjectsSearchInput.value;
+    state.ecovisProjectsPag.page = 1;
+    loadEcovisProjects();
+  }));
+}
+
+if (ecovisMovementsSearchInput) {
+  ecovisMovementsSearchInput.addEventListener('input', debounce(() => {
+    state.ecovisMovementsSearch = ecovisMovementsSearchInput.value;
+    state.ecovisMovementsPag.page = 1;
+    loadEcovisMovements();
+  }));
+}
+
+if (ecovisMovementsTypeFilterSelect) {
+  ecovisMovementsTypeFilterSelect.addEventListener('change', () => {
+    state.ecovisMovementsTypeFilter = ecovisMovementsTypeFilterSelect.value;
+    state.ecovisMovementsPag.page = 1;
+    loadEcovisMovements();
+  });
+}
+
+document.getElementById('export-general-excel').addEventListener('click', async () => {
+  try {
+    const data = await api('/api/admin/export-general-excel');
+    generateGeneralExcel(data);
+  } catch (error) {
+    window.alert(error.message || 'No se pudo generar el Excel.');
+  }
+});
+
+function generateGeneralExcel(data) {
+  const projectColumns = [
+    ['ID', (p) => p.id],
+    ['Cotizacion', (p) => p.quote_number],
+    ['Cliente', (p) => p.client_name],
+    ['Estado', (p) => p.status],
+    ['Facturado MXN', (p) => p.total_invoiced_mxn],
+    ['Cobrado MXN', (p) => p.total_charged],
+    ['Gastado MXN', (p) => p.spent],
+    ['Pendiente MXN', (p) => p.pending_collection],
+  ];
+
+  const closedColumns = [
+    ['ID', (p) => p.id],
+    ['Cotizacion', (p) => p.quote_number],
+    ['Cliente', (p) => p.client_name],
+    ['Cerrado', (p) => p.closed_at || ''],
+    ['Facturado MXN', (p) => p.total_invoiced_mxn],
+    ['Cobrado MXN', (p) => p.total_charged],
+    ['Gastado MXN', (p) => p.spent],
+  ];
+
+  const costColumns = [
+    ['Proyecto ID', (c) => c.project_id],
+    ['Fecha', (c) => c.cost_date],
+    ['Tipo', (c) => c.category],
+    ['Descripcion', (c) => c.description],
+    ['Monto', (c) => c.amount],
+    ['Moneda', (c) => c.currency],
+    ['Monto MXN', (c) => c.amount_mxn],
+  ];
+
+  const employeeColumns = [
+    ['No. Empleado', (e) => e.employee_number],
+    ['Nombre', (e) => e.full_name],
+    ['Ingreso', (e) => e.hire_date],
+    ['Activo', (e) => e.active ? 'Si' : 'No'],
+  ];
+
+  const ecovisProjectColumns = [
+    ['ID', (p) => p.id],
+    ['Proyecto', (p) => p.project_name],
+    ['Fecha', (p) => p.project_date],
+    ['Monto', (p) => p.total_amount],
+    ['Moneda', (p) => p.currency],
+    ['Estado', (p) => p.status],
+  ];
+
+  const ecovisPaymentColumns = [
+    ['ID', (p) => p.id],
+    ['Fecha', (p) => p.payment_date],
+    ['Monto', (p) => p.amount],
+    ['Moneda', (p) => p.currency],
+    ['Metodo', (p) => p.payment_method],
+    ['Referencia', (p) => p.bank_reference],
+    ['Sin asignar', (p) => p.unallocated_amount],
+  ];
+
+  const ecovisMovementColumns = [
+    ['ID', (m) => m.id],
+    ['Fecha', (m) => m.movement_date],
+    ['Tipo', (m) => m.movement_type],
+    ['Descripcion', (m) => m.description],
+    ['Monto', (m) => m.amount],
+    ['Moneda', (m) => m.currency],
+    ['Direccion', (m) => m.direction],
+    ['Usuario', (m) => m.created_by],
+  ];
+
+  const worksheets = [
+    worksheetXml('Proyectos Activos', [
+      projectColumns.map(([l]) => l),
+      ...(data.projects || []).map((p) => projectColumns.map(([, fn]) => fn(p))),
+    ]),
+    worksheetXml('Proyectos Cerrados', [
+      closedColumns.map(([l]) => l),
+      ...(data.closedProjects || []).map((p) => closedColumns.map(([, fn]) => fn(p))),
+    ]),
+    worksheetXml('Costos', [
+      costColumns.map(([l]) => l),
+      ...(data.costs || []).map((c) => costColumns.map(([, fn]) => fn(c))),
+    ]),
+    worksheetXml('Empleados', [
+      employeeColumns.map(([l]) => l),
+      ...(data.employees || []).map((e) => employeeColumns.map(([, fn]) => fn(e))),
+    ]),
+    worksheetXml('ECOVIS Proyectos', [
+      ecovisProjectColumns.map(([l]) => l),
+      ...(data.ecovisProjects || []).map((p) => ecovisProjectColumns.map(([, fn]) => fn(p))),
+    ]),
+    worksheetXml('ECOVIS Pagos', [
+      ecovisPaymentColumns.map(([l]) => l),
+      ...(data.ecovisPayments || []).map((p) => ecovisPaymentColumns.map(([, fn]) => fn(p))),
+    ]),
+    worksheetXml('ECOVIS Movimientos', [
+      ecovisMovementColumns.map(([l]) => l),
+      ...(data.ecovisMovements || []).map((m) => ecovisMovementColumns.map(([, fn]) => fn(m))),
+    ]),
+  ];
+
+  if (data.ecovisSummary) {
+    const s = data.ecovisSummary;
+    worksheets.push(worksheetXml('ECOVIS Resumen', [
+      ['Concepto', 'Valor'],
+      ['Total proyectos', s.total_projected],
+      ['Pagado a proyectos', s.total_paid_to_projects],
+      ['Pendiente proyectos', s.pending_project_amount],
+      ['Pagos recibidos', s.total_payments_received],
+      ['Asignado', s.total_allocated],
+      ['Saldo a favor', s.credit_balance],
+      ['Prestamos vigentes', s.outstanding_loans],
+      ['Balance neto', s.net_balance],
+    ]));
+  }
+
+  const workbookXml = '<?xml version="1.0"?>' +
+    '<?mso-application progid="Excel.Sheet"?>' +
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"' +
+    ' xmlns:o="urn:schemas-microsoft-com:office:office"' +
+    ' xmlns:x="urn:schemas-microsoft-com:office:excel"' +
+    ' xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+    worksheets.join('') +
+    '</Workbook>';
+
+  const blob = new Blob([workbookXml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'reporte-general-' + today() + '.xls';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+}
+
+// ===================== END ECOVIS MODULE =====================
+
 api('/api/session')
   .then((session) => {
     if (session.authenticated) {
       state.userRole = session.user.role || 'user';
       showVacationsTab();
+      showEcovisTab();
       showApp();
     } else {
       showLogin();
