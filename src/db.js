@@ -168,6 +168,93 @@ function migrate(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS ecovis_projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_name TEXT NOT NULL,
+      client_name TEXT NOT NULL DEFAULT 'ECOVIS',
+      quote_number TEXT,
+      purchase_order_number TEXT,
+      invoice_number TEXT,
+      project_date TEXT NOT NULL,
+      description TEXT,
+      total_amount REAL NOT NULL CHECK (total_amount > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'parcialmente_pagado', 'pagado', 'cancelado')),
+      notes TEXT,
+      is_cancelled INTEGER NOT NULL DEFAULT 0,
+      cancelled_at TEXT,
+      cancelled_by TEXT,
+      cancellation_reason TEXT,
+      created_by TEXT,
+      updated_by TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS ecovis_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_date TEXT NOT NULL,
+      amount REAL NOT NULL CHECK (amount > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      payment_method TEXT,
+      bank_reference TEXT,
+      source_description TEXT,
+      notes TEXT,
+      unallocated_amount REAL NOT NULL DEFAULT 0,
+      is_cancelled INTEGER NOT NULL DEFAULT 0,
+      cancelled_at TEXT,
+      cancelled_by TEXT,
+      cancellation_reason TEXT,
+      created_by TEXT,
+      updated_by TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS ecovis_payment_allocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_id INTEGER NOT NULL,
+      ecovis_project_id INTEGER,
+      allocation_type TEXT NOT NULL CHECK (allocation_type IN ('proyecto', 'saldo_a_favor', 'prestamo', 'ajuste')),
+      amount REAL NOT NULL CHECK (amount > 0),
+      notes TEXT,
+      is_cancelled INTEGER NOT NULL DEFAULT 0,
+      cancelled_at TEXT,
+      cancelled_by TEXT,
+      cancellation_reason TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (payment_id) REFERENCES ecovis_payments(id),
+      FOREIGN KEY (ecovis_project_id) REFERENCES ecovis_projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ecovis_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      movement_date TEXT NOT NULL,
+      movement_type TEXT NOT NULL CHECK (movement_type IN ('proyecto', 'pago_recibido', 'prestamo_ecovis_a_revram', 'aplicacion_a_proyecto', 'saldo_a_favor', 'devolucion', 'ajuste', 'cancelacion')),
+      description TEXT NOT NULL,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      direction TEXT NOT NULL CHECK (direction IN ('ecovis_debe_a_revram', 'revram_debe_a_ecovis', 'neutral')),
+      reference TEXT,
+      related_project_id INTEGER,
+      related_payment_id INTEGER,
+      payment_method TEXT,
+      bank_reference TEXT,
+      notes TEXT,
+      is_cancelled INTEGER NOT NULL DEFAULT 0,
+      cancelled_at TEXT,
+      cancelled_by TEXT,
+      cancellation_reason TEXT,
+      created_by TEXT,
+      updated_by TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (related_project_id) REFERENCES ecovis_projects(id),
+      FOREIGN KEY (related_payment_id) REFERENCES ecovis_payments(id)
+    );
   `);
   ensureColumn(database, 'projects', 'project_description', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, 'projects', 'total_invoiced_currency', "TEXT NOT NULL DEFAULT 'MXN'");
