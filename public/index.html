@@ -43,6 +43,8 @@
             <button id="closed-projects-tab" class="secondary" type="button">Proyectos Cerrados</button>
             <button id="reports-tab" class="secondary" type="button">Reportes</button>
             <button id="vacations-tab" class="secondary hidden" type="button">Vacaciones</button>
+            <button id="ecovis-tab" class="secondary hidden" type="button">Cuenta ECOVIS</button>
+            <button id="export-general-excel" class="secondary hidden" type="button">Exportar Excel</button>
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
             <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
           </div>
@@ -779,6 +781,321 @@
                   <button type="button" id="save-and-print-vacation">Guardar y generar formato</button>
                 </div>
                 <p id="vacation-request-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <section id="ecovis-view" class="hidden">
+          <!-- Summary cards -->
+          <section class="cards ecovis-cards">
+            <article><span>Total proyectos ECOVIS</span><strong id="ecovis-stat-projects">$0.00</strong></article>
+            <article><span>Pagado a proyectos</span><strong id="ecovis-stat-paid">$0.00</strong></article>
+            <article><span>Pendiente por cobrar</span><strong id="ecovis-stat-pending">$0.00</strong></article>
+            <article><span>Prestamos vigentes</span><strong id="ecovis-stat-loans">$0.00</strong></article>
+            <article><span>Saldo a favor ECOVIS</span><strong id="ecovis-stat-credit">$0.00</strong></article>
+            <article><span>Pagos no asignados</span><strong id="ecovis-stat-unallocated">$0.00</strong></article>
+            <article class="ecovis-balance-card"><span>Balance neto</span><strong id="ecovis-stat-balance">$0.00</strong></article>
+          </section>
+
+          <!-- Sub-navigation tabs for ECOVIS sections -->
+          <div class="ecovis-subtabs">
+            <button id="ecovis-subtab-projects" class="secondary active" type="button">Proyectos ECOVIS</button>
+            <button id="ecovis-subtab-payments" class="secondary" type="button">Pagos / Abonos</button>
+            <button id="ecovis-subtab-loans" class="secondary" type="button">Prestamos</button>
+            <button id="ecovis-subtab-movements" class="secondary" type="button">Historial</button>
+          </div>
+
+          <!-- ECOVIS Projects Section -->
+          <div id="ecovis-projects-section">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Proyectos ECOVIS</h2>
+                <button id="ecovis-new-project-btn" type="button">Agregar proyecto</button>
+              </div>
+              <div class="search-bar">
+                <input id="ecovis-projects-search" type="text" placeholder="Buscar proyectos ECOVIS..." />
+              </div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Proyecto</th>
+                      <th>Cotizacion</th>
+                      <th>OC</th>
+                      <th>Factura</th>
+                      <th>Monto total</th>
+                      <th>Pagado</th>
+                      <th>Pendiente</th>
+                      <th>Estatus</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-projects-table"></tbody>
+                </table>
+              </div>
+              <div id="ecovis-projects-pagination"></div>
+            </div>
+          </div>
+
+          <!-- ECOVIS Payments Section -->
+          <div id="ecovis-payments-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Pagos / Abonos de ECOVIS</h2>
+                <button id="ecovis-new-payment-btn" type="button">Registrar pago</button>
+              </div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Monto</th>
+                      <th>Moneda</th>
+                      <th>Metodo</th>
+                      <th>Referencia</th>
+                      <th>Asignado</th>
+                      <th>Sin asignar</th>
+                      <th>Estatus</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-payments-table"></tbody>
+                </table>
+              </div>
+              <div id="ecovis-payments-pagination"></div>
+            </div>
+          </div>
+
+          <!-- ECOVIS Loans Section -->
+          <div id="ecovis-loans-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Prestamos ECOVIS a REVRAM</h2>
+                <button id="ecovis-new-loan-btn" type="button">Registrar prestamo</button>
+              </div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Monto</th>
+                      <th>Moneda</th>
+                      <th>Referencia</th>
+                      <th>Descripcion</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-loans-table"></tbody>
+                </table>
+              </div>
+              <div id="ecovis-loans-pagination"></div>
+            </div>
+          </div>
+
+          <!-- ECOVIS Movements Section -->
+          <div id="ecovis-movements-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Historial de movimientos</h2>
+                <div class="row-actions">
+                  <button id="ecovis-adjustment-btn" class="secondary" type="button">Ajuste manual</button>
+                </div>
+              </div>
+              <div class="search-bar">
+                <input id="ecovis-movements-search" type="text" placeholder="Buscar movimientos..." />
+                <select id="ecovis-movements-type-filter">
+                  <option value="">Todos los tipos</option>
+                  <option value="proyecto">Proyecto</option>
+                  <option value="pago_recibido">Pago recibido</option>
+                  <option value="prestamo_ecovis_a_revram">Prestamo</option>
+                  <option value="aplicacion_a_proyecto">Aplicacion a proyecto</option>
+                  <option value="saldo_a_favor">Saldo a favor</option>
+                  <option value="devolucion">Devolucion</option>
+                  <option value="ajuste">Ajuste</option>
+                  <option value="cancelacion">Cancelacion</option>
+                </select>
+              </div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Tipo</th>
+                      <th>Descripcion</th>
+                      <th>Monto</th>
+                      <th>Direccion</th>
+                      <th>Referencia</th>
+                      <th>Usuario</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-movements-table"></tbody>
+                </table>
+              </div>
+              <div id="ecovis-movements-pagination"></div>
+            </div>
+          </div>
+
+          <!-- ECOVIS Project Form Modal -->
+          <div id="ecovis-project-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2 id="ecovis-project-form-title">Agregar proyecto ECOVIS</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="ecovis-project-form" class="grid-form">
+                <input type="hidden" name="id" />
+                <label>Nombre del proyecto *<input name="project_name" required /></label>
+                <label>Fecha del proyecto *<input name="project_date" type="date" required /></label>
+                <label>Cotizacion<input name="quote_number" /></label>
+                <label>Orden de compra<input name="purchase_order_number" /></label>
+                <label>Numero de factura<input name="invoice_number" /></label>
+                <label class="full money-field">Monto total *
+                  <div class="money-row">
+                    <input name="total_amount" type="text" inputmode="decimal" required />
+                    <select name="currency"><option>MXN</option><option>USD</option><option>EUR</option></select>
+                  </div>
+                </label>
+                <label class="full">Descripcion<textarea name="description" rows="2"></textarea></label>
+                <label class="full">Notas<textarea name="notes" rows="2"></textarea></label>
+                <button type="submit">Guardar proyecto ECOVIS</button>
+                <p id="ecovis-project-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+
+          <!-- ECOVIS Payment Form Modal -->
+          <div id="ecovis-payment-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2>Registrar pago de ECOVIS</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="ecovis-payment-form" class="grid-form">
+                <label>Fecha de pago *<input name="payment_date" type="date" required /></label>
+                <label class="full money-field">Monto *
+                  <div class="money-row">
+                    <input name="amount" type="text" inputmode="decimal" required />
+                    <select name="currency"><option>MXN</option><option>USD</option><option>EUR</option></select>
+                  </div>
+                </label>
+                <label>Metodo de pago<input name="payment_method" /></label>
+                <label>Referencia bancaria<input name="bank_reference" /></label>
+                <label class="full">Descripcion<input name="source_description" /></label>
+                <label class="full">Notas<textarea name="notes" rows="2"></textarea></label>
+                <button type="submit">Registrar pago</button>
+                <p id="ecovis-payment-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+
+          <!-- ECOVIS Allocation Modal -->
+          <div id="ecovis-allocation-modal" class="modal-overlay hidden">
+            <div class="modal-content panel modal-large">
+              <div class="panel-header">
+                <div>
+                  <h2>Asignar pago</h2>
+                  <p id="ecovis-allocation-subtitle" class="muted"></p>
+                </div>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <div class="detail-grid" id="ecovis-allocation-summary"></div>
+              <h3>Asignaciones existentes</h3>
+              <div class="table-wrapper">
+                <table>
+                  <thead><tr><th>Tipo</th><th>Proyecto</th><th>Monto</th><th>Nota</th></tr></thead>
+                  <tbody id="ecovis-allocations-list"></tbody>
+                </table>
+              </div>
+              <h3>Nueva asignacion</h3>
+              <form id="ecovis-allocation-form" class="grid-form">
+                <label>Tipo de asignacion *
+                  <select name="allocation_type" required>
+                    <option value="proyecto">Proyecto ECOVIS</option>
+                    <option value="saldo_a_favor">Saldo a favor de ECOVIS</option>
+                    <option value="prestamo">Prestamo</option>
+                    <option value="ajuste">Ajuste</option>
+                  </select>
+                </label>
+                <label id="ecovis-allocation-project-label">Proyecto ECOVIS *
+                  <select name="ecovis_project_id" id="ecovis-allocation-project-select"></select>
+                </label>
+                <label>Monto a asignar *<input name="amount" type="text" inputmode="decimal" required /></label>
+                <label class="full">Nota<input name="notes" /></label>
+                <button type="submit">Asignar</button>
+                <p id="ecovis-allocation-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+
+          <!-- ECOVIS Loan Form Modal -->
+          <div id="ecovis-loan-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2 id="ecovis-loan-form-title">Registrar prestamo</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="ecovis-loan-form" class="grid-form">
+                <label>Fecha *<input name="movement_date" type="date" required /></label>
+                <label class="full money-field">Monto *
+                  <div class="money-row">
+                    <input name="amount" type="text" inputmode="decimal" required />
+                    <select name="currency"><option>MXN</option><option>USD</option><option>EUR</option></select>
+                  </div>
+                </label>
+                <label>Referencia<input name="reference" /></label>
+                <label class="full">Descripcion *<input name="description" required /></label>
+                <label class="full">Notas<textarea name="notes" rows="2"></textarea></label>
+                <button type="submit">Registrar prestamo</button>
+                <p id="ecovis-loan-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+
+          <!-- ECOVIS Adjustment Modal -->
+          <div id="ecovis-adjustment-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2>Ajuste manual</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="ecovis-adjustment-form" class="grid-form">
+                <label>Fecha *<input name="movement_date" type="date" required /></label>
+                <label>Monto *<input name="amount" type="text" inputmode="decimal" required /></label>
+                <label>Direccion *
+                  <select name="direction" required>
+                    <option value="ecovis_debe_a_revram">ECOVIS debe a REVRAM</option>
+                    <option value="revram_debe_a_ecovis">REVRAM debe a ECOVIS</option>
+                    <option value="neutral">Neutral</option>
+                  </select>
+                </label>
+                <label class="full">Motivo * (obligatorio)<input name="description" required /></label>
+                <label>Referencia<input name="reference" /></label>
+                <label class="full">Notas<textarea name="notes" rows="2"></textarea></label>
+                <button type="submit">Registrar ajuste</button>
+                <p id="ecovis-adjustment-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+
+          <!-- ECOVIS Apply Credit Modal -->
+          <div id="ecovis-apply-credit-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2>Aplicar saldo a favor</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <p id="ecovis-credit-available" class="muted"></p>
+              <form id="ecovis-apply-credit-form" class="grid-form">
+                <label>Proyecto ECOVIS *
+                  <select name="ecovis_project_id" id="ecovis-credit-project-select" required></select>
+                </label>
+                <label>Monto a aplicar *<input name="amount" type="text" inputmode="decimal" required /></label>
+                <label>Fecha *<input name="movement_date" type="date" required /></label>
+                <label class="full">Notas<input name="notes" /></label>
+                <button type="submit">Aplicar saldo a favor</button>
+                <p id="ecovis-apply-credit-message" class="message"></p>
               </form>
             </div>
           </div>

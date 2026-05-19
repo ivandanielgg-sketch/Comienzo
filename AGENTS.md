@@ -24,3 +24,7 @@ This is a Node.js/Express project management application ("Control de Proyectos"
 - If changing the DB schema (`src/db.js`), delete `data/app.db` and restart the server to recreate it from scratch. There is no separate migration system.
 - The Reports module (`project_reports` table) stores `safety_tests`, `emissions_low_fire`, and `emissions_high_fire` as JSON strings. Parse/stringify when reading/writing.
 - The print view for reports is at `/report-print.html?id=<reportId>` — it uses `@media print` CSS for letter-size output.
+- The ECOVIS module (`src/ecovis.js`) provides pure calculation functions; all ECOVIS endpoints in `src/server.js` require both `requireAuth` and `requireAdmin` middleware.
+- The `ecovis_payment_allocations` table uses `payment_id` (not `ecovis_payment_id`) as the foreign key to `ecovis_payments`.
+- ECOVIS project status values are `pendiente`, `parcialmente_pagado`, `pagado`, `cancelado` (note: `parcialmente_pagado`, not `parcial`).
+- The `ecovis_movements.description` column is `NOT NULL`; always provide a description when inserting movements.
