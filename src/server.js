@@ -8,6 +8,7 @@ const { getDb } = require('./db');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
+const { parsePaginationParams, buildPaginationMeta } = require('./pagination');
 
 const app = express();
 const db = getDb();
@@ -444,11 +445,17 @@ app.post('/api/admin/verify', requireAuth, (req, res, next) => {
 });
 
 app.get('/api/users', requireAuth, requireAdminVerified, (req, res) => {
+  const { page, limit } = parsePaginationParams(req.query);
+
+  const totalRecords = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+  const pag = buildPaginationMeta(page, limit, totalRecords);
+
   const users = db
-    .prepare('SELECT id, username, created_at FROM users ORDER BY username ASC')
-    .all()
+    .prepare('SELECT id, username, created_at FROM users ORDER BY username ASC LIMIT ? OFFSET ?')
+    .all(pag.limit, pag.offset)
     .map(mapUser);
-  res.json(users);
+
+  res.json({ data: users, pagination: pag });
 });
 
 app.post('/api/users', requireAuth, requireAdminVerified, (req, res, next) => {
@@ -535,21 +542,81 @@ app.put('/api/exchange-rates', requireAuth, (req, res, next) => {
 });
 
 app.get('/api/projects', requireAuth, (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
+
+  let whereClause = 'closed_at IS NULL';
+  const searchParams = [];
+
+  if (search) {
+    const pattern = '%' + search + '%';
+    whereClause += ' AND (quote_number LIKE ? OR client_name LIKE ? OR order_number LIKE ? OR seller LIKE ? OR technician_name LIKE ? OR project_description LIKE ?)';
+    searchParams.push(pattern, pattern, pattern, pattern, pattern, pattern);
+  }
+
+  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM projects WHERE ${whereClause}`).get(...searchParams).count;
+  const pag = buildPaginationMeta(page, limit, totalRecords);
+
   const projects = db
-    .prepare('SELECT * FROM projects WHERE closed_at IS NULL ORDER BY promised_delivery_date ASC, id DESC')
-    .all()
+    .prepare(`SELECT * FROM projects WHERE ${whereClause} ORDER BY promised_delivery_date ASC, id DESC LIMIT ? OFFSET ?`)
+    .all(...searchParams, pag.limit, pag.offset)
     .map((project) => mapProject(project, exchangeRates));
-  res.json(projects);
+
+  const subquery = `SELECT id FROM projects WHERE ${whereClause}`;
+
+  const totalCharged = db.prepare(
+    `SELECT COALESCE(SUM(pp.amount * COALESCE(er.rate_to_mxn, 1)), 0) as total
+     FROM project_payments pp
+     LEFT JOIN exchange_rates er ON COALESCE(pp.currency, 'MXN') = er.currency
+     WHERE pp.project_id IN (${subquery})`,
+  ).get(...searchParams).total;
+
+  const totalSpent = db.prepare(
+    `SELECT COALESCE(SUM(pc.amount * COALESCE(er.rate_to_mxn, 1)), 0) as total
+     FROM project_costs pc
+     LEFT JOIN exchange_rates er ON COALESCE(pc.currency, 'MXN') = er.currency
+     WHERE pc.project_id IN (${subquery})`,
+  ).get(...searchParams).total;
+
+  const totalInvoiced = db.prepare(
+    `SELECT COALESCE(SUM(p.total_invoiced * COALESCE(er.rate_to_mxn, 1)), 0) as total
+     FROM projects p
+     LEFT JOIN exchange_rates er ON COALESCE(p.total_invoiced_currency, 'MXN') = er.currency
+     WHERE p.id IN (${subquery})`,
+  ).get(...searchParams).total;
+
+  const summary = {
+    totalProjects: totalRecords,
+    totalCharged: roundMoney(totalCharged),
+    totalSpent: roundMoney(totalSpent),
+    totalPending: roundMoney(totalInvoiced - totalCharged),
+  };
+
+  res.json({ data: projects, pagination: pag, summary });
 });
 
 app.get('/api/closed-projects', requireAuth, (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
+
+  let whereClause = 'closed_at IS NOT NULL';
+  const searchParams = [];
+
+  if (search) {
+    const pattern = '%' + search + '%';
+    whereClause += ' AND (quote_number LIKE ? OR client_name LIKE ? OR order_number LIKE ? OR seller LIKE ? OR technician_name LIKE ? OR project_description LIKE ?)';
+    searchParams.push(pattern, pattern, pattern, pattern, pattern, pattern);
+  }
+
+  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM projects WHERE ${whereClause}`).get(...searchParams).count;
+  const pag = buildPaginationMeta(page, limit, totalRecords);
+
   const projects = db
-    .prepare('SELECT * FROM projects WHERE closed_at IS NOT NULL ORDER BY closed_at DESC, id DESC')
-    .all()
+    .prepare(`SELECT * FROM projects WHERE ${whereClause} ORDER BY closed_at DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...searchParams, pag.limit, pag.offset)
     .map((project) => mapProject(project, exchangeRates));
-  res.json(projects);
+
+  res.json({ data: projects, pagination: pag });
 });
 
 app.get('/api/projects/:id', requireAuth, (req, res, next) => {
@@ -741,6 +808,50 @@ function generateReportFolio(projectId) {
   return `REP-${projectId}-${dateStr}-${String(counter).padStart(3, '0')}`;
 }
 
+app.get('/api/reports/projects', requireAuth, (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
+
+  let whereClause = '1=1';
+  const params = [];
+
+  if (search) {
+    const pattern = '%' + search + '%';
+    whereClause += ' AND (p.client_name LIKE ? OR p.project_description LIKE ? OR p.quote_number LIKE ? OR p.order_number LIKE ?)';
+    params.push(pattern, pattern, pattern, pattern);
+  }
+
+  if (status && VALID_STATUSES.includes(status)) {
+    whereClause += ' AND p.status = ?';
+    params.push(status);
+  }
+
+  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM projects p WHERE ${whereClause}`).get(...params).count;
+  const pag = buildPaginationMeta(page, limit, totalRecords);
+
+  const rows = db.prepare(
+    `SELECT p.*,
+       (SELECT COUNT(*) FROM project_reports WHERE project_id = p.id) as report_count
+     FROM projects p
+     WHERE ${whereClause}
+     ORDER BY p.status ASC, p.id DESC
+     LIMIT ? OFFSET ?`,
+  ).all(...params, pag.limit, pag.offset);
+
+  const data = rows.map((row) => ({
+    id: row.id,
+    quote_number: row.quote_number,
+    order_number: row.order_number,
+    client_name: row.client_name,
+    project_description: row.project_description,
+    status: row.status,
+    closed_at: row.closed_at,
+    report_count: row.report_count,
+  }));
+
+  res.json({ data, pagination: pag });
+});
+
 app.get('/api/reports', requireAuth, (req, res) => {
   const reports = db.prepare(
     `SELECT r.*, p.quote_number, p.order_number, p.client_name AS project_client,
@@ -755,10 +866,18 @@ app.get('/api/reports', requireAuth, (req, res) => {
 app.get('/api/projects/:id/reports', requireAuth, (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
+    const { page, limit } = parsePaginationParams(req.query);
+
+    const totalRecords = db.prepare(
+      'SELECT COUNT(*) as count FROM project_reports WHERE project_id = ?',
+    ).get(req.params.id).count;
+    const pag = buildPaginationMeta(page, limit, totalRecords);
+
     const reports = db.prepare(
-      'SELECT * FROM project_reports WHERE project_id = ? ORDER BY created_at DESC',
-    ).all(req.params.id);
-    res.json(reports);
+      'SELECT * FROM project_reports WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+    ).all(req.params.id, pag.limit, pag.offset);
+
+    res.json({ data: reports, pagination: pag });
   } catch (error) {
     next(error);
   }
@@ -989,10 +1108,32 @@ function checkOverlap(employeeId, startDate, endDate, excludeRequestId) {
 }
 
 app.get('/api/employees', requireAuth, requireAdmin, (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const activeFilter = typeof req.query.activeFilter === 'string' ? req.query.activeFilter.trim() : 'all';
+
+  let whereClause = '1=1';
+  const params = [];
+
+  if (search) {
+    const pattern = '%' + search + '%';
+    whereClause += ' AND (employee_number LIKE ? OR full_name LIKE ?)';
+    params.push(pattern, pattern);
+  }
+
+  if (activeFilter === 'active') {
+    whereClause += ' AND active = 1';
+  } else if (activeFilter === 'inactive') {
+    whereClause += ' AND active = 0';
+  }
+
+  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM employees WHERE ${whereClause}`).get(...params).count;
+  const pag = buildPaginationMeta(page, limit, totalRecords);
+
   const employees = db.prepare(
-    'SELECT * FROM employees ORDER BY active DESC, full_name ASC',
-  ).all();
-  res.json(employees.map(mapEmployee));
+    `SELECT * FROM employees WHERE ${whereClause} ORDER BY active DESC, full_name ASC LIMIT ? OFFSET ?`,
+  ).all(...params, pag.limit, pag.offset);
+
+  res.json({ data: employees.map(mapEmployee), pagination: pag });
 });
 
 app.get('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
@@ -1079,10 +1220,18 @@ app.put('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
 app.get('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req, res, next) => {
   try {
     getEmployeeOrFail(req.params.id);
+    const { page, limit } = parsePaginationParams(req.query);
+
+    const totalRecords = db.prepare(
+      'SELECT COUNT(*) as count FROM vacation_requests WHERE employee_id = ?',
+    ).get(req.params.id).count;
+    const pag = buildPaginationMeta(page, limit, totalRecords);
+
     const requests = db.prepare(
-      'SELECT * FROM vacation_requests WHERE employee_id = ? ORDER BY start_date DESC',
-    ).all(req.params.id);
-    res.json(requests);
+      'SELECT * FROM vacation_requests WHERE employee_id = ? ORDER BY start_date DESC LIMIT ? OFFSET ?',
+    ).all(req.params.id, pag.limit, pag.offset);
+
+    res.json({ data: requests, pagination: pag });
   } catch (error) {
     next(error);
   }

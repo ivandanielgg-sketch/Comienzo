@@ -2,13 +2,33 @@ const state = {
   projects: [],
   closedProjects: [],
   users: [],
+  employees: [],
   exchangeRates: { MXN: 1, USD: 17, EUR: 19 },
   exchangeUpdatedAt: null,
   selectedProjectId: null,
   selectedClosedProjectId: null,
   selectedUserId: null,
+  selectedEmployeeId: null,
   adminVerified: false,
+  userRole: null,
+  reportsAllProjects: [],
+  reportsProjectReports: [],
+  currentReportProjectId: null,
 };
+
+state.projectsPag = { page: 1, limit: 15 };
+state.projectsSearch = '';
+state.closedPag = { page: 1, limit: 15 };
+state.closedSearch = '';
+state.employeesPag = { page: 1, limit: 15 };
+state.employeesSearch = '';
+state.employeesActiveFilter = 'all';
+state.usersPag = { page: 1, limit: 15 };
+state.vacReqPag = { page: 1, limit: 15 };
+state.reportsProjPag = { page: 1, limit: 15 };
+state.reportsProjSearch = '';
+state.reportsProjStatus = '';
+state.projReportsPag = { page: 1, limit: 15 };
 
 const loginView = document.querySelector('#login-view');
 const appView = document.querySelector('#app-view');
@@ -47,6 +67,11 @@ const usersTable = document.querySelector('#users-table');
 const purchaseOrderInput = projectForm.elements.purchase_order_number;
 const purchaseOrderNotApplicable = projectForm.elements.purchase_order_not_applicable;
 
+const projectsSearchInput = document.querySelector('#projects-search');
+const closedProjectsSearchInput = document.querySelector('#closed-projects-search');
+const employeesSearchInput = document.querySelector('#employees-search');
+const employeesActiveFilterSelect = document.querySelector('#employees-active-filter');
+
 const money = new Intl.NumberFormat('es-MX', {
   style: 'currency',
   currency: 'MXN',
@@ -69,6 +94,68 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function debounce(fn, delay = 300) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
+
+const defaultPagination = {
+  page: 1,
+  limit: 15,
+  totalRecords: 0,
+  totalPages: 1,
+  hasNextPage: false,
+  hasPreviousPage: false,
+};
+
+function renderPaginationControls(containerId, pagination, onPageChange, onLimitChange) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const { page, limit, totalRecords, totalPages, hasNextPage, hasPreviousPage } = pagination;
+  const start = totalRecords === 0 ? 0 : (page - 1) * limit + 1;
+  const end = Math.min(page * limit, totalRecords);
+
+  container.innerHTML = `
+    <div class="pagination-controls">
+      <span class="pagination-info">Mostrando ${start}-${end} de ${totalRecords} registros</span>
+      <div class="pagination-buttons">
+        <button type="button" data-page="1" ${!hasPreviousPage ? 'disabled' : ''}>Primera</button>
+        <button type="button" data-page="${page - 1}" ${!hasPreviousPage ? 'disabled' : ''}>Anterior</button>
+        <span class="pagination-current">Pagina ${page} de ${totalPages}</span>
+        <button type="button" data-page="${page + 1}" ${!hasNextPage ? 'disabled' : ''}>Siguiente</button>
+        <button type="button" data-page="${totalPages}" ${!hasNextPage ? 'disabled' : ''}>Ultima</button>
+      </div>
+      <div class="pagination-limit">
+        <label>Registros:
+          <select data-limit-select>
+            <option value="15" ${limit === 15 ? 'selected' : ''}>15</option>
+            <option value="30" ${limit === 30 ? 'selected' : ''}>30</option>
+            <option value="50" ${limit === 50 ? 'selected' : ''}>50</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  `;
+
+  container.querySelectorAll('button[data-page]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const newPage = Number(btn.dataset.page);
+      if (newPage >= 1 && newPage <= totalPages) onPageChange(newPage);
+    });
+  });
+
+  const limitSelect = container.querySelector('[data-limit-select]');
+  if (limitSelect) {
+    limitSelect.addEventListener('change', () => {
+      onLimitChange(Number(limitSelect.value));
+    });
+  }
 }
 
 async function api(path, options = {}) {
@@ -202,7 +289,15 @@ function renderExchangeRates() {
 }
 
 async function loadProjects() {
-  state.projects = await api('/api/projects');
+  const params = new URLSearchParams({
+    page: state.projectsPag.page,
+    limit: state.projectsPag.limit,
+    search: state.projectsSearch,
+  });
+  const result = await api(`/api/projects?${params}`);
+  state.projects = result.data;
+  state.projectsSummary = result.summary;
+  state.projectsPagination = result.pagination;
   renderProjects();
 
   if (state.selectedProjectId) {
@@ -212,35 +307,38 @@ async function loadProjects() {
 }
 
 async function loadClosedProjects() {
-  state.closedProjects = await api('/api/closed-projects');
+  const params = new URLSearchParams({
+    page: state.closedPag.page,
+    limit: state.closedPag.limit,
+    search: state.closedSearch,
+  });
+  const result = await api(`/api/closed-projects?${params}`);
+  state.closedProjects = result.data;
+  state.closedPagination = result.pagination;
   renderClosedProjects();
 
   if (state.selectedClosedProjectId) {
-    const current = state.closedProjects.find(
-      (project) => project.id === state.selectedClosedProjectId,
-    );
+    const current = state.closedProjects.find((p) => p.id === state.selectedClosedProjectId);
     current ? selectClosedProject(current.id) : clearClosedSelection();
   }
 }
 
 function renderProjects() {
-  document.querySelector('#stat-projects').textContent = state.projects.length;
-  document.querySelector('#stat-charged').textContent = money.format(
-    sum(state.projects, 'total_charged'),
-  );
-  document.querySelector('#stat-spent').textContent = money.format(sum(state.projects, 'spent'));
-  document.querySelector('#stat-pending').textContent = money.format(
-    sum(state.projects, 'pending_collection'),
-  );
+  const summary = state.projectsSummary || {};
+  document.querySelector('#stat-projects').textContent = summary.totalProjects ?? 0;
+  document.querySelector('#stat-charged').textContent = money.format(summary.totalCharged ?? 0);
+  document.querySelector('#stat-spent').textContent = money.format(summary.totalSpent ?? 0);
+  document.querySelector('#stat-pending').textContent = money.format(summary.totalPending ?? 0);
 
   if (!state.projects.length) {
-    projectsTable.innerHTML = `<tr><td colspan="10" class="muted">No hay proyectos registrados.</td></tr>`;
-    return;
-  }
-
-  projectsTable.innerHTML = state.projects
-    .map(
-      (project) => `
+    const emptyMsg = state.projectsSearch
+      ? 'No se encontraron proyectos con los filtros actuales.'
+      : 'No hay proyectos registrados.';
+    projectsTable.innerHTML = `<tr><td colspan="10" class="muted">${emptyMsg}</td></tr>`;
+  } else {
+    projectsTable.innerHTML = state.projects
+      .map(
+        (project) => `
         <tr>
           <td>${project.id}</td>
           <td>${escapeHtml(project.quote_number)}</td>
@@ -263,19 +361,28 @@ function renderProjects() {
           </td>
         </tr>
       `,
-    )
-    .join('');
+      )
+      .join('');
+  }
+
+  renderPaginationControls(
+    'projects-pagination',
+    state.projectsPagination || defaultPagination,
+    (newPage) => { state.projectsPag.page = newPage; loadProjects(); },
+    (newLimit) => { state.projectsPag.limit = newLimit; state.projectsPag.page = 1; loadProjects(); },
+  );
 }
 
 function renderClosedProjects() {
   if (!state.closedProjects.length) {
-    closedProjectsTable.innerHTML = `<tr><td colspan="9" class="muted">No hay proyectos cerrados.</td></tr>`;
-    return;
-  }
-
-  closedProjectsTable.innerHTML = state.closedProjects
-    .map(
-      (project) => `
+    const emptyMsg = state.closedSearch
+      ? 'No se encontraron proyectos cerrados con los filtros actuales.'
+      : 'No hay proyectos cerrados.';
+    closedProjectsTable.innerHTML = `<tr><td colspan="9" class="muted">${emptyMsg}</td></tr>`;
+  } else {
+    closedProjectsTable.innerHTML = state.closedProjects
+      .map(
+        (project) => `
         <tr>
           <td>${project.id}</td>
           <td>${escapeHtml(project.quote_number)}</td>
@@ -297,24 +404,36 @@ function renderClosedProjects() {
           </td>
         </tr>
       `,
-    )
-    .join('');
+      )
+      .join('');
+  }
+
+  renderPaginationControls(
+    'closed-projects-pagination',
+    state.closedPagination || defaultPagination,
+    (newPage) => { state.closedPag.page = newPage; loadClosedProjects(); },
+    (newLimit) => { state.closedPag.limit = newLimit; state.closedPag.page = 1; loadClosedProjects(); },
+  );
 }
 
 async function loadUsers() {
-  state.users = await api('/api/users');
+  const params = new URLSearchParams({
+    page: state.usersPag.page,
+    limit: state.usersPag.limit,
+  });
+  const result = await api(`/api/users?${params}`);
+  state.users = result.data;
+  state.usersPagination = result.pagination;
   renderUsers();
 }
 
 function renderUsers() {
   if (!state.users.length) {
     usersTable.innerHTML = `<tr><td colspan="4" class="muted">No hay usuarios registrados.</td></tr>`;
-    return;
-  }
-
-  usersTable.innerHTML = state.users
-    .map(
-      (user) => `
+  } else {
+    usersTable.innerHTML = state.users
+      .map(
+        (user) => `
         <tr>
           <td>${user.id}</td>
           <td>${escapeHtml(user.username)}</td>
@@ -322,8 +441,16 @@ function renderUsers() {
           <td><button class="secondary" data-action="select-user" data-id="${user.id}" type="button">Editar</button></td>
         </tr>
       `,
-    )
-    .join('');
+      )
+      .join('');
+  }
+
+  renderPaginationControls(
+    'users-pagination',
+    state.usersPagination || defaultPagination,
+    (newPage) => { state.usersPag.page = newPage; loadUsers(); },
+    (newLimit) => { state.usersPag.limit = newLimit; state.usersPag.page = 1; loadUsers(); },
+  );
 }
 
 function exportProjectsToExcel(projects, filenamePrefix) {
@@ -811,15 +938,15 @@ usersTab.addEventListener('click', async () => {
     window.alert(error.message);
   }
 });
-exportProjectsButton.addEventListener('click', () =>
-  exportProjectsToExcel(state.projects, 'proyectos'),
-);
-exportClosedProjectsButton.addEventListener('click', async () => {
-  if (!state.closedProjects.length) {
-    await loadClosedProjects();
-  }
 
-  exportProjectsToExcel(state.closedProjects, 'proyectos-cerrados');
+exportProjectsButton.addEventListener('click', async () => {
+  const all = await api('/api/projects?limit=9999');
+  exportProjectsToExcel(all.data, 'proyectos');
+});
+
+exportClosedProjectsButton.addEventListener('click', async () => {
+  const all = await api('/api/closed-projects?limit=9999');
+  exportProjectsToExcel(all.data, 'proyectos-cerrados');
 });
 
 exchangeRateForm.addEventListener('submit', async (event) => {
@@ -993,6 +1120,40 @@ costsList.addEventListener('click', async (event) => {
   }
 });
 
+// ===================== SEARCH INPUTS =====================
+
+if (projectsSearchInput) {
+  projectsSearchInput.addEventListener('input', debounce(() => {
+    state.projectsSearch = projectsSearchInput.value;
+    state.projectsPag.page = 1;
+    loadProjects();
+  }));
+}
+
+if (closedProjectsSearchInput) {
+  closedProjectsSearchInput.addEventListener('input', debounce(() => {
+    state.closedSearch = closedProjectsSearchInput.value;
+    state.closedPag.page = 1;
+    loadClosedProjects();
+  }));
+}
+
+if (employeesSearchInput) {
+  employeesSearchInput.addEventListener('input', debounce(() => {
+    state.employeesSearch = employeesSearchInput.value;
+    state.employeesPag.page = 1;
+    loadEmployees();
+  }));
+}
+
+if (employeesActiveFilterSelect) {
+  employeesActiveFilterSelect.addEventListener('change', () => {
+    state.employeesActiveFilter = employeesActiveFilterSelect.value;
+    state.employeesPag.page = 1;
+    loadEmployees();
+  });
+}
+
 // ===================== VACATION MODULE =====================
 
 const vacationsTab = document.querySelector('#vacations-tab');
@@ -1012,10 +1173,6 @@ const vacationRequestForm = document.querySelector('#vacation-request-form');
 const vacationRequestMessage = document.querySelector('#vacation-request-message');
 const saveAndPrintVacation = document.querySelector('#save-and-print-vacation');
 
-state.employees = [];
-state.selectedEmployeeId = null;
-state.userRole = null;
-
 function showVacationsTab() {
   if (state.userRole === 'admin') {
     vacationsTab.classList.remove('hidden');
@@ -1025,47 +1182,64 @@ function showVacationsTab() {
 }
 
 async function loadEmployees() {
-  state.employees = await api('/api/employees');
+  const params = new URLSearchParams({
+    page: state.employeesPag.page,
+    limit: state.employeesPag.limit,
+    search: state.employeesSearch,
+    activeFilter: state.employeesActiveFilter,
+  });
+  const result = await api(`/api/employees?${params}`);
+  state.employees = result.data;
+  state.employeesPagination = result.pagination;
   renderEmployees();
 }
 
 function renderEmployees() {
   if (!state.employees.length) {
-    employeesTable.innerHTML = '<tr><td colspan="10" class="muted">No hay empleados registrados.</td></tr>';
-    return;
+    const emptyMsg = state.employeesSearch
+      ? 'No se encontraron empleados con los filtros actuales.'
+      : 'No hay empleados registrados.';
+    employeesTable.innerHTML = `<tr><td colspan="10" class="muted">${emptyMsg}</td></tr>`;
+  } else {
+    employeesTable.innerHTML = state.employees.map((emp) => {
+      const isInactive = !emp.active;
+      const rowClass = isInactive ? 'row-inactive' : '';
+      const pendingClass = emp.days_pending < 0 ? 'negative-balance' : '';
+      const pendingLabel = emp.days_pending < 0
+        ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo por vacaciones anticipadas</small>`
+        : `${emp.days_pending}`;
+      const statusBadge = isInactive
+        ? `<span class="badge badge-inactive">INACTIVO</span>${emp.termination_date ? `<br><small class="muted">${escapeHtml(emp.termination_date)}</small>` : ''}`
+        : '<span class="badge badge-active">Activo</span>';
+
+      return `
+        <tr class="${rowClass}">
+          <td>${escapeHtml(emp.employee_number)}</td>
+          <td>${escapeHtml(emp.full_name)}</td>
+          <td>${escapeHtml(emp.hire_date)}</td>
+          <td>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</td>
+          <td>${statusBadge}</td>
+          <td>${emp.accrued_days}</td>
+          <td>${emp.days_taken}</td>
+          <td>${emp.days_scheduled}</td>
+          <td class="${pendingClass}">${pendingLabel}</td>
+          <td>
+            <div class="row-actions">
+              <button class="secondary" data-action="edit-employee" data-id="${emp.id}" type="button">Editar</button>
+              <button class="secondary" data-action="open-vacations" data-id="${emp.id}" type="button">Vacaciones programadas</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
   }
 
-  employeesTable.innerHTML = state.employees.map((emp) => {
-    const isInactive = !emp.active;
-    const rowClass = isInactive ? 'row-inactive' : '';
-    const pendingClass = emp.days_pending < 0 ? 'negative-balance' : '';
-    const pendingLabel = emp.days_pending < 0
-      ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo por vacaciones anticipadas</small>`
-      : `${emp.days_pending}`;
-    const statusBadge = isInactive
-      ? `<span class="badge badge-inactive">INACTIVO</span>${emp.termination_date ? `<br><small class="muted">${escapeHtml(emp.termination_date)}</small>` : ''}`
-      : '<span class="badge badge-active">Activo</span>';
-
-    return `
-      <tr class="${rowClass}">
-        <td>${escapeHtml(emp.employee_number)}</td>
-        <td>${escapeHtml(emp.full_name)}</td>
-        <td>${escapeHtml(emp.hire_date)}</td>
-        <td>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</td>
-        <td>${statusBadge}</td>
-        <td>${emp.accrued_days}</td>
-        <td>${emp.days_taken}</td>
-        <td>${emp.days_scheduled}</td>
-        <td class="${pendingClass}">${pendingLabel}</td>
-        <td>
-          <div class="row-actions">
-            <button class="secondary" data-action="edit-employee" data-id="${emp.id}" type="button">Editar</button>
-            <button class="secondary" data-action="open-vacations" data-id="${emp.id}" type="button">Vacaciones programadas</button>
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join('');
+  renderPaginationControls(
+    'employees-pagination',
+    state.employeesPagination || defaultPagination,
+    (newPage) => { state.employeesPag.page = newPage; loadEmployees(); },
+    (newLimit) => { state.employeesPag.limit = newLimit; state.employeesPag.page = 1; loadEmployees(); },
+  );
 }
 
 function openEmployeeModal(employee) {
@@ -1136,34 +1310,48 @@ async function openVacationModal(employeeId) {
 
   setMessage(vacationRequestMessage, '');
   vacationRequestForm.reset();
+  state.vacReqPag = { page: 1, limit: 15 };
   await loadVacationRequests(emp.id);
 }
 
 async function loadVacationRequests(employeeId) {
-  const requests = await api(`/api/employees/${employeeId}/vacation-requests`);
+  const params = new URLSearchParams({
+    page: state.vacReqPag.page,
+    limit: state.vacReqPag.limit,
+  });
+  const result = await api(`/api/employees/${employeeId}/vacation-requests?${params}`);
+  const requests = result.data;
+  state.vacReqPagination = result.pagination;
+
   if (!requests.length) {
     vacationRequestsTable.innerHTML = '<tr><td colspan="8" class="muted">Este empleado aun no tiene vacaciones registradas.</td></tr>';
-    return;
+  } else {
+    vacationRequestsTable.innerHTML = requests.map((req) => `
+      <tr>
+        <td>${escapeHtml(req.start_date)}</td>
+        <td>${escapeHtml(req.end_date)}</td>
+        <td>${req.requested_days}</td>
+        <td>${req.vacation_exercise_year}</td>
+        <td><span class="badge status-${req.status}">${escapeHtml(req.status)}</span></td>
+        <td>${escapeHtml(req.notes || '')}</td>
+        <td>${escapeHtml((req.created_at || '').slice(0, 10))}</td>
+        <td>
+          <div class="row-actions">
+            ${req.status !== 'cancelada' ? `<button class="danger" data-action="cancel-vacation" data-id="${req.id}" type="button">Cancelar</button>` : ''}
+            ${req.status === 'programada' ? `<button class="secondary" data-action="mark-taken" data-id="${req.id}" type="button">Marcar tomada</button>` : ''}
+            <button class="secondary" data-action="print-vacation" data-id="${req.id}" type="button">Formato</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
   }
 
-  vacationRequestsTable.innerHTML = requests.map((req) => `
-    <tr>
-      <td>${escapeHtml(req.start_date)}</td>
-      <td>${escapeHtml(req.end_date)}</td>
-      <td>${req.requested_days}</td>
-      <td>${req.vacation_exercise_year}</td>
-      <td><span class="badge status-${req.status}">${escapeHtml(req.status)}</span></td>
-      <td>${escapeHtml(req.notes || '')}</td>
-      <td>${escapeHtml((req.created_at || '').slice(0, 10))}</td>
-      <td>
-        <div class="row-actions">
-          ${req.status !== 'cancelada' ? `<button class="danger" data-action="cancel-vacation" data-id="${req.id}" type="button">Cancelar</button>` : ''}
-          ${req.status === 'programada' ? `<button class="secondary" data-action="mark-taken" data-id="${req.id}" type="button">Marcar tomada</button>` : ''}
-          <button class="secondary" data-action="print-vacation" data-id="${req.id}" type="button">Formato</button>
-        </div>
-      </td>
-    </tr>
-  `).join('');
+  renderPaginationControls(
+    'vacation-requests-pagination',
+    state.vacReqPagination || defaultPagination,
+    (newPage) => { state.vacReqPag.page = newPage; loadVacationRequests(employeeId); },
+    (newLimit) => { state.vacReqPag.limit = newLimit; state.vacReqPag.page = 1; loadVacationRequests(employeeId); },
+  );
 }
 
 function closeVacationModal() {
@@ -1428,77 +1616,58 @@ const closedDetailNewReport = document.querySelector('#closed-detail-new-report'
 const safetyOtrasCheckbox = document.querySelector('[name="safety_otras"]');
 const safetyOtrasField = document.querySelector('#safety-otras-field');
 
-state.reportsAllProjects = [];
-state.reportsProjectReports = [];
-state.currentReportProjectId = null;
-
 if (safetyOtrasCheckbox) {
   safetyOtrasCheckbox.addEventListener('change', () => {
     safetyOtrasField.classList.toggle('hidden', !safetyOtrasCheckbox.checked);
   });
 }
 
-async function loadAllProjectsForReports() {
-  const [active, closed] = await Promise.all([
-    api('/api/projects'),
-    api('/api/closed-projects'),
-  ]);
-  state.reportsAllProjects = [...active, ...closed];
+async function loadReportsProjects() {
+  const params = new URLSearchParams({
+    page: state.reportsProjPag.page,
+    limit: state.reportsProjPag.limit,
+    search: state.reportsProjSearch,
+    status: state.reportsProjStatus,
+  });
+  const result = await api(`/api/reports/projects?${params}`);
+  state.reportsAllProjects = result.data;
+  state.reportsProjPagination = result.pagination;
   renderReportsProjectsTable();
 }
 
-function filterReportsProjects() {
-  const search = (reportSearch.value || '').toLowerCase();
-  const statusFilter = reportStatusFilter.value;
-  return state.reportsAllProjects.filter((p) => {
-    if (statusFilter && p.status !== statusFilter) return false;
-    if (search) {
-      const haystack = [
-        p.client_name, p.project_description, p.quote_number,
-        p.order_number, String(p.id),
-      ].join(' ').toLowerCase();
-      if (!haystack.includes(search)) return false;
-    }
-    return true;
-  });
-}
-
 function renderReportsProjectsTable() {
-  const projects = filterReportsProjects();
+  const projects = state.reportsAllProjects;
 
   if (!projects.length) {
-    reportsProjectsTable.innerHTML = '<tr><td colspan="7" class="muted">No hay proyectos disponibles para generar reportes.</td></tr>';
-    return;
+    const emptyMsg = state.reportsProjSearch || state.reportsProjStatus
+      ? 'No se encontraron proyectos con los filtros actuales.'
+      : 'No hay proyectos disponibles para generar reportes.';
+    reportsProjectsTable.innerHTML = `<tr><td colspan="7" class="muted">${emptyMsg}</td></tr>`;
+  } else {
+    reportsProjectsTable.innerHTML = projects.map((p) => `
+      <tr>
+        <td>${p.id}</td>
+        <td>${escapeHtml(p.quote_number)}</td>
+        <td>${escapeHtml(p.client_name)}</td>
+        <td>${escapeHtml(p.project_description || '')}</td>
+        <td><span class="badge status">${escapeHtml(p.status)}</span></td>
+        <td>${p.report_count || 0}</td>
+        <td>
+          <div class="row-actions">
+            <button class="secondary" data-action="report-new" data-id="${p.id}" type="button">Generar reporte</button>
+            <button class="secondary" data-action="report-list" data-id="${p.id}" type="button">Ver reportes</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
   }
 
-  const reportCounts = {};
-  state.reportsAllProjects.forEach((p) => { reportCounts[p.id] = 0; });
-
-  api('/api/reports').then((reports) => {
-    reports.forEach((r) => {
-      reportCounts[r.project_id] = (reportCounts[r.project_id] || 0) + 1;
-    });
-    renderProjectRows(projects, reportCounts);
-  }).catch(() => renderProjectRows(projects, reportCounts));
-}
-
-function renderProjectRows(projects, reportCounts) {
-  reportsProjectsTable.innerHTML = projects.map((p) => `
-    <tr>
-      <td>${p.id}</td>
-      <td>${escapeHtml(p.quote_number)}</td>
-      <td>${escapeHtml(p.client_name)}</td>
-      <td>${escapeHtml(p.project_description || '')}</td>
-      <td><span class="badge status">${escapeHtml(p.status)}</span></td>
-      <td>${reportCounts[p.id] || 0}</td>
-      <td>
-        <div class="row-actions">
-          <button class="secondary" data-action="report-new" data-id="${p.id}" type="button">Generar reporte</button>
-          <button class="secondary" data-action="report-list" data-id="${p.id}" type="button">Ver reportes</button>
-        </div>
-      </td>
-    </tr>
-  `).join('');
+  renderPaginationControls(
+    'reports-projects-pagination',
+    state.reportsProjPagination || defaultPagination,
+    (newPage) => { state.reportsProjPag.page = newPage; loadReportsProjects(); },
+    (newLimit) => { state.reportsProjPag.limit = newLimit; state.reportsProjPag.page = 1; loadReportsProjects(); },
+  );
 }
 
 function showReportsMainList() {
@@ -1638,6 +1807,7 @@ async function openReportListForProject(projectId) {
   if (!project) return;
 
   state.currentReportProjectId = Number(projectId);
+  state.projReportsPag = { page: 1, limit: 15 };
   reportsProjectsTable.closest('.panel').classList.add('hidden');
   reportFormPanel.classList.add('hidden');
   reportListPanel.classList.remove('hidden');
@@ -1645,40 +1815,57 @@ async function openReportListForProject(projectId) {
   reportListTitle.textContent = `Reportes - Proyecto #${project.id}`;
   reportListSubtitle.textContent = `${project.client_name} | ${project.project_description || ''}`;
 
+  await loadProjectReports(projectId);
+}
+
+async function loadProjectReports(projectId) {
   try {
-    const reports = await api('/api/projects/' + projectId + '/reports');
-    state.reportsProjectReports = reports;
-    renderReportList(reports);
+    const params = new URLSearchParams({
+      page: state.projReportsPag.page,
+      limit: state.projReportsPag.limit,
+    });
+    const result = await api(`/api/projects/${projectId}/reports?${params}`);
+    state.reportsProjectReports = result.data;
+    state.projReportsPagination = result.pagination;
+    renderReportList(result.data, result.pagination, projectId);
   } catch (error) {
     reportListTable.innerHTML = '<tr><td colspan="5" class="muted">Error al cargar reportes.</td></tr>';
   }
 }
 
-function renderReportList(reports) {
+function renderReportList(reports, pagination, projectId) {
   if (!reports.length) {
     reportListTable.innerHTML = '<tr><td colspan="5" class="muted">Este proyecto aun no tiene reportes generados.</td></tr>';
-    return;
+  } else {
+    reportListTable.innerHTML = reports.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.report_folio)}</td>
+        <td>${escapeHtml(r.report_date)}</td>
+        <td>${escapeHtml(r.service_name || '')}</td>
+        <td>${escapeHtml(r.technician_name || '')}</td>
+        <td>
+          <div class="row-actions">
+            <button class="secondary" data-action="report-edit" data-id="${r.id}" type="button">Editar</button>
+            <button class="secondary" data-action="report-print" data-id="${r.id}" type="button">Imprimir</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
   }
 
-  reportListTable.innerHTML = reports.map((r) => `
-    <tr>
-      <td>${escapeHtml(r.report_folio)}</td>
-      <td>${escapeHtml(r.report_date)}</td>
-      <td>${escapeHtml(r.service_name || '')}</td>
-      <td>${escapeHtml(r.technician_name || '')}</td>
-      <td>
-        <div class="row-actions">
-          <button class="secondary" data-action="report-edit" data-id="${r.id}" type="button">Editar</button>
-          <button class="secondary" data-action="report-print" data-id="${r.id}" type="button">Imprimir</button>
-        </div>
-      </td>
-    </tr>
-  `).join('');
+  const pid = projectId || state.currentReportProjectId;
+  renderPaginationControls(
+    'project-reports-pagination',
+    pagination || defaultPagination,
+    (newPage) => { state.projReportsPag.page = newPage; loadProjectReports(pid); },
+    (newLimit) => { state.projReportsPag.limit = newLimit; state.projReportsPag.page = 1; loadProjectReports(pid); },
+  );
 }
 
 async function renderDetailReports(projectId, listElement) {
   try {
-    const reports = await api('/api/projects/' + projectId + '/reports');
+    const result = await api('/api/projects/' + projectId + '/reports?limit=50');
+    const reports = result.data || [];
     if (!reports.length) {
       listElement.innerHTML = '<li class="muted">Sin reportes generados.</li>';
       return;
@@ -1704,15 +1891,28 @@ if (reportsTab) {
   reportsTab.addEventListener('click', async () => {
     switchView('reports');
     showReportsMainList();
-    await loadAllProjectsForReports();
+    state.reportsProjPag = { page: 1, limit: 15 };
+    state.reportsProjSearch = '';
+    state.reportsProjStatus = '';
+    if (reportSearch) reportSearch.value = '';
+    if (reportStatusFilter) reportStatusFilter.value = '';
+    await loadReportsProjects();
   });
 }
 
 if (reportSearch) {
-  reportSearch.addEventListener('input', renderReportsProjectsTable);
+  reportSearch.addEventListener('input', debounce(() => {
+    state.reportsProjSearch = reportSearch.value;
+    state.reportsProjPag.page = 1;
+    loadReportsProjects();
+  }));
 }
 if (reportStatusFilter) {
-  reportStatusFilter.addEventListener('change', renderReportsProjectsTable);
+  reportStatusFilter.addEventListener('change', () => {
+    state.reportsProjStatus = reportStatusFilter.value;
+    state.reportsProjPag.page = 1;
+    loadReportsProjects();
+  });
 }
 
 if (reportsProjectsTable) {

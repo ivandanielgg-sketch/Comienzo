@@ -195,6 +195,9 @@
                 </div>
                 <button id="export-projects-button" class="secondary" type="button">Exportar a Excel</button>
               </div>
+              <div class="search-row" style="margin-bottom:10px;">
+                <input id="projects-search" type="text" placeholder="Buscar proyectos..." />
+              </div>
               <div class="table-wrapper">
                 <table>
                   <thead>
@@ -214,6 +217,7 @@
                   <tbody id="projects-table"></tbody>
                 </table>
               </div>
+              <div id="projects-pagination"></div>
             </div>
           </section>
 
@@ -323,6 +327,9 @@
               </div>
               <button id="export-closed-projects-button" class="secondary" type="button">Exportar a Excel</button>
             </div>
+            <div class="search-row" style="margin-bottom:10px;">
+              <input id="closed-projects-search" type="text" placeholder="Buscar proyectos cerrados..." />
+            </div>
             <div class="table-wrapper">
               <table>
                 <thead>
@@ -341,6 +348,7 @@
                 <tbody id="closed-projects-table"></tbody>
               </table>
             </div>
+            <div id="closed-projects-pagination"></div>
           </div>
 
           <section id="closed-detail-panel" class="panel hidden">
@@ -416,6 +424,7 @@
                 <tbody id="reports-projects-table"></tbody>
               </table>
             </div>
+            <div id="reports-projects-pagination"></div>
           </div>
 
           <div id="report-form-panel" class="panel hidden">
@@ -604,6 +613,7 @@
                 <tbody id="report-list-table"></tbody>
               </table>
             </div>
+            <div id="project-reports-pagination"></div>
           </div>
         </section>
 
@@ -618,6 +628,14 @@
               <div class="row-actions">
                 <button id="new-employee-button" type="button">Agregar empleado</button>
               </div>
+            </div>
+            <div class="search-row" style="margin-bottom:10px;display:flex;gap:10px;align-items:end;">
+              <input id="employees-search" type="text" placeholder="Buscar empleados..." />
+              <select id="employees-active-filter">
+                <option value="all">Todos</option>
+                <option value="active">Activos</option>
+                <option value="inactive">Inactivos</option>
+              </select>
             </div>
             <div class="table-wrapper">
               <table>
@@ -638,6 +656,7 @@
                 <tbody id="employees-table"></tbody>
               </table>
             </div>
+            <div id="employees-pagination"></div>
           </div>
 
           <!-- Employee Form Modal -->
@@ -724,6 +743,7 @@
                   <tbody id="vacation-requests-table"></tbody>
                 </table>
               </div>
+              <div id="vacation-requests-pagination"></div>
 
               <h3>Nueva solicitud</h3>
               <form id="vacation-request-form" class="grid-form">
@@ -809,6 +829,7 @@
                 <tbody id="users-table"></tbody>
               </table>
             </div>
+            <div id="users-pagination"></div>
           </div>
         </section>
       </section>
