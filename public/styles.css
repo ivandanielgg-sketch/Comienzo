@@ -557,4 +557,111 @@ button.active {
   .topbar-actions {
     justify-content: stretch;
   }
+
+  .pagination-controls {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .pagination-buttons {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+}
+
+.pagination-info {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pagination-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination-buttons button {
+  padding: 7px 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: 8px;
+  background: #e9eefb;
+  color: var(--primary-dark);
+  border: none;
+  cursor: pointer;
+}
+
+.pagination-buttons button:hover:not(:disabled) {
+  background: #d9e4fb;
+}
+
+.pagination-buttons button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pagination-current {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text);
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.pagination-limit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination-limit label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pagination-limit select {
+  width: auto;
+  min-width: 60px;
+  padding: 6px 8px;
+  font-size: 0.82rem;
+  border-radius: 8px;
+}
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.search-bar input[type="text"] {
+  max-width: 300px;
+  padding: 8px 12px;
+  font-size: 0.88rem;
+}
+
+.search-bar select {
+  width: auto;
+  min-width: 120px;
+  padding: 8px 12px;
+  font-size: 0.88rem;
 }
