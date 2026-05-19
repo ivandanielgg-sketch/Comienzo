@@ -131,4 +131,5 @@ module.exports = {
   calculateProjectPaidAmount,
   calculateProjectStatus,
   calculatePaymentUnallocated,
+  roundMoney,
 };
