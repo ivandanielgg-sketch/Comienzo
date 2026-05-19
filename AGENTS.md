@@ -16,6 +16,7 @@ This is a Node.js/Express project management application ("Control de Proyectos"
 
 - The SQLite database (`data/app.db`) is auto-created on first server start with all migrations and a default admin user (`admin` / `admin123`).
 - Sessions are stored in SQLite (no Redis/Memcached needed).
+- `better-sqlite3` compiles a native C addon during `npm install`; build tools (`gcc`, `make`, `python3`) must be available in the environment.
 - The frontend is vanilla HTML/CSS/JS served statically from `public/`—no build step required.
 - The test suite uses Node's built-in test runner (`node --test`); there is no lint command configured in `package.json`.
 - The API field names use snake_case (e.g. `quote_number`, `client_name`, `purchase_order_not_applicable`).
