@@ -38,115 +38,290 @@
             <p class="eyebrow">Panel administrativo</p>
             <h1>Proyectos</h1>
           </div>
-          <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
+          <div class="topbar-actions">
+            <button id="projects-tab" class="secondary active" type="button">Proyectos</button>
+            <button id="closed-projects-tab" class="secondary" type="button">Proyectos Cerrados</button>
+            <button id="reports-tab" class="secondary" type="button">Reportes</button>
+            <button id="vacations-tab" class="secondary hidden" type="button">Vacaciones</button>
+            <button id="users-tab" class="secondary" type="button">Usuarios</button>
+            <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
+          </div>
         </header>
 
-        <section class="cards">
-          <article>
-            <span>Proyectos</span>
-            <strong id="stat-projects">0</strong>
-          </article>
-          <article>
-            <span>Total cobrado</span>
-            <strong id="stat-charged">$0.00</strong>
-          </article>
-          <article>
-            <span>Gastado</span>
-            <strong id="stat-spent">$0.00</strong>
-          </article>
-          <article>
-            <span>Pendiente de cobro</span>
-            <strong id="stat-pending">$0.00</strong>
-          </article>
-        </section>
-
-        <section class="layout">
-          <div class="panel">
+        <section id="projects-view">
+          <section class="panel exchange-panel">
             <div class="panel-header">
               <div>
-                <h2 id="project-form-title">Nuevo proyecto</h2>
-                <p class="muted">El ID se genera automaticamente por consecutivo.</p>
+                <p class="eyebrow">Monedas</p>
+                <h2>Tipo de cambio a MXN</h2>
+                <p class="muted">Los listados y calculos se muestran siempre en pesos mexicanos.</p>
               </div>
-              <button id="new-project-button" class="secondary" type="button">Limpiar</button>
+              <p class="muted">Ultima actualizacion: <strong id="exchange-updated-at">Sin cambios</strong></p>
+            </div>
+            <form id="exchange-rate-form" class="exchange-form">
+              <label>
+                MXN
+                <input value="1.00" disabled />
+              </label>
+              <label>
+                USD a MXN
+                <input name="USD" type="text" inputmode="decimal" placeholder="17.12" required />
+              </label>
+              <label>
+                EUR a MXN
+                <input name="EUR" type="text" inputmode="decimal" placeholder="18.50" required />
+              </label>
+              <button type="submit">Actualizar tipo de cambio</button>
+              <p id="exchange-message" class="message"></p>
+            </form>
+          </section>
+
+          <section class="cards">
+            <article>
+              <span>Proyectos</span>
+              <strong id="stat-projects">0</strong>
+            </article>
+            <article>
+              <span>Total cobrado</span>
+              <strong id="stat-charged">$0.00</strong>
+            </article>
+            <article>
+              <span>Gastado</span>
+              <strong id="stat-spent">$0.00</strong>
+            </article>
+            <article>
+              <span>Pendiente de cobro</span>
+              <strong id="stat-pending">$0.00</strong>
+            </article>
+          </section>
+
+          <section class="layout">
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2 id="project-form-title">Nuevo proyecto</h2>
+                  <p class="muted">El ID se genera automaticamente por consecutivo.</p>
+                </div>
+                <button id="new-project-button" class="secondary" type="button">Limpiar</button>
+              </div>
+
+              <form id="project-form" class="grid-form">
+                <input type="hidden" name="id" />
+                <label>
+                  Numero de cotizacion
+                  <input name="quote_number" required />
+                </label>
+                <label>
+                  Numero de pedido
+                  <input name="order_number" required />
+                </label>
+                <label>
+                  Numero de orden de compra
+                  <input name="purchase_order_number" required />
+                </label>
+                <label class="checkbox-row">
+                  <input name="purchase_order_not_applicable" type="checkbox" />
+                  No Aplica
+                </label>
+                <label>
+                  Vendedor que cerro la venta
+                  <input name="seller" required />
+                </label>
+                <label>
+                  Nombre del cliente
+                  <input name="client_name" required />
+                </label>
+                <label class="full">
+                  Descripcion del proyecto
+                  <textarea name="project_description" rows="3" placeholder="Describe de que trata el proyecto" required></textarea>
+                </label>
+                <label>
+                  Margen esperado de utilidad (%)
+                  <input name="expected_margin" type="number" min="0" max="100" step="0.01" value="0" required />
+                </label>
+                <label class="full money-field">
+                  Total facturado con IVA
+                  <div class="money-row">
+                    <input name="total_invoiced" type="text" inputmode="decimal" value="0" required />
+                    <select name="total_invoiced_currency" required>
+                      <option>MXN</option>
+                      <option>USD</option>
+                      <option>EUR</option>
+                    </select>
+                  </div>
+                </label>
+                <label>
+                  Avance del proyecto (%)
+                  <input name="progress_percent" type="number" min="0" max="100" step="0.01" value="0" required />
+                </label>
+                <label>
+                  Tecnico responsable
+                  <input name="technician_name" required />
+                </label>
+                <label>
+                  Fecha prometida de entrega
+                  <input name="promised_delivery_date" type="date" required />
+                </label>
+                <label>
+                  Estado
+                  <select name="status" required>
+                    <option>Pendiente</option>
+                    <option>En Proceso</option>
+                    <option>Terminado</option>
+                  </select>
+                </label>
+                <label>
+                  Riesgo
+                  <select name="risk" required>
+                    <option>Alto</option>
+                    <option>Medio</option>
+                    <option>Bajo</option>
+                  </select>
+                </label>
+                <label class="full">
+                  Observaciones
+                  <textarea name="observations" rows="3"></textarea>
+                </label>
+                <button type="submit">Guardar proyecto</button>
+                <p id="project-message" class="message"></p>
+              </form>
             </div>
 
-            <form id="project-form" class="grid-form">
-              <input type="hidden" name="id" />
-              <label>
-                Numero de cotizacion
-                <input name="quote_number" required />
-              </label>
-              <label>
-                Numero de pedido
-                <input name="order_number" required />
-              </label>
-              <label>
-                Numero de orden de compra
-                <input name="purchase_order_number" required />
-              </label>
-              <label class="checkbox-row">
-                <input name="purchase_order_not_applicable" type="checkbox" />
-                No Aplica
-              </label>
-              <label>
-                Vendedor que cerro la venta
-                <input name="seller" required />
-              </label>
-              <label>
-                Nombre del cliente
-                <input name="client_name" required />
-              </label>
-              <label>
-                Margen esperado de utilidad (%)
-                <input name="expected_margin" type="number" min="0" max="100" step="0.01" value="0" required />
-              </label>
-              <label>
-                Total facturado con IVA
-                <input name="total_invoiced" type="number" min="0" step="0.01" value="0" required />
-              </label>
-              <label>
-                Avance del proyecto (%)
-                <input name="progress_percent" type="number" min="0" max="100" step="0.01" value="0" required />
-              </label>
-              <label>
-                Tecnico responsable
-                <input name="technician_name" required />
-              </label>
-              <label>
-                Fecha prometida de entrega
-                <input name="promised_delivery_date" type="date" required />
-              </label>
-              <label>
-                Estado
-                <select name="status" required>
-                  <option>Pendiente</option>
-                  <option>En Proceso</option>
-                  <option>Terminado</option>
-                </select>
-              </label>
-              <label>
-                Riesgo
-                <select name="risk" required>
-                  <option>Alto</option>
-                  <option>Medio</option>
-                  <option>Bajo</option>
-                </select>
-              </label>
-              <label class="full">
-                Observaciones
-                <textarea name="observations" rows="3"></textarea>
-              </label>
-              <button type="submit">Guardar proyecto</button>
-              <p id="project-message" class="message"></p>
-            </form>
-          </div>
+            <div class="panel">
+              <div class="panel-header">
+                <div>
+                  <h2>Listado</h2>
+                  <p class="muted">Selecciona un proyecto para agregar pagos, compras, gastos o salarios.</p>
+                </div>
+                <button id="export-projects-button" class="secondary" type="button">Exportar a Excel</button>
+              </div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Cotizacion</th>
+                      <th>Cliente</th>
+                      <th>Estado</th>
+                      <th>Riesgo</th>
+                      <th>Cobrado</th>
+                      <th>Gastado</th>
+                      <th>Pendiente</th>
+                      <th>Margen final</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="projects-table"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
 
+          <section id="detail-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Proyecto seleccionado</p>
+                <h2 id="detail-title"></h2>
+                <p id="detail-subtitle" class="muted"></p>
+                <p id="detail-description" class="project-description"></p>
+              </div>
+            </div>
+
+            <div class="detail-grid">
+              <article><span>Orden de compra</span><strong id="detail-po"></strong></article>
+              <article><span>Total facturado</span><strong id="detail-invoiced"></strong></article>
+              <article><span>Pendiente de cobro</span><strong id="detail-pending"></strong></article>
+              <article><span>Avance</span><strong id="detail-progress"></strong></article>
+            </div>
+
+            <div class="detail-reports-section" style="margin-bottom:16px;">
+              <h3>Reportes generados</h3>
+              <ul id="detail-reports-list" class="entry-list"></ul>
+              <button class="secondary" id="detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
+            </div>
+
+            <div class="layout two-columns">
+              <div>
+                <h3>Agregar pago</h3>
+                <form id="payment-form" class="stack">
+                  <label>
+                    Cantidad cobrada
+                    <div class="money-row">
+                      <input name="amount" type="text" inputmode="decimal" required />
+                      <select name="currency" required>
+                        <option>MXN</option>
+                        <option>USD</option>
+                        <option>EUR</option>
+                      </select>
+                    </div>
+                  </label>
+                  <label>
+                    Fecha de pago
+                    <input name="payment_date" type="date" required />
+                  </label>
+                  <label>
+                    Nota
+                    <input name="notes" />
+                  </label>
+                  <button type="submit">Registrar pago</button>
+                </form>
+                <ul id="payments-list" class="entry-list"></ul>
+              </div>
+
+              <div>
+                <h3>Agregar costo</h3>
+                <form id="cost-form" class="stack">
+                  <label>
+                    Tipo
+                    <select name="category" required>
+                      <option>Compra</option>
+                      <option>Gasolina</option>
+                      <option>Casetas</option>
+                      <option>Viaticos</option>
+                      <option>Sueldo</option>
+                      <option>Materiales</option>
+                      <option>Hospedaje</option>
+                      <option>Otros</option>
+                    </select>
+                  </label>
+                  <label>
+                    Descripcion
+                    <input name="description" required />
+                  </label>
+                  <label>
+                    Importe
+                    <div class="money-row">
+                      <input name="amount" type="text" inputmode="decimal" required />
+                      <select name="currency" required>
+                        <option>MXN</option>
+                        <option>USD</option>
+                        <option>EUR</option>
+                      </select>
+                    </div>
+                  </label>
+                  <label>
+                    Fecha
+                    <input name="cost_date" type="date" required />
+                  </label>
+                  <button type="submit">Registrar costo</button>
+                </form>
+                <ul id="costs-list" class="entry-list"></ul>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="closed-projects-view" class="hidden">
           <div class="panel">
             <div class="panel-header">
               <div>
-                <h2>Listado</h2>
-                <p class="muted">Selecciona un proyecto para agregar pagos, compras, gastos o salarios.</p>
+                <h2>Proyectos Cerrados</h2>
+                <p class="muted">
+                  Conserva el historial de proyectos cerrados con pagos y gastos.
+                  El borrado definitivo requiere contrasena del admin.
+                </p>
               </div>
+              <button id="export-closed-projects-button" class="secondary" type="button">Exportar a Excel</button>
             </div>
             <div class="table-wrapper">
               <table>
@@ -155,84 +330,484 @@
                     <th>ID</th>
                     <th>Cotizacion</th>
                     <th>Cliente</th>
-                    <th>Estado</th>
-                    <th>Riesgo</th>
-                    <th>Cobrado</th>
-                    <th>Gastado</th>
-                    <th>Pendiente</th>
+                    <th>Cerrado</th>
+                    <th>Facturado MXN</th>
+                    <th>Cobrado MXN</th>
+                    <th>Gastado MXN</th>
                     <th>Margen final</th>
                     <th></th>
                   </tr>
                 </thead>
-                <tbody id="projects-table"></tbody>
+                <tbody id="closed-projects-table"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <section id="closed-detail-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Historial cerrado</p>
+                <h2 id="closed-detail-title"></h2>
+                <p id="closed-detail-subtitle" class="muted"></p>
+                <p id="closed-detail-description" class="project-description"></p>
+              </div>
+            </div>
+
+            <div class="detail-reports-section" style="margin-bottom:16px;">
+              <h3>Reportes generados</h3>
+              <ul id="closed-detail-reports-list" class="entry-list"></ul>
+              <button class="secondary" id="closed-detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
+            </div>
+
+            <div class="layout two-columns">
+              <div>
+                <h3>Pagos realizados</h3>
+                <ul id="closed-payments-list" class="entry-list"></ul>
+              </div>
+              <div>
+                <h3>Gastos registrados</h3>
+                <ul id="closed-costs-list" class="entry-list"></ul>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="reports-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Modulo de Reportes</p>
+                <h2>REPORTES</h2>
+                <p class="muted">Genera reportes tecnicos de arranque de caldera ligados a proyectos.</p>
+              </div>
+            </div>
+
+            <div class="reports-filters" style="margin-bottom:16px;">
+              <div class="grid-form" style="gap:10px;">
+                <label>
+                  Buscar
+                  <input id="report-search" type="text" placeholder="Cliente, proyecto, folio..." />
+                </label>
+                <label>
+                  Estatus
+                  <select id="report-status-filter">
+                    <option value="">Todos</option>
+                    <option value="Pendiente">Pendiente</option>
+                    <option value="En Proceso">En Proceso</option>
+                    <option value="Terminado">Terminado</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Cotizacion</th>
+                    <th>Cliente</th>
+                    <th>Proyecto</th>
+                    <th>Estatus</th>
+                    <th>Reportes</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="reports-projects-table"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="report-form-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">REVRAM</p>
+                <h2 id="report-form-title">FORMATO DE ARRANQUE DE CALDERA</h2>
+                <p id="report-form-subtitle" class="muted"></p>
+              </div>
+              <div class="row-actions">
+                <button id="report-back-button" class="secondary" type="button">Volver a lista</button>
+              </div>
+            </div>
+
+            <form id="report-form" class="grid-form">
+              <input type="hidden" name="id" />
+              <input type="hidden" name="project_id" />
+
+              <label>
+                Folio de reporte
+                <input name="report_folio" placeholder="Se genera automaticamente si se deja vacio" />
+              </label>
+              <label>
+                Fecha del reporte
+                <input name="report_date" type="date" required />
+              </label>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Datos generales</h3>
+              <label>
+                Cliente *
+                <input name="client_name" required />
+              </label>
+              <label>
+                Domicilio
+                <input name="client_address" />
+              </label>
+              <label>
+                Nombre de servicio *
+                <input name="service_name" required />
+              </label>
+              <label>
+                Tecnicos asignados
+                <input name="assigned_technicians" />
+              </label>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Datos tecnicos</h3>
+              <label>
+                Modelo de quemador
+                <input name="burner_model" />
+              </label>
+              <label>
+                Modelo y No. de serie del equipo
+                <input name="equipment_model_serial" />
+              </label>
+              <label>
+                Modelo de bombas y motores
+                <input name="pumps_motors_model" />
+              </label>
+              <label>
+                Combustible
+                <input name="fuel" />
+              </label>
+              <label>
+                Voltaje
+                <input name="voltage" />
+              </label>
+              <label>
+                Presion de gas (inH2O)
+                <input name="gas_pressure_inh2o" />
+              </label>
+              <label>
+                Presion de combustible liquido (PSI)
+                <input name="liquid_fuel_pressure_psi" />
+              </label>
+              <label>
+                Presion de trabajo
+                <input name="working_pressure" />
+              </label>
+              <label>
+                Amperaje de bombas
+                <input name="pump_amperage" />
+              </label>
+              <label>
+                Amperaje de ventilador
+                <input name="fan_amperage" />
+              </label>
+              <label>
+                Temp. tanque de condensados (°C)
+                <input name="condensate_tank_temp_c" />
+              </label>
+              <label>
+                Temp. salida equipo en operacion (°C)
+                <input name="operating_output_temp_c" />
+              </label>
+              <label>
+                Temp. salida de gases (°C)
+                <input name="flue_gas_temp_c" />
+              </label>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Pruebas de seguridad</h3>
+              <div class="full safety-checks">
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_alarmas" /> Alarmas sonoras</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_alta_presion" /> Alta presion de aceite</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_paro_arranque" /> Paro y arranque</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_paro_emergencia" /> Paro de emergencia</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_switch_aire" /> Prueba en switch de presion de aire</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_cambio_fuego" /> Cambio de alto y bajo fuego</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_baja_presion" /> Baja presion de aceite</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_switch_gas" /> Prueba en switch de presion de gas</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_otras" /> Otras</label>
+                <label id="safety-otras-field" class="hidden" style="margin-top:4px;">
+                  Especifique
+                  <input name="safety_otras_text" />
+                </label>
+              </div>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Tabla de emisiones</h3>
+              <div class="full table-wrapper">
+                <table class="emissions-table">
+                  <thead>
+                    <tr>
+                      <th>Parametro</th>
+                      <th>Flama baja</th>
+                      <th>Unidad</th>
+                      <th>Flama alta</th>
+                      <th>Unidad</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>O2</td><td><input name="em_o2_low" /></td><td>%</td><td><input name="em_o2_high" /></td><td>%</td></tr>
+                    <tr><td>CO2</td><td><input name="em_co2_low" /></td><td>%</td><td><input name="em_co2_high" /></td><td>%</td></tr>
+                    <tr><td>CO</td><td><input name="em_co_low" /></td><td>PPM</td><td><input name="em_co_high" /></td><td>PPM</td></tr>
+                    <tr><td>T. Gas</td><td><input name="em_tgas_low" /></td><td>°C</td><td><input name="em_tgas_high" /></td><td>°C</td></tr>
+                    <tr><td>T. Aire</td><td><input name="em_taire_low" /></td><td>°C</td><td><input name="em_taire_high" /></td><td>°C</td></tr>
+                    <tr><td>Perdidas</td><td><input name="em_perdidas_low" /></td><td>%</td><td><input name="em_perdidas_high" /></td><td>%</td></tr>
+                    <tr><td>Eficiencia</td><td><input name="em_eficiencia_low" /></td><td>%</td><td><input name="em_eficiencia_high" /></td><td>%</td></tr>
+                    <tr><td>Lambda</td><td><input name="em_lambda_low" /></td><td></td><td><input name="em_lambda_high" /></td><td></td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Comentarios</h3>
+              <label class="full">
+                <textarea name="comments" rows="4" placeholder="Comentarios adicionales sobre el servicio..."></textarea>
+              </label>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Firmas</h3>
+              <label>
+                Tecnico REVRAM - Nombre
+                <input name="technician_name" />
+              </label>
+              <label>
+                V.B. Encargado de planta - Nombre
+                <input name="plant_manager_name" />
+              </label>
+
+              <div class="row-actions full" style="margin-top:12px;">
+                <button type="submit">Guardar reporte</button>
+              </div>
+              <p id="report-message" class="message"></p>
+            </form>
+          </div>
+
+          <div id="report-list-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <h2 id="report-list-title">Reportes del proyecto</h2>
+                <p id="report-list-subtitle" class="muted"></p>
+              </div>
+              <div class="row-actions">
+                <button id="report-list-new" type="button">Nuevo reporte</button>
+                <button id="report-list-back" class="secondary" type="button">Volver a lista</button>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Folio</th>
+                    <th>Fecha</th>
+                    <th>Servicio</th>
+                    <th>Tecnico</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="report-list-table"></tbody>
               </table>
             </div>
           </div>
         </section>
 
-        <section id="detail-panel" class="panel hidden">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Proyecto seleccionado</p>
-              <h2 id="detail-title"></h2>
-              <p id="detail-subtitle" class="muted"></p>
+        <section id="vacations-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Modulo de Vacaciones</p>
+                <h2>Empleados</h2>
+                <p class="muted">Consulta y programa vacaciones conforme a la Ley Federal del Trabajo.</p>
+              </div>
+              <div class="row-actions">
+                <button id="new-employee-button" type="button">Agregar empleado</button>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>No. Empleado</th>
+                    <th>Nombre</th>
+                    <th>Fecha ingreso</th>
+                    <th>Antiguedad</th>
+                    <th>Estatus</th>
+                    <th>Dias generados acumulados</th>
+                    <th>Tomados</th>
+                    <th>Programados</th>
+                    <th>Disponibles</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="employees-table"></tbody>
+              </table>
             </div>
           </div>
 
-          <div class="detail-grid">
-            <article><span>Orden de compra</span><strong id="detail-po"></strong></article>
-            <article><span>Total facturado</span><strong id="detail-invoiced"></strong></article>
-            <article><span>Pendiente de cobro</span><strong id="detail-pending"></strong></article>
-            <article><span>Avance</span><strong id="detail-progress"></strong></article>
-          </div>
-
-          <div class="layout two-columns">
-            <div>
-              <h3>Agregar pago</h3>
-              <form id="payment-form" class="stack">
+          <!-- Employee Form Modal -->
+          <div id="employee-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2 id="employee-form-title">Agregar empleado</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="employee-form" class="grid-form">
+                <input type="hidden" name="id" />
                 <label>
-                  Cantidad cobrada
-                  <input name="amount" type="number" min="0.01" step="0.01" required />
+                  Numero de empleado
+                  <input name="employee_number" required />
                 </label>
                 <label>
-                  Fecha de pago
-                  <input name="payment_date" type="date" required />
+                  Nombre completo
+                  <input name="full_name" required />
                 </label>
                 <label>
-                  Nota
-                  <input name="notes" />
+                  Fecha de ingreso
+                  <input name="hire_date" type="date" required />
                 </label>
-                <button type="submit">Registrar pago</button>
+                <label>
+                  Departamento
+                  <input name="department" />
+                </label>
+                <label>
+                  Puesto
+                  <input name="position" />
+                </label>
+                <label>
+                  Jefe inmediato
+                  <input name="immediate_boss" />
+                </label>
+                <label class="checkbox-row">
+                  <input name="active" type="checkbox" checked />
+                  Empleado activo
+                </label>
+                <div id="termination-fields" class="hidden full">
+                  <label>
+                    Fecha de baja
+                    <input name="termination_date" type="date" />
+                  </label>
+                  <label>
+                    Motivo de baja (opcional)
+                    <input name="inactive_reason" />
+                  </label>
+                </div>
+                <button type="submit">Guardar empleado</button>
+                <p id="employee-message" class="message"></p>
               </form>
-              <ul id="payments-list" class="entry-list"></ul>
             </div>
+          </div>
 
-            <div>
-              <h3>Agregar compra, gasto o salario</h3>
-              <form id="cost-form" class="stack">
+          <!-- Vacation Requests Modal -->
+          <div id="vacation-modal" class="modal-overlay hidden">
+            <div class="modal-content panel modal-large">
+              <div class="panel-header">
+                <div>
+                  <h2 id="vacation-modal-title">Vacaciones programadas</h2>
+                  <p id="vacation-modal-subtitle" class="muted"></p>
+                </div>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+
+              <div class="detail-grid" id="vacation-employee-summary"></div>
+
+              <h3>Historial de solicitudes</h3>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha inicio</th>
+                      <th>Fecha fin</th>
+                      <th>Dias</th>
+                      <th>Ejercicio</th>
+                      <th>Estatus</th>
+                      <th>Notas</th>
+                      <th>Registrado</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="vacation-requests-table"></tbody>
+                </table>
+              </div>
+
+              <h3>Nueva solicitud</h3>
+              <form id="vacation-request-form" class="grid-form">
                 <label>
-                  Tipo
-                  <select name="category" required>
-                    <option>Compra</option>
-                    <option>Gasto</option>
-                    <option>Salario</option>
+                  Fecha inicial
+                  <input name="start_date" type="date" required />
+                </label>
+                <label>
+                  Fecha final
+                  <input name="end_date" type="date" required />
+                </label>
+                <label>
+                  Dias solicitados (automatico)
+                  <input name="requested_days_display" type="number" disabled />
+                </label>
+                <label>
+                  Estatus
+                  <select name="status" required>
+                    <option value="programada">Programada</option>
+                    <option value="tomada">Tomada</option>
                   </select>
                 </label>
-                <label>
-                  Descripcion
-                  <input name="description" required />
+                <label class="checkbox-row">
+                  <input name="include_vacation_bonus" type="checkbox" checked />
+                  Incluir prima vacacional
                 </label>
-                <label>
-                  Importe
-                  <input name="amount" type="number" min="0.01" step="0.01" required />
+                <label class="full">
+                  Notas
+                  <textarea name="notes" rows="2"></textarea>
                 </label>
-                <label>
-                  Fecha
-                  <input name="cost_date" type="date" required />
-                </label>
-                <button type="submit">Registrar costo</button>
+                <div class="row-actions full">
+                  <button type="submit">Guardar</button>
+                  <button type="button" id="save-and-print-vacation">Guardar y generar formato</button>
+                </div>
+                <p id="vacation-request-message" class="message"></p>
               </form>
-              <ul id="costs-list" class="entry-list"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="users-view" class="layout hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2 id="user-form-title">Nuevo usuario</h2>
+                <p class="muted">La contrasena es obligatoria al crear y opcional al modificar.</p>
+              </div>
+              <button id="new-user-button" class="secondary" type="button">Limpiar</button>
+            </div>
+
+            <form id="user-form" class="stack">
+              <input type="hidden" name="id" />
+              <label>
+                Usuario
+                <input name="username" autocomplete="off" required />
+              </label>
+              <label>
+                Contrasena
+                <input name="password" type="password" minlength="6" autocomplete="new-password" />
+              </label>
+              <button type="submit">Guardar usuario</button>
+              <p id="user-message" class="message"></p>
+            </form>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Usuarios</h2>
+                <p class="muted">Selecciona un usuario para modificar su nombre o contrasena.</p>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Usuario</th>
+                    <th>Creado</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="users-table"></tbody>
+              </table>
             </div>
           </div>
         </section>
