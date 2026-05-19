@@ -102,6 +102,41 @@ function migrate(database) {
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS project_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      report_folio TEXT NOT NULL UNIQUE,
+      client_name TEXT NOT NULL,
+      client_address TEXT,
+      service_name TEXT NOT NULL,
+      report_date TEXT NOT NULL,
+      assigned_technicians TEXT,
+      burner_model TEXT,
+      equipment_model_serial TEXT,
+      pumps_motors_model TEXT,
+      fuel TEXT,
+      voltage TEXT,
+      gas_pressure_inh2o TEXT,
+      liquid_fuel_pressure_psi TEXT,
+      working_pressure TEXT,
+      pump_amperage TEXT,
+      fan_amperage TEXT,
+      condensate_tank_temp_c TEXT,
+      operating_output_temp_c TEXT,
+      flue_gas_temp_c TEXT,
+      safety_tests TEXT,
+      comments TEXT,
+      emissions_low_fire TEXT,
+      emissions_high_fire TEXT,
+      technician_name TEXT,
+      plant_manager_name TEXT,
+      created_by TEXT,
+      updated_by TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS employees (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       employee_number TEXT NOT NULL UNIQUE,

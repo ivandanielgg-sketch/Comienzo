@@ -156,14 +156,17 @@ function switchView(viewName) {
   const showingClosedProjects = viewName === 'closed-projects';
   const showingUsers = viewName === 'users';
   const showingVacations = viewName === 'vacations';
+  const showingReports = viewName === 'reports';
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
   if (vacationsView) vacationsView.classList.toggle('hidden', !showingVacations);
+  if (reportsView) reportsView.classList.toggle('hidden', !showingReports);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
   if (vacationsTab) vacationsTab.classList.toggle('active', showingVacations);
+  if (reportsTab) reportsTab.classList.toggle('active', showingReports);
 }
 
 async function requestAdminAuthorization(message = 'Ingresa la contrasena del admin:') {
@@ -635,6 +638,12 @@ function selectClosedProject(projectId) {
     `Cotizacion ${project.quote_number} | Cerrado ${project.closed_at || ''}`;
   document.querySelector('#closed-detail-description').textContent =
     project.project_description || '';
+
+  const cdrl = document.querySelector('#closed-detail-reports-list');
+  if (cdrl && typeof renderDetailReports === 'function') {
+    renderDetailReports(project.id, cdrl);
+  }
+
   closedPaymentsList.innerHTML = renderEntries(
     project.payments,
     (payment) => `
@@ -700,6 +709,11 @@ function renderDetail(project) {
   );
   document.querySelector('#detail-pending').textContent = money.format(project.pending_collection);
   document.querySelector('#detail-progress').textContent = formatPercent(project.progress_percent);
+
+  const drl = document.querySelector('#detail-reports-list');
+  if (drl && typeof renderDetailReports === 'function') {
+    renderDetailReports(project.id, drl);
+  }
 
   paymentsList.innerHTML = renderEntries(
     project.payments,
@@ -1387,6 +1401,457 @@ vacationsTab.addEventListener('click', async () => {
 });
 
 // ===================== END VACATION MODULE =====================
+
+// ===================== REPORTS MODULE =====================
+
+const reportsTab = document.querySelector('#reports-tab');
+const reportsView = document.querySelector('#reports-view');
+const reportsProjectsTable = document.querySelector('#reports-projects-table');
+const reportFormPanel = document.querySelector('#report-form-panel');
+const reportForm = document.querySelector('#report-form');
+const reportFormTitle = document.querySelector('#report-form-title');
+const reportFormSubtitle = document.querySelector('#report-form-subtitle');
+const reportMessage = document.querySelector('#report-message');
+const reportBackButton = document.querySelector('#report-back-button');
+const reportListPanel = document.querySelector('#report-list-panel');
+const reportListTitle = document.querySelector('#report-list-title');
+const reportListSubtitle = document.querySelector('#report-list-subtitle');
+const reportListTable = document.querySelector('#report-list-table');
+const reportListNew = document.querySelector('#report-list-new');
+const reportListBack = document.querySelector('#report-list-back');
+const reportSearch = document.querySelector('#report-search');
+const reportStatusFilter = document.querySelector('#report-status-filter');
+const detailReportsList = document.querySelector('#detail-reports-list');
+const detailNewReport = document.querySelector('#detail-new-report');
+const closedDetailReportsList = document.querySelector('#closed-detail-reports-list');
+const closedDetailNewReport = document.querySelector('#closed-detail-new-report');
+const safetyOtrasCheckbox = document.querySelector('[name="safety_otras"]');
+const safetyOtrasField = document.querySelector('#safety-otras-field');
+
+state.reportsAllProjects = [];
+state.reportsProjectReports = [];
+state.currentReportProjectId = null;
+
+if (safetyOtrasCheckbox) {
+  safetyOtrasCheckbox.addEventListener('change', () => {
+    safetyOtrasField.classList.toggle('hidden', !safetyOtrasCheckbox.checked);
+  });
+}
+
+async function loadAllProjectsForReports() {
+  const [active, closed] = await Promise.all([
+    api('/api/projects'),
+    api('/api/closed-projects'),
+  ]);
+  state.reportsAllProjects = [...active, ...closed];
+  renderReportsProjectsTable();
+}
+
+function filterReportsProjects() {
+  const search = (reportSearch.value || '').toLowerCase();
+  const statusFilter = reportStatusFilter.value;
+  return state.reportsAllProjects.filter((p) => {
+    if (statusFilter && p.status !== statusFilter) return false;
+    if (search) {
+      const haystack = [
+        p.client_name, p.project_description, p.quote_number,
+        p.order_number, String(p.id),
+      ].join(' ').toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
+function renderReportsProjectsTable() {
+  const projects = filterReportsProjects();
+
+  if (!projects.length) {
+    reportsProjectsTable.innerHTML = '<tr><td colspan="7" class="muted">No hay proyectos disponibles para generar reportes.</td></tr>';
+    return;
+  }
+
+  const reportCounts = {};
+  state.reportsAllProjects.forEach((p) => { reportCounts[p.id] = 0; });
+
+  api('/api/reports').then((reports) => {
+    reports.forEach((r) => {
+      reportCounts[r.project_id] = (reportCounts[r.project_id] || 0) + 1;
+    });
+    renderProjectRows(projects, reportCounts);
+  }).catch(() => renderProjectRows(projects, reportCounts));
+}
+
+function renderProjectRows(projects, reportCounts) {
+  reportsProjectsTable.innerHTML = projects.map((p) => `
+    <tr>
+      <td>${p.id}</td>
+      <td>${escapeHtml(p.quote_number)}</td>
+      <td>${escapeHtml(p.client_name)}</td>
+      <td>${escapeHtml(p.project_description || '')}</td>
+      <td><span class="badge status">${escapeHtml(p.status)}</span></td>
+      <td>${reportCounts[p.id] || 0}</td>
+      <td>
+        <div class="row-actions">
+          <button class="secondary" data-action="report-new" data-id="${p.id}" type="button">Generar reporte</button>
+          <button class="secondary" data-action="report-list" data-id="${p.id}" type="button">Ver reportes</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function showReportsMainList() {
+  reportFormPanel.classList.add('hidden');
+  reportListPanel.classList.add('hidden');
+  reportsProjectsTable.closest('.panel').classList.remove('hidden');
+}
+
+function openReportForm(projectId, reportData) {
+  const project = state.reportsAllProjects.find((p) => p.id === Number(projectId));
+  if (!project && !reportData) return;
+
+  state.currentReportProjectId = Number(projectId);
+  reportsProjectsTable.closest('.panel').classList.add('hidden');
+  reportListPanel.classList.add('hidden');
+  reportFormPanel.classList.remove('hidden');
+
+  reportForm.reset();
+  setMessage(reportMessage, '');
+
+  if (reportData) {
+    reportFormTitle.textContent = 'Editar reporte';
+    reportFormSubtitle.textContent = `Folio: ${reportData.report_folio}`;
+    reportForm.elements.id.value = reportData.id;
+    reportForm.elements.project_id.value = reportData.project_id;
+    reportForm.elements.report_folio.value = reportData.report_folio || '';
+    reportForm.elements.report_date.value = reportData.report_date || '';
+    reportForm.elements.client_name.value = reportData.client_name || '';
+    reportForm.elements.client_address.value = reportData.client_address || '';
+    reportForm.elements.service_name.value = reportData.service_name || '';
+    reportForm.elements.assigned_technicians.value = reportData.assigned_technicians || '';
+    reportForm.elements.burner_model.value = reportData.burner_model || '';
+    reportForm.elements.equipment_model_serial.value = reportData.equipment_model_serial || '';
+    reportForm.elements.pumps_motors_model.value = reportData.pumps_motors_model || '';
+    reportForm.elements.fuel.value = reportData.fuel || '';
+    reportForm.elements.voltage.value = reportData.voltage || '';
+    reportForm.elements.gas_pressure_inh2o.value = reportData.gas_pressure_inh2o || '';
+    reportForm.elements.liquid_fuel_pressure_psi.value = reportData.liquid_fuel_pressure_psi || '';
+    reportForm.elements.working_pressure.value = reportData.working_pressure || '';
+    reportForm.elements.pump_amperage.value = reportData.pump_amperage || '';
+    reportForm.elements.fan_amperage.value = reportData.fan_amperage || '';
+    reportForm.elements.condensate_tank_temp_c.value = reportData.condensate_tank_temp_c || '';
+    reportForm.elements.operating_output_temp_c.value = reportData.operating_output_temp_c || '';
+    reportForm.elements.flue_gas_temp_c.value = reportData.flue_gas_temp_c || '';
+    reportForm.elements.comments.value = reportData.comments || '';
+    reportForm.elements.technician_name.value = reportData.technician_name || '';
+    reportForm.elements.plant_manager_name.value = reportData.plant_manager_name || '';
+
+    const safety = reportData.safety_tests ? JSON.parse(reportData.safety_tests) : {};
+    reportForm.elements.safety_alarmas.checked = Boolean(safety.alarmas);
+    reportForm.elements.safety_alta_presion.checked = Boolean(safety.alta_presion);
+    reportForm.elements.safety_paro_arranque.checked = Boolean(safety.paro_arranque);
+    reportForm.elements.safety_paro_emergencia.checked = Boolean(safety.paro_emergencia);
+    reportForm.elements.safety_switch_aire.checked = Boolean(safety.switch_aire);
+    reportForm.elements.safety_cambio_fuego.checked = Boolean(safety.cambio_fuego);
+    reportForm.elements.safety_baja_presion.checked = Boolean(safety.baja_presion);
+    reportForm.elements.safety_switch_gas.checked = Boolean(safety.switch_gas);
+    reportForm.elements.safety_otras.checked = Boolean(safety.otras);
+    if (safety.otras) {
+      safetyOtrasField.classList.remove('hidden');
+      reportForm.elements.safety_otras_text.value = safety.otras_text || '';
+    }
+
+    const emLow = reportData.emissions_low_fire ? JSON.parse(reportData.emissions_low_fire) : {};
+    const emHigh = reportData.emissions_high_fire ? JSON.parse(reportData.emissions_high_fire) : {};
+    const emKeys = ['o2', 'co2', 'co', 'tgas', 'taire', 'perdidas', 'eficiencia', 'lambda'];
+    emKeys.forEach((k) => {
+      if (reportForm.elements['em_' + k + '_low']) reportForm.elements['em_' + k + '_low'].value = emLow[k] || '';
+      if (reportForm.elements['em_' + k + '_high']) reportForm.elements['em_' + k + '_high'].value = emHigh[k] || '';
+    });
+  } else {
+    reportFormTitle.textContent = 'FORMATO DE ARRANQUE DE CALDERA';
+    reportFormSubtitle.textContent = `Proyecto #${project.id} - ${project.client_name}`;
+    reportForm.elements.id.value = '';
+    reportForm.elements.project_id.value = project.id;
+    reportForm.elements.report_date.value = today();
+    reportForm.elements.client_name.value = project.client_name || '';
+    reportForm.elements.service_name.value = project.project_description || '';
+    reportForm.elements.assigned_technicians.value = project.technician_name || '';
+  }
+}
+
+function collectReportPayload() {
+  const safetyTests = {
+    alarmas: reportForm.elements.safety_alarmas.checked,
+    alta_presion: reportForm.elements.safety_alta_presion.checked,
+    paro_arranque: reportForm.elements.safety_paro_arranque.checked,
+    paro_emergencia: reportForm.elements.safety_paro_emergencia.checked,
+    switch_aire: reportForm.elements.safety_switch_aire.checked,
+    cambio_fuego: reportForm.elements.safety_cambio_fuego.checked,
+    baja_presion: reportForm.elements.safety_baja_presion.checked,
+    switch_gas: reportForm.elements.safety_switch_gas.checked,
+    otras: reportForm.elements.safety_otras.checked,
+    otras_text: reportForm.elements.safety_otras_text ? reportForm.elements.safety_otras_text.value : '',
+  };
+
+  const emKeys = ['o2', 'co2', 'co', 'tgas', 'taire', 'perdidas', 'eficiencia', 'lambda'];
+  const emLow = {};
+  const emHigh = {};
+  emKeys.forEach((k) => {
+    emLow[k] = (reportForm.elements['em_' + k + '_low'] || {}).value || '';
+    emHigh[k] = (reportForm.elements['em_' + k + '_high'] || {}).value || '';
+  });
+
+  return {
+    project_id: Number(reportForm.elements.project_id.value),
+    report_folio: reportForm.elements.report_folio.value || '',
+    report_date: reportForm.elements.report_date.value,
+    client_name: reportForm.elements.client_name.value,
+    client_address: reportForm.elements.client_address.value,
+    service_name: reportForm.elements.service_name.value,
+    assigned_technicians: reportForm.elements.assigned_technicians.value,
+    burner_model: reportForm.elements.burner_model.value,
+    equipment_model_serial: reportForm.elements.equipment_model_serial.value,
+    pumps_motors_model: reportForm.elements.pumps_motors_model.value,
+    fuel: reportForm.elements.fuel.value,
+    voltage: reportForm.elements.voltage.value,
+    gas_pressure_inh2o: reportForm.elements.gas_pressure_inh2o.value,
+    liquid_fuel_pressure_psi: reportForm.elements.liquid_fuel_pressure_psi.value,
+    working_pressure: reportForm.elements.working_pressure.value,
+    pump_amperage: reportForm.elements.pump_amperage.value,
+    fan_amperage: reportForm.elements.fan_amperage.value,
+    condensate_tank_temp_c: reportForm.elements.condensate_tank_temp_c.value,
+    operating_output_temp_c: reportForm.elements.operating_output_temp_c.value,
+    flue_gas_temp_c: reportForm.elements.flue_gas_temp_c.value,
+    safety_tests: safetyTests,
+    comments: reportForm.elements.comments.value,
+    emissions_low_fire: emLow,
+    emissions_high_fire: emHigh,
+    technician_name: reportForm.elements.technician_name.value,
+    plant_manager_name: reportForm.elements.plant_manager_name.value,
+  };
+}
+
+async function openReportListForProject(projectId) {
+  const project = state.reportsAllProjects.find((p) => p.id === Number(projectId));
+  if (!project) return;
+
+  state.currentReportProjectId = Number(projectId);
+  reportsProjectsTable.closest('.panel').classList.add('hidden');
+  reportFormPanel.classList.add('hidden');
+  reportListPanel.classList.remove('hidden');
+
+  reportListTitle.textContent = `Reportes - Proyecto #${project.id}`;
+  reportListSubtitle.textContent = `${project.client_name} | ${project.project_description || ''}`;
+
+  try {
+    const reports = await api('/api/projects/' + projectId + '/reports');
+    state.reportsProjectReports = reports;
+    renderReportList(reports);
+  } catch (error) {
+    reportListTable.innerHTML = '<tr><td colspan="5" class="muted">Error al cargar reportes.</td></tr>';
+  }
+}
+
+function renderReportList(reports) {
+  if (!reports.length) {
+    reportListTable.innerHTML = '<tr><td colspan="5" class="muted">Este proyecto aun no tiene reportes generados.</td></tr>';
+    return;
+  }
+
+  reportListTable.innerHTML = reports.map((r) => `
+    <tr>
+      <td>${escapeHtml(r.report_folio)}</td>
+      <td>${escapeHtml(r.report_date)}</td>
+      <td>${escapeHtml(r.service_name || '')}</td>
+      <td>${escapeHtml(r.technician_name || '')}</td>
+      <td>
+        <div class="row-actions">
+          <button class="secondary" data-action="report-edit" data-id="${r.id}" type="button">Editar</button>
+          <button class="secondary" data-action="report-print" data-id="${r.id}" type="button">Imprimir</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function renderDetailReports(projectId, listElement) {
+  try {
+    const reports = await api('/api/projects/' + projectId + '/reports');
+    if (!reports.length) {
+      listElement.innerHTML = '<li class="muted">Sin reportes generados.</li>';
+      return;
+    }
+    listElement.innerHTML = reports.map((r) => `
+      <li>
+        <div>
+          <strong>${escapeHtml(r.report_folio)}</strong>
+          <small>${escapeHtml(r.report_date)} - ${escapeHtml(r.service_name || '')} - ${escapeHtml(r.technician_name || '')}</small>
+        </div>
+        <div class="row-actions">
+          <button class="secondary" data-action="detail-report-edit" data-id="${r.id}" data-project="${projectId}" type="button">Editar</button>
+          <button class="secondary" data-action="detail-report-print" data-id="${r.id}" type="button">Imprimir</button>
+        </div>
+      </li>
+    `).join('');
+  } catch (_e) {
+    listElement.innerHTML = '<li class="muted">Error al cargar reportes.</li>';
+  }
+}
+
+if (reportsTab) {
+  reportsTab.addEventListener('click', async () => {
+    switchView('reports');
+    showReportsMainList();
+    await loadAllProjectsForReports();
+  });
+}
+
+if (reportSearch) {
+  reportSearch.addEventListener('input', renderReportsProjectsTable);
+}
+if (reportStatusFilter) {
+  reportStatusFilter.addEventListener('change', renderReportsProjectsTable);
+}
+
+if (reportsProjectsTable) {
+  reportsProjectsTable.addEventListener('click', (event) => {
+    const newBtn = event.target.closest('[data-action="report-new"]');
+    if (newBtn) {
+      openReportForm(newBtn.dataset.id, null);
+      return;
+    }
+    const listBtn = event.target.closest('[data-action="report-list"]');
+    if (listBtn) {
+      openReportListForProject(listBtn.dataset.id);
+    }
+  });
+}
+
+if (reportBackButton) {
+  reportBackButton.addEventListener('click', () => {
+    showReportsMainList();
+  });
+}
+
+if (reportListBack) {
+  reportListBack.addEventListener('click', () => {
+    showReportsMainList();
+  });
+}
+
+if (reportListNew) {
+  reportListNew.addEventListener('click', () => {
+    if (state.currentReportProjectId) {
+      openReportForm(state.currentReportProjectId, null);
+    }
+  });
+}
+
+if (reportListTable) {
+  reportListTable.addEventListener('click', async (event) => {
+    const editBtn = event.target.closest('[data-action="report-edit"]');
+    if (editBtn) {
+      try {
+        const reportData = await api('/api/reports/' + editBtn.dataset.id);
+        openReportForm(reportData.project_id, reportData);
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+    const printBtn = event.target.closest('[data-action="report-print"]');
+    if (printBtn) {
+      window.open('/report-print.html?id=' + printBtn.dataset.id, '_blank');
+    }
+  });
+}
+
+if (reportForm) {
+  reportForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    setMessage(reportMessage, '');
+
+    try {
+      const payload = collectReportPayload();
+      const id = reportForm.elements.id.value;
+      const result = await api(id ? '/api/reports/' + id : '/api/reports', {
+        method: id ? 'PUT' : 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      setMessage(reportMessage, 'Reporte guardado correctamente.', true);
+      setTimeout(() => {
+        openReportListForProject(result.project_id);
+      }, 800);
+    } catch (error) {
+      setMessage(reportMessage, error.message);
+    }
+  });
+}
+
+if (detailReportsList) {
+  detailReportsList.addEventListener('click', async (event) => {
+    const editBtn = event.target.closest('[data-action="detail-report-edit"]');
+    if (editBtn) {
+      try {
+        const reportData = await api('/api/reports/' + editBtn.dataset.id);
+        state.reportsAllProjects = state.projects;
+        switchView('reports');
+        openReportForm(reportData.project_id, reportData);
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+    const printBtn = event.target.closest('[data-action="detail-report-print"]');
+    if (printBtn) {
+      window.open('/report-print.html?id=' + printBtn.dataset.id, '_blank');
+    }
+  });
+}
+
+if (detailNewReport) {
+  detailNewReport.addEventListener('click', async () => {
+    if (!state.selectedProjectId) return;
+    state.reportsAllProjects = state.projects;
+    switchView('reports');
+    openReportForm(state.selectedProjectId, null);
+  });
+}
+
+if (closedDetailReportsList) {
+  closedDetailReportsList.addEventListener('click', async (event) => {
+    const editBtn = event.target.closest('[data-action="detail-report-edit"]');
+    if (editBtn) {
+      try {
+        const reportData = await api('/api/reports/' + editBtn.dataset.id);
+        state.reportsAllProjects = state.closedProjects;
+        switchView('reports');
+        openReportForm(reportData.project_id, reportData);
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+    const printBtn = event.target.closest('[data-action="detail-report-print"]');
+    if (printBtn) {
+      window.open('/report-print.html?id=' + printBtn.dataset.id, '_blank');
+    }
+  });
+}
+
+if (closedDetailNewReport) {
+  closedDetailNewReport.addEventListener('click', async () => {
+    if (!state.selectedClosedProjectId) return;
+    state.reportsAllProjects = state.closedProjects;
+    switchView('reports');
+    openReportForm(state.selectedClosedProjectId, null);
+  });
+}
+
+// ===================== END REPORTS MODULE =====================
 
 api('/api/session')
   .then((session) => {

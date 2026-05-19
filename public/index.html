@@ -41,6 +41,7 @@
           <div class="topbar-actions">
             <button id="projects-tab" class="secondary active" type="button">Proyectos</button>
             <button id="closed-projects-tab" class="secondary" type="button">Proyectos Cerrados</button>
+            <button id="reports-tab" class="secondary" type="button">Reportes</button>
             <button id="vacations-tab" class="secondary hidden" type="button">Vacaciones</button>
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
             <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
@@ -233,6 +234,12 @@
               <article><span>Avance</span><strong id="detail-progress"></strong></article>
             </div>
 
+            <div class="detail-reports-section" style="margin-bottom:16px;">
+              <h3>Reportes generados</h3>
+              <ul id="detail-reports-list" class="entry-list"></ul>
+              <button class="secondary" id="detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
+            </div>
+
             <div class="layout two-columns">
               <div>
                 <h3>Agregar pago</h3>
@@ -346,6 +353,12 @@
               </div>
             </div>
 
+            <div class="detail-reports-section" style="margin-bottom:16px;">
+              <h3>Reportes generados</h3>
+              <ul id="closed-detail-reports-list" class="entry-list"></ul>
+              <button class="secondary" id="closed-detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
+            </div>
+
             <div class="layout two-columns">
               <div>
                 <h3>Pagos realizados</h3>
@@ -357,6 +370,241 @@
               </div>
             </div>
           </section>
+        </section>
+
+        <section id="reports-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Modulo de Reportes</p>
+                <h2>REPORTES</h2>
+                <p class="muted">Genera reportes tecnicos de arranque de caldera ligados a proyectos.</p>
+              </div>
+            </div>
+
+            <div class="reports-filters" style="margin-bottom:16px;">
+              <div class="grid-form" style="gap:10px;">
+                <label>
+                  Buscar
+                  <input id="report-search" type="text" placeholder="Cliente, proyecto, folio..." />
+                </label>
+                <label>
+                  Estatus
+                  <select id="report-status-filter">
+                    <option value="">Todos</option>
+                    <option value="Pendiente">Pendiente</option>
+                    <option value="En Proceso">En Proceso</option>
+                    <option value="Terminado">Terminado</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Cotizacion</th>
+                    <th>Cliente</th>
+                    <th>Proyecto</th>
+                    <th>Estatus</th>
+                    <th>Reportes</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="reports-projects-table"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="report-form-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">REVRAM</p>
+                <h2 id="report-form-title">FORMATO DE ARRANQUE DE CALDERA</h2>
+                <p id="report-form-subtitle" class="muted"></p>
+              </div>
+              <div class="row-actions">
+                <button id="report-back-button" class="secondary" type="button">Volver a lista</button>
+              </div>
+            </div>
+
+            <form id="report-form" class="grid-form">
+              <input type="hidden" name="id" />
+              <input type="hidden" name="project_id" />
+
+              <label>
+                Folio de reporte
+                <input name="report_folio" placeholder="Se genera automaticamente si se deja vacio" />
+              </label>
+              <label>
+                Fecha del reporte
+                <input name="report_date" type="date" required />
+              </label>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Datos generales</h3>
+              <label>
+                Cliente *
+                <input name="client_name" required />
+              </label>
+              <label>
+                Domicilio
+                <input name="client_address" />
+              </label>
+              <label>
+                Nombre de servicio *
+                <input name="service_name" required />
+              </label>
+              <label>
+                Tecnicos asignados
+                <input name="assigned_technicians" />
+              </label>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Datos tecnicos</h3>
+              <label>
+                Modelo de quemador
+                <input name="burner_model" />
+              </label>
+              <label>
+                Modelo y No. de serie del equipo
+                <input name="equipment_model_serial" />
+              </label>
+              <label>
+                Modelo de bombas y motores
+                <input name="pumps_motors_model" />
+              </label>
+              <label>
+                Combustible
+                <input name="fuel" />
+              </label>
+              <label>
+                Voltaje
+                <input name="voltage" />
+              </label>
+              <label>
+                Presion de gas (inH2O)
+                <input name="gas_pressure_inh2o" />
+              </label>
+              <label>
+                Presion de combustible liquido (PSI)
+                <input name="liquid_fuel_pressure_psi" />
+              </label>
+              <label>
+                Presion de trabajo
+                <input name="working_pressure" />
+              </label>
+              <label>
+                Amperaje de bombas
+                <input name="pump_amperage" />
+              </label>
+              <label>
+                Amperaje de ventilador
+                <input name="fan_amperage" />
+              </label>
+              <label>
+                Temp. tanque de condensados (°C)
+                <input name="condensate_tank_temp_c" />
+              </label>
+              <label>
+                Temp. salida equipo en operacion (°C)
+                <input name="operating_output_temp_c" />
+              </label>
+              <label>
+                Temp. salida de gases (°C)
+                <input name="flue_gas_temp_c" />
+              </label>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Pruebas de seguridad</h3>
+              <div class="full safety-checks">
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_alarmas" /> Alarmas sonoras</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_alta_presion" /> Alta presion de aceite</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_paro_arranque" /> Paro y arranque</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_paro_emergencia" /> Paro de emergencia</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_switch_aire" /> Prueba en switch de presion de aire</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_cambio_fuego" /> Cambio de alto y bajo fuego</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_baja_presion" /> Baja presion de aceite</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_switch_gas" /> Prueba en switch de presion de gas</label>
+                <label class="checkbox-row" style="margin-top:0;"><input type="checkbox" name="safety_otras" /> Otras</label>
+                <label id="safety-otras-field" class="hidden" style="margin-top:4px;">
+                  Especifique
+                  <input name="safety_otras_text" />
+                </label>
+              </div>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Tabla de emisiones</h3>
+              <div class="full table-wrapper">
+                <table class="emissions-table">
+                  <thead>
+                    <tr>
+                      <th>Parametro</th>
+                      <th>Flama baja</th>
+                      <th>Unidad</th>
+                      <th>Flama alta</th>
+                      <th>Unidad</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>O2</td><td><input name="em_o2_low" /></td><td>%</td><td><input name="em_o2_high" /></td><td>%</td></tr>
+                    <tr><td>CO2</td><td><input name="em_co2_low" /></td><td>%</td><td><input name="em_co2_high" /></td><td>%</td></tr>
+                    <tr><td>CO</td><td><input name="em_co_low" /></td><td>PPM</td><td><input name="em_co_high" /></td><td>PPM</td></tr>
+                    <tr><td>T. Gas</td><td><input name="em_tgas_low" /></td><td>°C</td><td><input name="em_tgas_high" /></td><td>°C</td></tr>
+                    <tr><td>T. Aire</td><td><input name="em_taire_low" /></td><td>°C</td><td><input name="em_taire_high" /></td><td>°C</td></tr>
+                    <tr><td>Perdidas</td><td><input name="em_perdidas_low" /></td><td>%</td><td><input name="em_perdidas_high" /></td><td>%</td></tr>
+                    <tr><td>Eficiencia</td><td><input name="em_eficiencia_low" /></td><td>%</td><td><input name="em_eficiencia_high" /></td><td>%</td></tr>
+                    <tr><td>Lambda</td><td><input name="em_lambda_low" /></td><td></td><td><input name="em_lambda_high" /></td><td></td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Comentarios</h3>
+              <label class="full">
+                <textarea name="comments" rows="4" placeholder="Comentarios adicionales sobre el servicio..."></textarea>
+              </label>
+
+              <h3 class="full" style="margin-bottom:0;margin-top:12px;">Firmas</h3>
+              <label>
+                Tecnico REVRAM - Nombre
+                <input name="technician_name" />
+              </label>
+              <label>
+                V.B. Encargado de planta - Nombre
+                <input name="plant_manager_name" />
+              </label>
+
+              <div class="row-actions full" style="margin-top:12px;">
+                <button type="submit">Guardar reporte</button>
+              </div>
+              <p id="report-message" class="message"></p>
+            </form>
+          </div>
+
+          <div id="report-list-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <h2 id="report-list-title">Reportes del proyecto</h2>
+                <p id="report-list-subtitle" class="muted"></p>
+              </div>
+              <div class="row-actions">
+                <button id="report-list-new" type="button">Nuevo reporte</button>
+                <button id="report-list-back" class="secondary" type="button">Volver a lista</button>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Folio</th>
+                    <th>Fecha</th>
+                    <th>Servicio</th>
+                    <th>Tecnico</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="report-list-table"></tbody>
+              </table>
+            </div>
+          </div>
         </section>
 
         <section id="vacations-view" class="hidden">

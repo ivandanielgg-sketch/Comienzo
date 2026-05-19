@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reporte - REVRAM</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 11pt;
+        color: #000;
+        background: #fff;
+        padding: 20px;
+      }
+      .print-actions {
+        text-align: center;
+        margin-bottom: 20px;
+      }
+      .print-actions button {
+        font-size: 14px;
+        padding: 10px 24px;
+        cursor: pointer;
+        border: 1px solid #333;
+        border-radius: 6px;
+        background: #1d4ed8;
+        color: #fff;
+        font-weight: bold;
+        margin: 0 6px;
+      }
+      .print-actions button:hover { background: #1e40af; }
+      .report-container {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      .header {
+        text-align: center;
+        border-bottom: 2px solid #000;
+        padding-bottom: 12px;
+        margin-bottom: 16px;
+      }
+      .header h1 { font-size: 16pt; margin-bottom: 4px; }
+      .header h2 { font-size: 13pt; font-weight: normal; margin-bottom: 4px; }
+      .header .folio { font-size: 10pt; }
+      .section { margin-bottom: 14px; }
+      .section h3 {
+        font-size: 11pt;
+        background: #e5e5e5;
+        padding: 4px 8px;
+        margin-bottom: 6px;
+        border: 1px solid #999;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 8px;
+      }
+      td, th {
+        border: 1px solid #999;
+        padding: 4px 8px;
+        font-size: 10pt;
+        vertical-align: top;
+      }
+      th {
+        background: #f0f0f0;
+        font-weight: bold;
+        text-align: left;
+      }
+      .field-label { font-weight: bold; width: 40%; background: #fafafa; }
+      .field-value { width: 60%; }
+      .check-mark { font-weight: bold; }
+      .signatures {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 40px;
+      }
+      .signature-block {
+        width: 45%;
+        text-align: center;
+      }
+      .signature-line {
+        border-top: 1px solid #000;
+        margin-top: 60px;
+        padding-top: 6px;
+        font-size: 10pt;
+      }
+      .signature-name {
+        font-weight: bold;
+        margin-top: 4px;
+        font-size: 10pt;
+      }
+      .comments-box {
+        border: 1px solid #999;
+        padding: 8px;
+        min-height: 60px;
+        white-space: pre-wrap;
+        font-size: 10pt;
+      }
+      #loading { text-align: center; padding: 40px; font-size: 14pt; }
+      #error { text-align: center; padding: 40px; color: red; }
+
+      @media print {
+        .print-actions { display: none !important; }
+        body { padding: 0; }
+        @page {
+          size: letter;
+          margin: 15mm 12mm;
+        }
+        .report-container { max-width: none; }
+        table { page-break-inside: avoid; }
+        .signatures { page-break-inside: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading">Cargando reporte...</div>
+    <div id="error" style="display:none;"></div>
+    <div id="report-content" style="display:none;">
+      <div class="print-actions">
+        <button onclick="window.print()">Imprimir / Guardar PDF</button>
+        <button onclick="window.close()">Cerrar</button>
+      </div>
+      <div class="report-container">
+        <div class="header">
+          <h1>REVRAM</h1>
+          <h2>FORMATO DE ARRANQUE DE CALDERA</h2>
+          <p class="folio">Folio: <strong id="p-folio"></strong> | Fecha: <strong id="p-date"></strong></p>
+        </div>
+
+        <div class="section">
+          <h3>Datos generales</h3>
+          <table>
+            <tr><td class="field-label">Cliente</td><td class="field-value" id="p-client"></td></tr>
+            <tr><td class="field-label">Domicilio</td><td class="field-value" id="p-address"></td></tr>
+            <tr><td class="field-label">Servicio</td><td class="field-value" id="p-service"></td></tr>
+            <tr><td class="field-label">Tecnicos asignados</td><td class="field-value" id="p-technicians"></td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Datos tecnicos</h3>
+          <table>
+            <tr><td class="field-label">Modelo de quemador</td><td class="field-value" id="p-burner"></td></tr>
+            <tr><td class="field-label">Modelo y No. serie equipo</td><td class="field-value" id="p-equipment"></td></tr>
+            <tr><td class="field-label">Modelo bombas y motores</td><td class="field-value" id="p-pumps"></td></tr>
+            <tr><td class="field-label">Combustible</td><td class="field-value" id="p-fuel"></td></tr>
+            <tr><td class="field-label">Voltaje</td><td class="field-value" id="p-voltage"></td></tr>
+            <tr><td class="field-label">Presion gas (inH2O)</td><td class="field-value" id="p-gas-pressure"></td></tr>
+            <tr><td class="field-label">Presion comb. liquido (PSI)</td><td class="field-value" id="p-fuel-pressure"></td></tr>
+            <tr><td class="field-label">Presion de trabajo</td><td class="field-value" id="p-working-pressure"></td></tr>
+            <tr><td class="field-label">Amperaje de bombas</td><td class="field-value" id="p-pump-amp"></td></tr>
+            <tr><td class="field-label">Amperaje de ventilador</td><td class="field-value" id="p-fan-amp"></td></tr>
+            <tr><td class="field-label">Temp. tanque condensados (°C)</td><td class="field-value" id="p-condensate-temp"></td></tr>
+            <tr><td class="field-label">Temp. salida equipo (°C)</td><td class="field-value" id="p-output-temp"></td></tr>
+            <tr><td class="field-label">Temp. salida gases (°C)</td><td class="field-value" id="p-flue-temp"></td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Pruebas de seguridad</h3>
+          <table>
+            <thead><tr><th>Prueba</th><th style="width:80px;text-align:center;">Resultado</th></tr></thead>
+            <tbody id="p-safety-table"></tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Tabla de emisiones</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Parametro</th>
+                <th>Flama baja</th>
+                <th>Unidad</th>
+                <th>Flama alta</th>
+                <th>Unidad</th>
+              </tr>
+            </thead>
+            <tbody id="p-emissions-table"></tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Comentarios</h3>
+          <div class="comments-box" id="p-comments"></div>
+        </div>
+
+        <div class="signatures">
+          <div class="signature-block">
+            <div class="signature-line">Tecnico REVRAM</div>
+            <div class="signature-name" id="p-tech-name"></div>
+          </div>
+          <div class="signature-block">
+            <div class="signature-line">V.B. Encargado de planta</div>
+            <div class="signature-name" id="p-manager-name"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const reportId = params.get('id');
+
+      function esc(val) {
+        return String(val || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      }
+
+      async function loadReport() {
+        if (!reportId) {
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('error').style.display = 'block';
+          document.getElementById('error').textContent = 'No se especifico un ID de reporte.';
+          return;
+        }
+
+        try {
+          const res = await fetch('/api/reports/' + reportId);
+          if (!res.ok) throw new Error('Reporte no encontrado.');
+          const data = await res.json();
+
+          document.getElementById('p-folio').textContent = data.report_folio || '';
+          document.getElementById('p-date').textContent = data.report_date || '';
+          document.getElementById('p-client').textContent = data.client_name || '';
+          document.getElementById('p-address').textContent = data.client_address || '';
+          document.getElementById('p-service').textContent = data.service_name || '';
+          document.getElementById('p-technicians').textContent = data.assigned_technicians || '';
+          document.getElementById('p-burner').textContent = data.burner_model || '';
+          document.getElementById('p-equipment').textContent = data.equipment_model_serial || '';
+          document.getElementById('p-pumps').textContent = data.pumps_motors_model || '';
+          document.getElementById('p-fuel').textContent = data.fuel || '';
+          document.getElementById('p-voltage').textContent = data.voltage || '';
+          document.getElementById('p-gas-pressure').textContent = data.gas_pressure_inh2o || '';
+          document.getElementById('p-fuel-pressure').textContent = data.liquid_fuel_pressure_psi || '';
+          document.getElementById('p-working-pressure').textContent = data.working_pressure || '';
+          document.getElementById('p-pump-amp').textContent = data.pump_amperage || '';
+          document.getElementById('p-fan-amp').textContent = data.fan_amperage || '';
+          document.getElementById('p-condensate-temp').textContent = data.condensate_tank_temp_c || '';
+          document.getElementById('p-output-temp').textContent = data.operating_output_temp_c || '';
+          document.getElementById('p-flue-temp').textContent = data.flue_gas_temp_c || '';
+          document.getElementById('p-comments').textContent = data.comments || '';
+          document.getElementById('p-tech-name').textContent = data.technician_name || '';
+          document.getElementById('p-manager-name').textContent = data.plant_manager_name || '';
+
+          const safetyTests = data.safety_tests ? JSON.parse(data.safety_tests) : {};
+          const safetyLabels = {
+            alarmas: 'Alarmas sonoras',
+            alta_presion: 'Alta presion de aceite',
+            paro_arranque: 'Paro y arranque',
+            paro_emergencia: 'Paro de emergencia',
+            switch_aire: 'Prueba en switch de presion de aire',
+            cambio_fuego: 'Cambio de alto y bajo fuego',
+            baja_presion: 'Baja presion de aceite',
+            switch_gas: 'Prueba en switch de presion de gas',
+            otras: 'Otras',
+          };
+          const safetyTbody = document.getElementById('p-safety-table');
+          let safetyHtml = '';
+          for (const [key, label] of Object.entries(safetyLabels)) {
+            if (key === 'otras' && safetyTests.otras) {
+              safetyHtml += '<tr><td>' + esc(label) + ': ' + esc(safetyTests.otras_text || '') + '</td><td style="text-align:center;" class="check-mark">&#10003;</td></tr>';
+            } else if (key !== 'otras') {
+              const checked = safetyTests[key] ? '&#10003;' : '';
+              safetyHtml += '<tr><td>' + esc(label) + '</td><td style="text-align:center;" class="check-mark">' + checked + '</td></tr>';
+            }
+          }
+          safetyTbody.innerHTML = safetyHtml;
+
+          const emLow = data.emissions_low_fire ? JSON.parse(data.emissions_low_fire) : {};
+          const emHigh = data.emissions_high_fire ? JSON.parse(data.emissions_high_fire) : {};
+          const emParams = [
+            { key: 'o2', label: 'O2', unit: '%' },
+            { key: 'co2', label: 'CO2', unit: '%' },
+            { key: 'co', label: 'CO', unit: 'PPM' },
+            { key: 'tgas', label: 'T. Gas', unit: '°C' },
+            { key: 'taire', label: 'T. Aire', unit: '°C' },
+            { key: 'perdidas', label: 'Perdidas', unit: '%' },
+            { key: 'eficiencia', label: 'Eficiencia', unit: '%' },
+            { key: 'lambda', label: 'Lambda', unit: '' },
+          ];
+          const emTbody = document.getElementById('p-emissions-table');
+          emTbody.innerHTML = emParams.map(function(p) {
+            return '<tr><td>' + esc(p.label) + '</td><td>' + esc(emLow[p.key] || '') + '</td><td>' + esc(p.unit) + '</td><td>' + esc(emHigh[p.key] || '') + '</td><td>' + esc(p.unit) + '</td></tr>';
+          }).join('');
+
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('report-content').style.display = 'block';
+        } catch (err) {
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('error').style.display = 'block';
+          document.getElementById('error').textContent = err.message;
+        }
+      }
+
+      loadReport();
+    </script>
+  </body>
+</html>
