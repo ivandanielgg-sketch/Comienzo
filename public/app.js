@@ -37,6 +37,8 @@ state.ecovisMovementsPag = { page: 1, limit: 15 };
 state.ecovisMovementsSearch = '';
 state.ecovisMovementsTypeFilter = '';
 state.selectedEcovisPaymentId = null;
+state.tableFilters = {};
+state.tableSort = {};
 
 const loginView = document.querySelector('#login-view');
 const appView = document.querySelector('#app-view');
@@ -120,6 +122,358 @@ const defaultPagination = {
   hasNextPage: false,
   hasPreviousPage: false,
 };
+
+function getTableFilters(tableKey) {
+  if (!state.tableFilters[tableKey]) state.tableFilters[tableKey] = {};
+  return state.tableFilters[tableKey];
+}
+
+function getTableSort(tableKey) {
+  return state.tableSort[tableKey] || { sortBy: '', sortOrder: 'asc' };
+}
+
+function buildTableParams(tableKey) {
+  const params = {};
+  const sort = getTableSort(tableKey);
+  if (sort.sortBy) {
+    params.sortBy = sort.sortBy;
+    params.sortOrder = sort.sortOrder || 'asc';
+  }
+  Object.entries(getTableFilters(tableKey)).forEach(([key, value]) => {
+    if (value !== '' && value !== null && value !== undefined) params[key] = value;
+  });
+  return params;
+}
+
+function hasActiveFilters(tableKey) {
+  return Object.values(getTableFilters(tableKey)).some((value) => value !== '' && value !== null && value !== undefined);
+}
+
+function resetTableControls(tableKey) {
+  state.tableFilters[tableKey] = {};
+  state.tableSort[tableKey] = { sortBy: '', sortOrder: 'asc' };
+}
+
+function filterControlHtml(column, filters) {
+  if (!column.filterable) return '';
+  const key = column.key;
+  const value = filters[key] || '';
+  const min = filters[`${key}_min`] || filters[`${key}_from`] || '';
+  const max = filters[`${key}_max`] || filters[`${key}_to`] || '';
+
+  if (column.type === 'select') {
+    const options = (column.filterOptions || [])
+      .map((option) => `<option value="${escapeHtml(option.value)}" ${String(value) === String(option.value) ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
+      .join('');
+    return `<select data-filter-input data-filter-key="${key}"><option value="">Todos</option>${options}</select>`;
+  }
+  if (column.type === 'boolean') {
+    return `
+      <select data-filter-input data-filter-key="${key}">
+        <option value="">Todos</option>
+        <option value="true" ${value === true || value === 'true' ? 'selected' : ''}>Si</option>
+        <option value="false" ${value === false || value === 'false' ? 'selected' : ''}>No</option>
+      </select>`;
+  }
+  if (column.type === 'number' || column.type === 'currency') {
+    return `
+      <input data-filter-input data-filter-key="${key}_min" type="number" step="0.01" placeholder="Min" value="${escapeHtml(min)}" />
+      <input data-filter-input data-filter-key="${key}_max" type="number" step="0.01" placeholder="Max" value="${escapeHtml(max)}" />`;
+  }
+  if (column.type === 'date') {
+    return `
+      <input data-filter-input data-filter-key="${key}_from" type="date" value="${escapeHtml(min)}" />
+      <input data-filter-input data-filter-key="${key}_to" type="date" value="${escapeHtml(max)}" />`;
+  }
+  return `<input data-filter-input data-filter-key="${key}" type="text" placeholder="Contiene..." value="${escapeHtml(value)}" />`;
+}
+
+function renderDataTable({
+  tableBody,
+  tableKey,
+  columns,
+  data,
+  pagination,
+  paginationContainerId,
+  emptyMessage,
+  filteredEmptyMessage,
+  onRefresh,
+  pageState,
+  renderActions,
+  rowClass,
+}) {
+  const table = tableBody.closest('table');
+  const thead = table.querySelector('thead');
+  const filters = getTableFilters(tableKey);
+  const sort = getTableSort(tableKey);
+  const activeFilters = hasActiveFilters(tableKey);
+  const visibleColumns = columns.filter((column) => column.visible !== false);
+  const hasActionColumn = true;
+
+  thead.innerHTML = `
+    <tr>
+      ${visibleColumns.map((column) => {
+        const isSorted = sort.sortBy === column.key;
+        const sortIcon = !isSorted ? '' : (sort.sortOrder === 'desc' ? '↓' : '↑');
+        const filtered = Object.keys(filters).some((key) => key === column.key || key.startsWith(`${column.key}_`));
+        return `<th class="${filtered ? 'datatable-filtered' : ''}">
+          <button class="datatable-sort" type="button" data-sort-key="${escapeHtml(column.key)}" ${column.sortable ? '' : 'disabled'}>
+            ${escapeHtml(column.label)} <span>${sortIcon}</span>
+          </button>
+          ${column.filterable ? '<span class="filter-dot" title="Filtro disponible">⌕</span>' : ''}
+        </th>`;
+      }).join('')}
+      ${hasActionColumn ? '<th></th>' : ''}
+    </tr>
+    <tr class="datatable-filters">
+      ${visibleColumns.map((column) => `<th>${filterControlHtml(column, filters)}${column.filterable ? `
+        <div class="filter-actions">
+          <button type="button" data-apply-filter="${escapeHtml(column.key)}">Aplicar</button>
+          <button type="button" data-clear-filter="${escapeHtml(column.key)}">Limpiar</button>
+        </div>` : ''}</th>`).join('')}
+      ${hasActionColumn ? `<th><button type="button" data-clear-all-filters ${!activeFilters && !sort.sortBy ? 'disabled' : ''}>Limpiar filtros</button>${activeFilters ? '<small class="filters-active">Filtros activos</small>' : ''}</th>` : ''}
+    </tr>
+  `;
+
+  if (!data.length) {
+    tableBody.innerHTML = `<tr><td colspan="${visibleColumns.length + (hasActionColumn ? 1 : 0)}" class="muted">${activeFilters ? filteredEmptyMessage : emptyMessage}</td></tr>`;
+  } else {
+    tableBody.innerHTML = data.map((row) => {
+      const cells = visibleColumns.map((column) => {
+        const raw = row[column.key];
+        const value = column.render ? column.render(row) : escapeHtml(raw ?? '');
+        return `<td>${value}</td>`;
+      }).join('');
+      const actions = hasActionColumn ? `<td>${renderActions ? renderActions(row) : ''}</td>` : '';
+      const cssClass = rowClass ? rowClass(row) : '';
+      return `<tr class="${escapeHtml(cssClass)}">${cells}${actions}</tr>`;
+    }).join('');
+  }
+
+  thead.querySelectorAll('[data-sort-key]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.sortKey;
+      const current = getTableSort(tableKey);
+      if (current.sortBy !== key) {
+        state.tableSort[tableKey] = { sortBy: key, sortOrder: 'asc' };
+      } else if (current.sortOrder === 'asc') {
+        state.tableSort[tableKey] = { sortBy: key, sortOrder: 'desc' };
+      } else {
+        state.tableSort[tableKey] = { sortBy: '', sortOrder: 'asc' };
+      }
+      pageState.page = 1;
+      onRefresh();
+    });
+  });
+
+  const applyColumnFilter = (columnKey) => {
+    const nextFilters = { ...getTableFilters(tableKey) };
+    thead.querySelectorAll(`[data-filter-input][data-filter-key^="${columnKey}"]`).forEach((input) => {
+      if (input.value) {
+        nextFilters[input.dataset.filterKey] = input.value;
+      } else {
+        delete nextFilters[input.dataset.filterKey];
+      }
+    });
+    state.tableFilters[tableKey] = nextFilters;
+    pageState.page = 1;
+    onRefresh();
+  };
+
+  thead.querySelectorAll('[data-apply-filter]').forEach((button) => {
+    button.addEventListener('click', () => applyColumnFilter(button.dataset.applyFilter));
+  });
+  thead.querySelectorAll('[data-clear-filter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.clearFilter;
+      Object.keys(getTableFilters(tableKey)).forEach((filterKey) => {
+        if (filterKey === key || filterKey.startsWith(`${key}_`)) delete state.tableFilters[tableKey][filterKey];
+      });
+      pageState.page = 1;
+      onRefresh();
+    });
+  });
+  thead.querySelectorAll('[data-filter-input]').forEach((input) => {
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        const applyButton = input.closest('th').querySelector('[data-apply-filter]');
+        if (applyButton) applyColumnFilter(applyButton.dataset.applyFilter);
+      }
+    });
+  });
+  const clearAll = thead.querySelector('[data-clear-all-filters]');
+  if (clearAll) {
+    clearAll.addEventListener('click', () => {
+      resetTableControls(tableKey);
+      pageState.page = 1;
+      onRefresh();
+    });
+  }
+
+  renderPaginationControls(
+    paginationContainerId,
+    pagination || defaultPagination,
+    (newPage) => { pageState.page = newPage; onRefresh(); },
+    (newLimit) => { pageState.limit = newLimit; pageState.page = 1; onRefresh(); },
+  );
+}
+
+const statusOptions = ['Pendiente', 'En Proceso', 'Terminado'].map((value) => ({ value, label: value }));
+const riskOptions = ['Alto', 'Medio', 'Bajo'].map((value) => ({ value, label: value }));
+const employeeStatusOptions = [
+  { value: 'true', label: 'Activo' },
+  { value: 'false', label: 'Inactivo' },
+];
+const vacationStatusOptions = [
+  { value: 'programada', label: 'Programada' },
+  { value: 'tomada', label: 'Tomada' },
+  { value: 'cancelada', label: 'Cancelada' },
+];
+const ecovisStatusOptions = [
+  { value: 'pendiente', label: 'Pendiente' },
+  { value: 'parcialmente_pagado', label: 'Parcialmente pagado' },
+  { value: 'pagado', label: 'Pagado' },
+  { value: 'cancelado', label: 'Cancelado' },
+];
+const ecovisPaymentStatusOptions = [
+  { value: 'asignado', label: 'Asignado' },
+  { value: 'parcial', label: 'Parcial' },
+  { value: 'cancelado', label: 'Cancelado' },
+];
+const ecovisMovementOptions = [
+  { value: 'proyecto', label: 'Proyecto' },
+  { value: 'pago_recibido', label: 'Pago recibido' },
+  { value: 'prestamo_ecovis_a_revram', label: 'Prestamo' },
+  { value: 'aplicacion_a_proyecto', label: 'Aplicacion a proyecto' },
+  { value: 'saldo_a_favor', label: 'Saldo a favor' },
+  { value: 'devolucion', label: 'Devolucion' },
+  { value: 'ajuste', label: 'Ajuste' },
+  { value: 'cancelacion', label: 'Cancelacion' },
+];
+
+const projectColumns = [
+  { key: 'id', label: 'ID', type: 'number', sortable: true, filterable: true },
+  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, filterable: true },
+  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true, filterable: true },
+  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.project_description || '') },
+  { key: 'status', label: 'Estado', type: 'select', sortable: true, filterable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status">${escapeHtml(p.status)}</span>` },
+  { key: 'risk', label: 'Riesgo', type: 'select', sortable: true, filterable: true, filterOptions: riskOptions, render: (p) => `<span class="badge risk-${escapeHtml(String(p.risk || '').toLowerCase())}">${escapeHtml(p.risk)}</span>` },
+  { key: 'promised_delivery_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
+  { key: 'total_charged', label: 'Cobrado', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.total_charged) },
+  { key: 'spent', label: 'Gastado', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.spent) },
+  { key: 'pending_collection', label: 'Pendiente', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.pending_collection) },
+  { key: 'final_margin', label: 'Margen final', type: 'number', sortable: true, filterable: true, render: (p) => `<span class="badge margin-badge ${marginBadgeClass(p)}" title="Margen esperado: ${escapeHtml(p.expected_margin)}%">${formatPercentDecimal(p.final_margin)}</span>` },
+];
+
+const closedProjectColumns = [
+  { key: 'id', label: 'ID', type: 'number', sortable: true, filterable: true },
+  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, filterable: true },
+  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true, filterable: true },
+  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.project_description || '') },
+  { key: 'closed_at', label: 'Cerrado', type: 'date', sortable: true, filterable: true },
+  { key: 'total_invoiced_mxn', label: 'Facturado MXN', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.total_invoiced_mxn) },
+  { key: 'total_charged', label: 'Cobrado MXN', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.total_charged) },
+  { key: 'spent', label: 'Gastado MXN', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.spent) },
+  { key: 'final_margin', label: 'Margen final', type: 'number', sortable: true, filterable: true, render: (p) => `<span class="badge margin-badge ${marginBadgeClass(p)}">${formatPercentDecimal(p.final_margin)}</span>` },
+];
+
+const userColumns = [
+  { key: 'id', label: 'ID', type: 'number', sortable: true, filterable: true },
+  { key: 'username', label: 'Usuario', type: 'text', sortable: true, filterable: true },
+  { key: 'created_at', label: 'Creado', type: 'date', sortable: true, filterable: true },
+];
+
+const employeeColumns = [
+  { key: 'employee_number', label: 'No. Empleado', type: 'text', sortable: true, filterable: true },
+  { key: 'full_name', label: 'Nombre', type: 'text', sortable: true, filterable: true },
+  { key: 'hire_date', label: 'Fecha ingreso', type: 'date', sortable: true, filterable: true },
+  { key: 'seniority_years', label: 'Antiguedad', type: 'number', sortable: true, filterable: true, render: (emp) => `${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}` },
+  { key: 'active', label: 'Estatus', type: 'boolean', sortable: true, filterable: true, filterOptions: employeeStatusOptions, render: (emp) => !emp.active ? `<span class="badge badge-inactive">INACTIVO</span>${emp.termination_date ? `<br><small class="muted">${escapeHtml(emp.termination_date)}</small>` : ''}` : '<span class="badge badge-active">Activo</span>' },
+  { key: 'termination_date', label: 'Fecha de baja', type: 'date', sortable: true, filterable: true, render: (emp) => escapeHtml(emp.termination_date || '') },
+  { key: 'accrued_days', label: 'Dias generados acumulados', type: 'number', sortable: true, filterable: true },
+  { key: 'days_taken', label: 'Tomados', type: 'number', sortable: true, filterable: true },
+  { key: 'days_scheduled', label: 'Programados', type: 'number', sortable: true, filterable: true },
+  { key: 'days_pending', label: 'Disponibles', type: 'number', sortable: true, filterable: true, render: (emp) => emp.days_pending < 0 ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo</small>` : `${emp.days_pending}` },
+];
+
+const vacationRequestColumns = [
+  { key: 'start_date', label: 'Fecha inicio', type: 'date', sortable: true, filterable: true },
+  { key: 'end_date', label: 'Fecha fin', type: 'date', sortable: true, filterable: true },
+  { key: 'requested_days', label: 'Dias', type: 'number', sortable: true, filterable: true },
+  { key: 'vacation_exercise_year', label: 'Ejercicio', type: 'number', sortable: true, filterable: true },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterable: true, filterOptions: vacationStatusOptions, render: (req) => `<span class="badge status-${escapeHtml(req.status)}">${escapeHtml(req.status)}</span>` },
+  { key: 'include_vacation_bonus', label: 'Prima', type: 'boolean', sortable: true, filterable: true, render: (req) => req.include_vacation_bonus ? 'Si' : 'No' },
+  { key: 'notes', label: 'Notas', type: 'text', sortable: false, filterable: true, render: (req) => escapeHtml(req.notes || '') },
+  { key: 'created_at', label: 'Registrado', type: 'date', sortable: true, filterable: true, render: (req) => escapeHtml((req.created_at || '').slice(0, 10)) },
+];
+
+const reportsProjectColumns = [
+  { key: 'id', label: 'ID', type: 'number', sortable: true, filterable: true },
+  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, filterable: true },
+  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true, filterable: true },
+  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.project_description || '') },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status">${escapeHtml(p.status)}</span>` },
+  { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, filterable: true, render: (p) => p.report_count || 0 },
+];
+
+const reportListColumns = [
+  { key: 'report_folio', label: 'Folio', type: 'text', sortable: true, filterable: true },
+  { key: 'report_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
+  { key: 'service_name', label: 'Servicio', type: 'text', sortable: true, filterable: true, render: (r) => escapeHtml(r.service_name || '') },
+  { key: 'technician_name', label: 'Tecnico', type: 'text', sortable: true, filterable: true, render: (r) => escapeHtml(r.technician_name || '') },
+];
+
+const ecovisProjectColumns = [
+  { key: 'project_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
+  { key: 'project_name', label: 'Proyecto', type: 'text', sortable: true, filterable: true },
+  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.quote_number || '') },
+  { key: 'purchase_order_number', label: 'OC', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.purchase_order_number || '') },
+  { key: 'invoice_number', label: 'Factura', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.invoice_number || '') },
+  { key: 'total_amount', label: 'Monto total', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.total_amount || 0)) },
+  { key: 'paid_amount', label: 'Pagado', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.paid_amount || 0)) },
+  { key: 'pending_amount', label: 'Pendiente', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.pending_amount || 0)) },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterable: true, filterOptions: ecovisStatusOptions, render: (p) => `<span class="badge ecovis-status-${escapeHtml(p.status || 'pendiente')}">${escapeHtml(p.status || 'pendiente')}</span>` },
+];
+
+const ecovisPaymentColumns = [
+  { key: 'payment_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
+  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.amount || 0)) },
+  { key: 'currency', label: 'Moneda', type: 'select', sortable: true, filterable: true, filterOptions: ['MXN', 'USD', 'EUR'].map((value) => ({ value, label: value })) },
+  { key: 'payment_method', label: 'Metodo', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.payment_method || '') },
+  { key: 'bank_reference', label: 'Referencia', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.bank_reference || '') },
+  { key: 'allocated_amount', label: 'Asignado', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.allocated_amount ?? (Number(p.amount || 0) - Number(p.unallocated_amount || 0)))) },
+  { key: 'unallocated_amount', label: 'Sin asignar', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.unallocated_amount || 0)) },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterable: true, filterOptions: ecovisPaymentStatusOptions, render: (p) => {
+    const statusLabel = p.is_cancelled ? 'cancelado' : (Number(p.unallocated_amount || 0) > 0 ? 'parcial' : 'asignado');
+    return `<span class="badge ecovis-status-${p.is_cancelled ? 'cancelado' : 'pendiente'}">${escapeHtml(statusLabel)}</span>`;
+  } },
+];
+
+const ecovisLoanColumns = [
+  { key: 'movement_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
+  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, filterable: true, render: (l) => money.format(Number(l.amount || 0)) },
+  { key: 'currency', label: 'Moneda', type: 'select', sortable: true, filterable: true, filterOptions: ['MXN', 'USD', 'EUR'].map((value) => ({ value, label: value })) },
+  { key: 'reference', label: 'Referencia', type: 'text', sortable: true, filterable: true, render: (l) => escapeHtml(l.reference || '') },
+  { key: 'description', label: 'Descripcion', type: 'text', sortable: true, filterable: true, render: (l) => escapeHtml(l.description || '') },
+  { key: 'outstanding', label: 'Saldo', type: 'currency', sortable: true, filterable: true, render: (l) => money.format(Number(l.outstanding || 0)) },
+];
+
+const ecovisMovementColumns = [
+  { key: 'movement_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
+  { key: 'movement_type', label: 'Tipo', type: 'select', sortable: true, filterable: true, filterOptions: ecovisMovementOptions, render: (m) => escapeHtml(ECOVIS_MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type) },
+  { key: 'description', label: 'Descripcion', type: 'text', sortable: true, filterable: true, render: (m) => escapeHtml(m.description || '') },
+  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, filterable: true, render: (m) => money.format(Number(m.amount || 0)) },
+  { key: 'direction', label: 'Direccion', type: 'select', sortable: true, filterable: true, filterOptions: [
+    { value: 'ecovis_debe_a_revram', label: 'ECOVIS debe' },
+    { value: 'revram_debe_a_ecovis', label: 'REVRAM debe' },
+    { value: 'neutral', label: 'Neutral' },
+  ], render: (m) => escapeHtml(ECOVIS_DIRECTION_LABELS[m.direction] || m.direction) },
+  { key: 'related_project_name', label: 'Proyecto relacionado', type: 'text', sortable: true, filterable: true, render: (m) => escapeHtml(m.related_project_name || m.reference || '') },
+  { key: 'created_by', label: 'Usuario', type: 'text', sortable: true, filterable: true, render: (m) => escapeHtml(m.created_by || '') },
+];
 
 function renderPaginationControls(containerId, pagination, onPageChange, onLimitChange) {
   const container = document.getElementById(containerId);
@@ -304,6 +658,7 @@ async function loadProjects() {
     page: state.projectsPag.page,
     limit: state.projectsPag.limit,
     search: state.projectsSearch,
+    ...buildTableParams('projects'),
   });
   const result = await api(`/api/projects?${params}`);
   state.projects = result.data;
@@ -322,6 +677,7 @@ async function loadClosedProjects() {
     page: state.closedPag.page,
     limit: state.closedPag.limit,
     search: state.closedSearch,
+    ...buildTableParams('closedProjects'),
   });
   const result = await api(`/api/closed-projects?${params}`);
   state.closedProjects = result.data;
@@ -341,96 +697,50 @@ function renderProjects() {
   document.querySelector('#stat-spent').textContent = money.format(summary.totalSpent ?? 0);
   document.querySelector('#stat-pending').textContent = money.format(summary.totalPending ?? 0);
 
-  if (!state.projects.length) {
-    const emptyMsg = state.projectsSearch
-      ? 'No se encontraron proyectos con los filtros actuales.'
-      : 'No hay proyectos registrados.';
-    projectsTable.innerHTML = `<tr><td colspan="10" class="muted">${emptyMsg}</td></tr>`;
-  } else {
-    projectsTable.innerHTML = state.projects
-      .map(
-        (project) => `
-        <tr>
-          <td>${project.id}</td>
-          <td>${escapeHtml(project.quote_number)}</td>
-          <td>${escapeHtml(project.client_name)}</td>
-          <td><span class="badge status">${escapeHtml(project.status)}</span></td>
-          <td><span class="badge risk-${project.risk.toLowerCase()}">${escapeHtml(project.risk)}</span></td>
-          <td>${money.format(project.total_charged)}</td>
-          <td>${money.format(project.spent)}</td>
-          <td>${money.format(project.pending_collection)}</td>
-          <td>
-            <span class="badge margin-badge ${marginBadgeClass(project)}" title="Margen esperado: ${escapeHtml(project.expected_margin)}%">
-              ${formatPercentDecimal(project.final_margin)}
-            </span>
-          </td>
-          <td>
-            <div class="row-actions">
-              <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Eliminar</button>
-              <button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button>
-            </div>
-          </td>
-        </tr>
-      `,
-      )
-      .join('');
-  }
-
-  renderPaginationControls(
-    'projects-pagination',
-    state.projectsPagination || defaultPagination,
-    (newPage) => { state.projectsPag.page = newPage; loadProjects(); },
-    (newLimit) => { state.projectsPag.limit = newLimit; state.projectsPag.page = 1; loadProjects(); },
-  );
+  renderDataTable({
+    tableBody: projectsTable,
+    tableKey: 'projects',
+    columns: projectColumns,
+    data: state.projects,
+    pagination: state.projectsPagination || defaultPagination,
+    paginationContainerId: 'projects-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadProjects,
+    pageState: state.projectsPag,
+    renderActions: (project) => `
+      <div class="row-actions">
+        <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Eliminar</button>
+        <button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button>
+      </div>`,
+  });
 }
 
 function renderClosedProjects() {
-  if (!state.closedProjects.length) {
-    const emptyMsg = state.closedSearch
-      ? 'No se encontraron proyectos cerrados con los filtros actuales.'
-      : 'No hay proyectos cerrados.';
-    closedProjectsTable.innerHTML = `<tr><td colspan="9" class="muted">${emptyMsg}</td></tr>`;
-  } else {
-    closedProjectsTable.innerHTML = state.closedProjects
-      .map(
-        (project) => `
-        <tr>
-          <td>${project.id}</td>
-          <td>${escapeHtml(project.quote_number)}</td>
-          <td>${escapeHtml(project.client_name)}</td>
-          <td>${escapeHtml(project.closed_at || '')}</td>
-          <td>${money.format(project.total_invoiced_mxn)}</td>
-          <td>${money.format(project.total_charged)}</td>
-          <td>${money.format(project.spent)}</td>
-          <td>
-            <span class="badge margin-badge ${marginBadgeClass(project)}" title="Margen esperado: ${escapeHtml(project.expected_margin)}%">
-              ${formatPercentDecimal(project.final_margin)}
-            </span>
-          </td>
-          <td>
-            <div class="row-actions">
-              <button class="danger" data-action="delete-closed-project" data-id="${project.id}" type="button">Borrar definitivo</button>
-              <button class="secondary" data-action="select-closed-project" data-id="${project.id}" type="button">Historial</button>
-            </div>
-          </td>
-        </tr>
-      `,
-      )
-      .join('');
-  }
-
-  renderPaginationControls(
-    'closed-projects-pagination',
-    state.closedPagination || defaultPagination,
-    (newPage) => { state.closedPag.page = newPage; loadClosedProjects(); },
-    (newLimit) => { state.closedPag.limit = newLimit; state.closedPag.page = 1; loadClosedProjects(); },
-  );
+  renderDataTable({
+    tableBody: closedProjectsTable,
+    tableKey: 'closedProjects',
+    columns: closedProjectColumns,
+    data: state.closedProjects,
+    pagination: state.closedPagination || defaultPagination,
+    paginationContainerId: 'closed-projects-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadClosedProjects,
+    pageState: state.closedPag,
+    renderActions: (project) => `
+      <div class="row-actions">
+        <button class="danger" data-action="delete-closed-project" data-id="${project.id}" type="button">Borrar definitivo</button>
+        <button class="secondary" data-action="select-closed-project" data-id="${project.id}" type="button">Historial</button>
+      </div>`,
+  });
 }
 
 async function loadUsers() {
   const params = new URLSearchParams({
     page: state.usersPag.page,
     limit: state.usersPag.limit,
+    ...buildTableParams('users'),
   });
   const result = await api(`/api/users?${params}`);
   state.users = result.data;
@@ -439,29 +749,19 @@ async function loadUsers() {
 }
 
 function renderUsers() {
-  if (!state.users.length) {
-    usersTable.innerHTML = `<tr><td colspan="4" class="muted">No hay usuarios registrados.</td></tr>`;
-  } else {
-    usersTable.innerHTML = state.users
-      .map(
-        (user) => `
-        <tr>
-          <td>${user.id}</td>
-          <td>${escapeHtml(user.username)}</td>
-          <td>${escapeHtml(user.created_at)}</td>
-          <td><button class="secondary" data-action="select-user" data-id="${user.id}" type="button">Editar</button></td>
-        </tr>
-      `,
-      )
-      .join('');
-  }
-
-  renderPaginationControls(
-    'users-pagination',
-    state.usersPagination || defaultPagination,
-    (newPage) => { state.usersPag.page = newPage; loadUsers(); },
-    (newLimit) => { state.usersPag.limit = newLimit; state.usersPag.page = 1; loadUsers(); },
-  );
+  renderDataTable({
+    tableBody: usersTable,
+    tableKey: 'users',
+    columns: userColumns,
+    data: state.users,
+    pagination: state.usersPagination || defaultPagination,
+    paginationContainerId: 'users-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadUsers,
+    pageState: state.usersPag,
+    renderActions: (user) => `<button class="secondary" data-action="select-user" data-id="${user.id}" type="button">Editar</button>`,
+  });
 }
 
 function exportProjectsToExcel(projects, filenamePrefix) {
@@ -1199,6 +1499,7 @@ async function loadEmployees() {
     limit: state.employeesPag.limit,
     search: state.employeesSearch,
     activeFilter: state.employeesActiveFilter,
+    ...buildTableParams('employees'),
   });
   const result = await api(`/api/employees?${params}`);
   state.employees = result.data;
@@ -1207,51 +1508,24 @@ async function loadEmployees() {
 }
 
 function renderEmployees() {
-  if (!state.employees.length) {
-    const emptyMsg = state.employeesSearch
-      ? 'No se encontraron empleados con los filtros actuales.'
-      : 'No hay empleados registrados.';
-    employeesTable.innerHTML = `<tr><td colspan="10" class="muted">${emptyMsg}</td></tr>`;
-  } else {
-    employeesTable.innerHTML = state.employees.map((emp) => {
-      const isInactive = !emp.active;
-      const rowClass = isInactive ? 'row-inactive' : '';
-      const pendingClass = emp.days_pending < 0 ? 'negative-balance' : '';
-      const pendingLabel = emp.days_pending < 0
-        ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo por vacaciones anticipadas</small>`
-        : `${emp.days_pending}`;
-      const statusBadge = isInactive
-        ? `<span class="badge badge-inactive">INACTIVO</span>${emp.termination_date ? `<br><small class="muted">${escapeHtml(emp.termination_date)}</small>` : ''}`
-        : '<span class="badge badge-active">Activo</span>';
-
-      return `
-        <tr class="${rowClass}">
-          <td>${escapeHtml(emp.employee_number)}</td>
-          <td>${escapeHtml(emp.full_name)}</td>
-          <td>${escapeHtml(emp.hire_date)}</td>
-          <td>${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}</td>
-          <td>${statusBadge}</td>
-          <td>${emp.accrued_days}</td>
-          <td>${emp.days_taken}</td>
-          <td>${emp.days_scheduled}</td>
-          <td class="${pendingClass}">${pendingLabel}</td>
-          <td>
-            <div class="row-actions">
-              <button class="secondary" data-action="edit-employee" data-id="${emp.id}" type="button">Editar</button>
-              <button class="secondary" data-action="open-vacations" data-id="${emp.id}" type="button">Vacaciones programadas</button>
-            </div>
-          </td>
-        </tr>
-      `;
-    }).join('');
-  }
-
-  renderPaginationControls(
-    'employees-pagination',
-    state.employeesPagination || defaultPagination,
-    (newPage) => { state.employeesPag.page = newPage; loadEmployees(); },
-    (newLimit) => { state.employeesPag.limit = newLimit; state.employeesPag.page = 1; loadEmployees(); },
-  );
+  renderDataTable({
+    tableBody: employeesTable,
+    tableKey: 'employees',
+    columns: employeeColumns,
+    data: state.employees,
+    pagination: state.employeesPagination || defaultPagination,
+    paginationContainerId: 'employees-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadEmployees,
+    pageState: state.employeesPag,
+    rowClass: (emp) => (!emp.active ? 'row-inactive' : ''),
+    renderActions: (emp) => `
+      <div class="row-actions">
+        <button class="secondary" data-action="edit-employee" data-id="${emp.id}" type="button">Editar</button>
+        <button class="secondary" data-action="open-vacations" data-id="${emp.id}" type="button">Vacaciones programadas</button>
+      </div>`,
+  });
 }
 
 function openEmployeeModal(employee) {
@@ -1298,6 +1572,7 @@ async function openVacationModal(employeeId) {
   if (!emp) return;
 
   state.selectedEmployeeId = emp.id;
+  resetTableControls('vacationRequests');
   vacationModal.classList.remove('hidden');
   vacationModalTitle.textContent = `Vacaciones - ${emp.full_name}`;
   vacationModalSubtitle.textContent = `No. ${emp.employee_number} | Ingreso: ${emp.hire_date}`;
@@ -1330,40 +1605,30 @@ async function loadVacationRequests(employeeId) {
   const params = new URLSearchParams({
     page: state.vacReqPag.page,
     limit: state.vacReqPag.limit,
+    ...buildTableParams('vacationRequests'),
   });
   const result = await api(`/api/employees/${employeeId}/vacation-requests?${params}`);
   const requests = result.data;
   state.vacReqPagination = result.pagination;
 
-  if (!requests.length) {
-    vacationRequestsTable.innerHTML = '<tr><td colspan="8" class="muted">Este empleado aun no tiene vacaciones registradas.</td></tr>';
-  } else {
-    vacationRequestsTable.innerHTML = requests.map((req) => `
-      <tr>
-        <td>${escapeHtml(req.start_date)}</td>
-        <td>${escapeHtml(req.end_date)}</td>
-        <td>${req.requested_days}</td>
-        <td>${req.vacation_exercise_year}</td>
-        <td><span class="badge status-${req.status}">${escapeHtml(req.status)}</span></td>
-        <td>${escapeHtml(req.notes || '')}</td>
-        <td>${escapeHtml((req.created_at || '').slice(0, 10))}</td>
-        <td>
-          <div class="row-actions">
-            ${req.status !== 'cancelada' ? `<button class="danger" data-action="cancel-vacation" data-id="${req.id}" type="button">Cancelar</button>` : ''}
-            ${req.status === 'programada' ? `<button class="secondary" data-action="mark-taken" data-id="${req.id}" type="button">Marcar tomada</button>` : ''}
-            <button class="secondary" data-action="print-vacation" data-id="${req.id}" type="button">Formato</button>
-          </div>
-        </td>
-      </tr>
-    `).join('');
-  }
-
-  renderPaginationControls(
-    'vacation-requests-pagination',
-    state.vacReqPagination || defaultPagination,
-    (newPage) => { state.vacReqPag.page = newPage; loadVacationRequests(employeeId); },
-    (newLimit) => { state.vacReqPag.limit = newLimit; state.vacReqPag.page = 1; loadVacationRequests(employeeId); },
-  );
+  renderDataTable({
+    tableBody: vacationRequestsTable,
+    tableKey: 'vacationRequests',
+    columns: vacationRequestColumns,
+    data: requests,
+    pagination: state.vacReqPagination || defaultPagination,
+    paginationContainerId: 'vacation-requests-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: () => loadVacationRequests(employeeId),
+    pageState: state.vacReqPag,
+    renderActions: (req) => `
+      <div class="row-actions">
+        ${req.status !== 'cancelada' ? `<button class="danger" data-action="cancel-vacation" data-id="${req.id}" type="button">Cancelar</button>` : ''}
+        ${req.status === 'programada' ? `<button class="secondary" data-action="mark-taken" data-id="${req.id}" type="button">Marcar tomada</button>` : ''}
+        <button class="secondary" data-action="print-vacation" data-id="${req.id}" type="button">Formato</button>
+      </div>`,
+  });
 }
 
 function closeVacationModal() {
@@ -1640,6 +1905,7 @@ async function loadReportsProjects() {
     limit: state.reportsProjPag.limit,
     search: state.reportsProjSearch,
     status: state.reportsProjStatus,
+    ...buildTableParams('reportsProjects'),
   });
   const result = await api(`/api/reports/projects?${params}`);
   state.reportsAllProjects = result.data;
@@ -1650,36 +1916,23 @@ async function loadReportsProjects() {
 function renderReportsProjectsTable() {
   const projects = state.reportsAllProjects;
 
-  if (!projects.length) {
-    const emptyMsg = state.reportsProjSearch || state.reportsProjStatus
-      ? 'No se encontraron proyectos con los filtros actuales.'
-      : 'No hay proyectos disponibles para generar reportes.';
-    reportsProjectsTable.innerHTML = `<tr><td colspan="7" class="muted">${emptyMsg}</td></tr>`;
-  } else {
-    reportsProjectsTable.innerHTML = projects.map((p) => `
-      <tr>
-        <td>${p.id}</td>
-        <td>${escapeHtml(p.quote_number)}</td>
-        <td>${escapeHtml(p.client_name)}</td>
-        <td>${escapeHtml(p.project_description || '')}</td>
-        <td><span class="badge status">${escapeHtml(p.status)}</span></td>
-        <td>${p.report_count || 0}</td>
-        <td>
-          <div class="row-actions">
-            <button class="secondary" data-action="report-new" data-id="${p.id}" type="button">Generar reporte</button>
-            <button class="secondary" data-action="report-list" data-id="${p.id}" type="button">Ver reportes</button>
-          </div>
-        </td>
-      </tr>
-    `).join('');
-  }
-
-  renderPaginationControls(
-    'reports-projects-pagination',
-    state.reportsProjPagination || defaultPagination,
-    (newPage) => { state.reportsProjPag.page = newPage; loadReportsProjects(); },
-    (newLimit) => { state.reportsProjPag.limit = newLimit; state.reportsProjPag.page = 1; loadReportsProjects(); },
-  );
+  renderDataTable({
+    tableBody: reportsProjectsTable,
+    tableKey: 'reportsProjects',
+    columns: reportsProjectColumns,
+    data: projects,
+    pagination: state.reportsProjPagination || defaultPagination,
+    paginationContainerId: 'reports-projects-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadReportsProjects,
+    pageState: state.reportsProjPag,
+    renderActions: (p) => `
+      <div class="row-actions">
+        <button class="secondary" data-action="report-new" data-id="${p.id}" type="button">Generar reporte</button>
+        <button class="secondary" data-action="report-list" data-id="${p.id}" type="button">Ver reportes</button>
+      </div>`,
+  });
 }
 
 function showReportsMainList() {
@@ -1820,6 +2073,7 @@ async function openReportListForProject(projectId) {
 
   state.currentReportProjectId = Number(projectId);
   state.projReportsPag = { page: 1, limit: 15 };
+  resetTableControls('projectReports');
   reportsProjectsTable.closest('.panel').classList.add('hidden');
   reportFormPanel.classList.add('hidden');
   reportListPanel.classList.remove('hidden');
@@ -1835,6 +2089,7 @@ async function loadProjectReports(projectId) {
     const params = new URLSearchParams({
       page: state.projReportsPag.page,
       limit: state.projReportsPag.limit,
+      ...buildTableParams('projectReports'),
     });
     const result = await api(`/api/projects/${projectId}/reports?${params}`);
     state.reportsProjectReports = result.data;
@@ -1846,32 +2101,24 @@ async function loadProjectReports(projectId) {
 }
 
 function renderReportList(reports, pagination, projectId) {
-  if (!reports.length) {
-    reportListTable.innerHTML = '<tr><td colspan="5" class="muted">Este proyecto aun no tiene reportes generados.</td></tr>';
-  } else {
-    reportListTable.innerHTML = reports.map((r) => `
-      <tr>
-        <td>${escapeHtml(r.report_folio)}</td>
-        <td>${escapeHtml(r.report_date)}</td>
-        <td>${escapeHtml(r.service_name || '')}</td>
-        <td>${escapeHtml(r.technician_name || '')}</td>
-        <td>
-          <div class="row-actions">
-            <button class="secondary" data-action="report-edit" data-id="${r.id}" type="button">Editar</button>
-            <button class="secondary" data-action="report-print" data-id="${r.id}" type="button">Imprimir</button>
-          </div>
-        </td>
-      </tr>
-    `).join('');
-  }
-
   const pid = projectId || state.currentReportProjectId;
-  renderPaginationControls(
-    'project-reports-pagination',
-    pagination || defaultPagination,
-    (newPage) => { state.projReportsPag.page = newPage; loadProjectReports(pid); },
-    (newLimit) => { state.projReportsPag.limit = newLimit; state.projReportsPag.page = 1; loadProjectReports(pid); },
-  );
+  renderDataTable({
+    tableBody: reportListTable,
+    tableKey: 'projectReports',
+    columns: reportListColumns,
+    data: reports,
+    pagination: pagination || defaultPagination,
+    paginationContainerId: 'project-reports-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: () => loadProjectReports(pid),
+    pageState: state.projReportsPag,
+    renderActions: (r) => `
+      <div class="row-actions">
+        <button class="secondary" data-action="report-edit" data-id="${r.id}" type="button">Editar</button>
+        <button class="secondary" data-action="report-print" data-id="${r.id}" type="button">Imprimir</button>
+      </div>`,
+  });
 }
 
 async function renderDetailReports(projectId, listElement) {
@@ -2180,125 +2427,87 @@ async function loadEcovisProjects() {
     page: state.ecovisProjectsPag.page,
     limit: state.ecovisProjectsPag.limit,
     search: state.ecovisProjectsSearch,
+    ...buildTableParams('ecovisProjects'),
   });
   const result = await api('/api/ecovis/projects?' + params);
   renderEcovisProjects(result.data, result.pagination);
 }
 
 function renderEcovisProjects(projects, pagination) {
-  if (!projects.length) {
-    const emptyMsg = state.ecovisProjectsSearch
-      ? 'No se encontraron proyectos ECOVIS con los filtros actuales.'
-      : 'No hay proyectos ECOVIS registrados.';
-    ecovisProjectsTable.innerHTML = '<tr><td colspan="10" class="muted">' + emptyMsg + '</td></tr>';
-  } else {
-    ecovisProjectsTable.innerHTML = projects.map((p) => {
-      const paid = Number(p.paid_amount || 0);
-      const total = Number(p.total_amount || 0);
-      const pending = Math.max(0, total - paid);
+  renderDataTable({
+    tableBody: ecovisProjectsTable,
+    tableKey: 'ecovisProjects',
+    columns: ecovisProjectColumns,
+    data: projects,
+    pagination: pagination || defaultPagination,
+    paginationContainerId: 'ecovis-projects-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadEcovisProjects,
+    pageState: state.ecovisProjectsPag,
+    renderActions: (p) => {
       const statusLabel = p.status || 'pendiente';
-      return '<tr>' +
-        '<td>' + escapeHtml(p.project_date || '') + '</td>' +
-        '<td>' + escapeHtml(p.project_name) + '</td>' +
-        '<td>' + escapeHtml(p.quote_number || '') + '</td>' +
-        '<td>' + escapeHtml(p.purchase_order_number || '') + '</td>' +
-        '<td>' + escapeHtml(p.invoice_number || '') + '</td>' +
-        '<td>' + money.format(total) + '</td>' +
-        '<td>' + money.format(paid) + '</td>' +
-        '<td>' + money.format(pending) + '</td>' +
-        '<td><span class="badge ecovis-status-' + escapeHtml(statusLabel) + '">' + escapeHtml(statusLabel) + '</span></td>' +
-        '<td><div class="row-actions">' +
-          '<button class="secondary" data-action="ecovis-edit-project" data-id="' + p.id + '" type="button">Editar</button>' +
-          (statusLabel !== 'cancelado'
-            ? '<button class="danger" data-action="ecovis-cancel-project" data-id="' + p.id + '" type="button">Cancelar</button>'
-            : '') +
-          '<button class="secondary" data-action="ecovis-apply-credit" data-id="' + p.id + '" type="button">Saldo a favor</button>' +
-        '</div></td>' +
-      '</tr>';
-    }).join('');
-  }
-
-  renderPaginationControls(
-    'ecovis-projects-pagination',
-    pagination || defaultPagination,
-    (newPage) => { state.ecovisProjectsPag.page = newPage; loadEcovisProjects(); },
-    (newLimit) => { state.ecovisProjectsPag.limit = newLimit; state.ecovisProjectsPag.page = 1; loadEcovisProjects(); },
-  );
+      return '<div class="row-actions">' +
+        '<button class="secondary" data-action="ecovis-edit-project" data-id="' + p.id + '" type="button">Editar</button>' +
+        (statusLabel !== 'cancelado'
+          ? '<button class="danger" data-action="ecovis-cancel-project" data-id="' + p.id + '" type="button">Cancelar</button>'
+          : '') +
+        '<button class="secondary" data-action="ecovis-apply-credit" data-id="' + p.id + '" type="button">Saldo a favor</button>' +
+      '</div>';
+    },
+  });
 }
 
 async function loadEcovisPayments() {
   const params = new URLSearchParams({
     page: state.ecovisPaymentsPag.page,
     limit: state.ecovisPaymentsPag.limit,
+    ...buildTableParams('ecovisPayments'),
   });
   const result = await api('/api/ecovis/payments?' + params);
   renderEcovisPayments(result.data, result.pagination);
 }
 
 function renderEcovisPayments(payments, pagination) {
-  if (!payments.length) {
-    ecovisPaymentsTable.innerHTML = '<tr><td colspan="9" class="muted">No hay pagos registrados.</td></tr>';
-  } else {
-    ecovisPaymentsTable.innerHTML = payments.map((p) => {
-      const allocated = Number(p.amount || 0) - Number(p.unallocated_amount || 0);
-      const statusLabel = p.is_cancelled ? 'cancelado' : (Number(p.unallocated_amount || 0) > 0 ? 'parcial' : 'asignado');
-      return '<tr>' +
-        '<td>' + escapeHtml(p.payment_date || '') + '</td>' +
-        '<td>' + money.format(Number(p.amount || 0)) + '</td>' +
-        '<td>' + escapeHtml(p.currency || 'MXN') + '</td>' +
-        '<td>' + escapeHtml(p.payment_method || '') + '</td>' +
-        '<td>' + escapeHtml(p.bank_reference || '') + '</td>' +
-        '<td>' + money.format(allocated) + '</td>' +
-        '<td>' + money.format(Number(p.unallocated_amount || 0)) + '</td>' +
-        '<td><span class="badge ecovis-status-' + (p.is_cancelled ? 'cancelado' : 'pendiente') + '">' + escapeHtml(statusLabel) + '</span></td>' +
-        '<td><div class="row-actions">' +
-          '<button class="secondary" data-action="ecovis-allocate-payment" data-id="' + p.id + '" type="button">Asignar</button>' +
-        '</div></td>' +
-      '</tr>';
-    }).join('');
-  }
-
-  renderPaginationControls(
-    'ecovis-payments-pagination',
-    pagination || defaultPagination,
-    (newPage) => { state.ecovisPaymentsPag.page = newPage; loadEcovisPayments(); },
-    (newLimit) => { state.ecovisPaymentsPag.limit = newLimit; state.ecovisPaymentsPag.page = 1; loadEcovisPayments(); },
-  );
+  renderDataTable({
+    tableBody: ecovisPaymentsTable,
+    tableKey: 'ecovisPayments',
+    columns: ecovisPaymentColumns,
+    data: payments,
+    pagination: pagination || defaultPagination,
+    paginationContainerId: 'ecovis-payments-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadEcovisPayments,
+    pageState: state.ecovisPaymentsPag,
+    renderActions: (p) => '<div class="row-actions"><button class="secondary" data-action="ecovis-allocate-payment" data-id="' + p.id + '" type="button">Asignar</button></div>',
+  });
 }
 
 async function loadEcovisLoans() {
   const params = new URLSearchParams({
     page: state.ecovisLoansPag.page,
     limit: state.ecovisLoansPag.limit,
+    ...buildTableParams('ecovisLoans'),
   });
   const result = await api('/api/ecovis/loans?' + params);
   renderEcovisLoans(result.data, result.pagination);
 }
 
 function renderEcovisLoans(loans, pagination) {
-  if (!loans.length) {
-    ecovisLoansTable.innerHTML = '<tr><td colspan="6" class="muted">No hay prestamos registrados.</td></tr>';
-  } else {
-    ecovisLoansTable.innerHTML = loans.map((l) => {
-      return '<tr>' +
-        '<td>' + escapeHtml(l.movement_date || '') + '</td>' +
-        '<td>' + money.format(Number(l.amount || 0)) + '</td>' +
-        '<td>' + escapeHtml(l.currency || 'MXN') + '</td>' +
-        '<td>' + escapeHtml(l.reference || '') + '</td>' +
-        '<td>' + escapeHtml(l.description || '') + '</td>' +
-        '<td><div class="row-actions">' +
-          '<button class="secondary" data-action="ecovis-repay-loan" data-id="' + l.id + '" type="button">Devolucion</button>' +
-        '</div></td>' +
-      '</tr>';
-    }).join('');
-  }
-
-  renderPaginationControls(
-    'ecovis-loans-pagination',
-    pagination || defaultPagination,
-    (newPage) => { state.ecovisLoansPag.page = newPage; loadEcovisLoans(); },
-    (newLimit) => { state.ecovisLoansPag.limit = newLimit; state.ecovisLoansPag.page = 1; loadEcovisLoans(); },
-  );
+  renderDataTable({
+    tableBody: ecovisLoansTable,
+    tableKey: 'ecovisLoans',
+    columns: ecovisLoanColumns,
+    data: loans,
+    pagination: pagination || defaultPagination,
+    paginationContainerId: 'ecovis-loans-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadEcovisLoans,
+    pageState: state.ecovisLoansPag,
+    renderActions: (l) => '<div class="row-actions"><button class="secondary" data-action="ecovis-repay-loan" data-id="' + l.id + '" type="button">Devolucion</button></div>',
+  });
 }
 
 async function loadEcovisMovements() {
@@ -2306,6 +2515,7 @@ async function loadEcovisMovements() {
     page: state.ecovisMovementsPag.page,
     limit: state.ecovisMovementsPag.limit,
     search: state.ecovisMovementsSearch,
+    ...buildTableParams('ecovisMovements'),
   });
   if (state.ecovisMovementsTypeFilter) {
     params.set('type', state.ecovisMovementsTypeFilter);
@@ -2315,28 +2525,18 @@ async function loadEcovisMovements() {
 }
 
 function renderEcovisMovements(movements, pagination) {
-  if (!movements.length) {
-    ecovisMovementsTable.innerHTML = '<tr><td colspan="7" class="muted">No hay movimientos registrados.</td></tr>';
-  } else {
-    ecovisMovementsTable.innerHTML = movements.map((m) => {
-      return '<tr>' +
-        '<td>' + escapeHtml(m.movement_date || '') + '</td>' +
-        '<td>' + escapeHtml(ECOVIS_MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type) + '</td>' +
-        '<td>' + escapeHtml(m.description || '') + '</td>' +
-        '<td>' + money.format(Number(m.amount || 0)) + '</td>' +
-        '<td>' + escapeHtml(ECOVIS_DIRECTION_LABELS[m.direction] || m.direction) + '</td>' +
-        '<td>' + escapeHtml(m.reference || '') + '</td>' +
-        '<td>' + escapeHtml(m.created_by || '') + '</td>' +
-      '</tr>';
-    }).join('');
-  }
-
-  renderPaginationControls(
-    'ecovis-movements-pagination',
-    pagination || defaultPagination,
-    (newPage) => { state.ecovisMovementsPag.page = newPage; loadEcovisMovements(); },
-    (newLimit) => { state.ecovisMovementsPag.limit = newLimit; state.ecovisMovementsPag.page = 1; loadEcovisMovements(); },
-  );
+  renderDataTable({
+    tableBody: ecovisMovementsTable,
+    tableKey: 'ecovisMovements',
+    columns: ecovisMovementColumns,
+    data: movements,
+    pagination: pagination || defaultPagination,
+    paginationContainerId: 'ecovis-movements-pagination',
+    emptyMessage: 'No hay registros para mostrar.',
+    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    onRefresh: loadEcovisMovements,
+    pageState: state.ecovisMovementsPag,
+  });
 }
 
 ecovisTab.addEventListener('click', async () => {
