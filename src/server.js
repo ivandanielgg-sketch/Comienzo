@@ -16,6 +16,12 @@ const {
   buildListResponse,
 } = require('./pagination');
 const { calculateEcovisAccountSummary, calculateProjectPaidAmount, calculateProjectStatus, calculatePaymentUnallocated } = require('./ecovis');
+const {
+  createBackupPayload,
+  backupFileName,
+  analyzeBackup,
+  importBackup,
+} = require('./backup');
 
 const app = express();
 const db = getDb();
@@ -46,7 +52,7 @@ if (trustProxy) {
   app.set('trust proxy', 1);
 }
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(
   session({
     name: 'proyectos.sid',
@@ -86,6 +92,16 @@ function requireAdmin(req, res, next) {
   if (req.session.role !== 'admin') {
     return res.status(403).json({
       message: 'Acceso restringido. Solo el administrador puede consultar y programar vacaciones.',
+    });
+  }
+
+  return next();
+}
+
+function requireBackupAdmin(req, res, next) {
+  if (req.session.role !== 'admin') {
+    return res.status(403).json({
+      message: 'Acceso restringido. Solo el administrador puede crear o importar respaldos.',
     });
   }
 
@@ -2405,49 +2421,63 @@ app.post('/api/ecovis/apply-credit', requireAuth, requireAdmin, (req, res, next)
   }
 });
 
-app.get('/api/admin/export-general-excel', requireAuth, requireAdmin, (req, res) => {
-  const projects = db.prepare('SELECT * FROM projects WHERE closed_at IS NULL ORDER BY id DESC').all();
-  const closedProjects = db.prepare('SELECT * FROM projects WHERE closed_at IS NOT NULL ORDER BY closed_at DESC').all();
-
-  const allProjectIds = [...projects, ...closedProjects].map((p) => p.id);
-  const costs = allProjectIds.length > 0
-    ? db.prepare(
-      `SELECT * FROM project_costs WHERE project_id IN (${allProjectIds.map(() => '?').join(',')}) ORDER BY cost_date DESC`,
-    ).all(...allProjectIds)
-    : [];
-
-  const employees = db.prepare('SELECT * FROM employees ORDER BY full_name ASC').all();
-  const vacationRequests = db.prepare('SELECT * FROM vacation_requests ORDER BY start_date DESC').all();
-  const reports = db.prepare(
-    `SELECT r.*, p.quote_number, p.client_name AS project_client
-     FROM project_reports r
-     JOIN projects p ON r.project_id = p.id
-     ORDER BY r.created_at DESC`,
-  ).all();
-
-  const ecovisProjects = db.prepare('SELECT * FROM ecovis_projects ORDER BY project_date DESC').all();
-  const ecovisPayments = db.prepare('SELECT * FROM ecovis_payments ORDER BY payment_date DESC').all();
-  const ecovisAllocations = db.prepare('SELECT * FROM ecovis_payment_allocations ORDER BY id DESC').all();
-  const ecovisMovements = db.prepare('SELECT * FROM ecovis_movements ORDER BY movement_date DESC, id DESC').all();
-
-  const ecovisSummary = calculateEcovisAccountSummary(ecovisProjects, ecovisPayments, ecovisAllocations, ecovisMovements);
-
-  const users = db.prepare('SELECT id, username, role, created_at FROM users ORDER BY username ASC').all();
-
-  res.json({
-    projects,
-    closedProjects,
-    costs,
-    employees,
-    vacationRequests,
-    reports,
-    ecovisProjects,
-    ecovisPayments,
-    ecovisAllocations,
-    ecovisMovements,
-    ecovisSummary,
-    users,
+app.get('/api/admin/export-general-excel', requireAuth, requireBackupAdmin, (req, res) => {
+  res.status(410).json({
+    message: 'Exportar Excel General fue reemplazado por Crear respaldo e Importar respaldo.',
   });
+});
+
+app.get('/api/admin/backup', requireAuth, requireBackupAdmin, (req, res, next) => {
+  try {
+    const backup = createBackupPayload(db, {
+      exportedBy: req.session.username,
+      environment: process.env.NODE_ENV || 'development',
+    });
+    const filename = backupFileName();
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.json(backup);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/backup/preview', requireAuth, requireBackupAdmin, (req, res, next) => {
+  try {
+    const preview = analyzeBackup(db, req.body.backup);
+    res.json(preview);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/backup/import', requireAuth, requireBackupAdmin, (req, res, next) => {
+  try {
+    const result = importBackup(db, req.body.backup, {
+      importedBy: req.session.username,
+      fileName: trim(req.body.fileName) || 'respaldo.json',
+    });
+    res.json(result);
+  } catch (error) {
+    try {
+      const metadata = (req.body.backup || {}).backupMetadata || {};
+      db.prepare(
+        `INSERT INTO backup_import_logs (
+          imported_by, file_name, schema_version, backup_exported_at, status, summary_json, errors_json
+        ) VALUES (?, ?, ?, ?, 'failed', ?, ?)`,
+      ).run(
+        req.session.username,
+        trim(req.body.fileName) || 'respaldo.json',
+        metadata.schemaVersion || null,
+        metadata.exportedAt || null,
+        JSON.stringify({}),
+        JSON.stringify([{ message: error.message }]),
+      );
+    } catch (_) {
+      // Preserve the original import error even if audit logging fails.
+    }
+    next(error);
+  }
 });
 
 // ===================== END ECOVIS MODULE =====================

@@ -255,6 +255,19 @@ function migrate(database) {
       FOREIGN KEY (related_project_id) REFERENCES ecovis_projects(id),
       FOREIGN KEY (related_payment_id) REFERENCES ecovis_payments(id)
     );
+
+    CREATE TABLE IF NOT EXISTS backup_import_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      imported_by TEXT,
+      file_name TEXT,
+      schema_version TEXT,
+      backup_exported_at TEXT,
+      status TEXT NOT NULL CHECK (status IN ('previewed', 'completed', 'completed_with_warnings', 'failed')),
+      summary_json TEXT,
+      errors_json TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
   ensureColumn(database, 'projects', 'project_description', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, 'projects', 'total_invoiced_currency', "TEXT NOT NULL DEFAULT 'MXN'");

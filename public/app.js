@@ -14,6 +14,7 @@ const state = {
   reportsAllProjects: [],
   reportsProjectReports: [],
   currentReportProjectId: null,
+  pendingBackupImport: null,
 };
 
 state.projectsPag = { page: 1, limit: 15 };
@@ -73,6 +74,15 @@ const userMessage = document.querySelector('#user-message');
 const userFormTitle = document.querySelector('#user-form-title');
 const newUserButton = document.querySelector('#new-user-button');
 const usersTable = document.querySelector('#users-table');
+const createBackupButton = document.querySelector('#create-backup-button');
+const importBackupButton = document.querySelector('#import-backup-button');
+const backupFileInput = document.querySelector('#backup-file-input');
+const backupModal = document.querySelector('#backup-modal');
+const backupModalClose = document.querySelector('#backup-modal-close');
+const backupPreviewSummary = document.querySelector('#backup-preview-summary');
+const backupConfirmCheckbox = document.querySelector('#backup-confirm-checkbox');
+const backupImportConfirm = document.querySelector('#backup-import-confirm');
+const backupMessage = document.querySelector('#backup-message');
 const purchaseOrderInput = projectForm.elements.purchase_order_number;
 const purchaseOrderNotApplicable = projectForm.elements.purchase_order_not_applicable;
 
@@ -2270,10 +2280,12 @@ const ECOVIS_DIRECTION_LABELS = {
 function showEcovisTab() {
   if (state.userRole === 'admin') {
     ecovisTab.classList.remove('hidden');
-    document.getElementById('export-general-excel').classList.remove('hidden');
+    createBackupButton.classList.remove('hidden');
+    importBackupButton.classList.remove('hidden');
   } else {
     ecovisTab.classList.add('hidden');
-    document.getElementById('export-general-excel').classList.add('hidden');
+    createBackupButton.classList.add('hidden');
+    importBackupButton.classList.add('hidden');
   }
 }
 
@@ -2803,147 +2815,195 @@ if (ecovisMovementsTypeFilterSelect) {
   });
 }
 
-document.getElementById('export-general-excel').addEventListener('click', async () => {
+const BACKUP_ENTITY_LABELS = {
+  settings: 'Configuraciones',
+  projects: 'Proyectos',
+  closedProjects: 'Proyectos cerrados',
+  projectPayments: 'Pagos de proyectos',
+  costs: 'Costos',
+  employees: 'Empleados',
+  vacationRequests: 'Vacaciones',
+  reports: 'Reportes',
+  ecovisProjects: 'Proyectos ECOVIS',
+  ecovisPayments: 'Pagos ECOVIS',
+  ecovisPaymentAllocations: 'Asignaciones ECOVIS',
+  ecovisMovements: 'Movimientos ECOVIS',
+  users: 'Usuarios',
+};
+
+function backupSummaryTable(summary = {}) {
+  const rows = Object.entries(BACKUP_ENTITY_LABELS).map(([key, label]) => {
+    const item = summary[key] || {};
+    return `
+      <tr>
+        <td>${escapeHtml(label)}</td>
+        <td>${item.inBackup || 0}</td>
+        <td>${item.duplicates || 0}</td>
+        <td>${item.newRecords || 0}</td>
+        <td>${item.conflicts || 0}</td>
+        <td>${item.invalid || 0}</td>
+        <td>${item.added || 0}</td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Entidad</th>
+            <th>En respaldo</th>
+            <th>Duplicados omitidos</th>
+            <th>Nuevos</th>
+            <th>Conflictos</th>
+            <th>Invalidos</th>
+            <th>Agregados</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderBackupPreview(preview, mode = 'preview') {
+  const metadata = preview.metadata || {};
+  const issues = preview.issues || [];
+  backupPreviewSummary.innerHTML = `
+    <div class="detail-grid" style="margin-bottom:14px;">
+      <article><span>Version</span><strong>${escapeHtml(metadata.schemaVersion || '')}</strong></article>
+      <article><span>Generado</span><strong>${escapeHtml(metadata.exportedAt || '')}</strong></article>
+      <article><span>Generado por</span><strong>${escapeHtml(metadata.exportedBy || '')}</strong></article>
+      <article><span>Estado</span><strong>${escapeHtml(preview.status || (mode === 'result' ? 'completado' : 'vista previa'))}</strong></article>
+    </div>
+    <p class="muted">${escapeHtml(preview.warning || 'Esta importacion no reemplazara datos existentes. Solo agregara registros faltantes. Los conflictos seran omitidos.')}</p>
+    ${backupSummaryTable(preview.summary)}
+    ${issues.length ? `
+      <h3>Conflictos / advertencias</h3>
+      <ul class="entry-list">${issues.map((issue) => `<li><strong>${escapeHtml(BACKUP_ENTITY_LABELS[issue.entity] || issue.entity)}</strong><small>${escapeHtml(issue.reason || '')}</small></li>`).join('')}</ul>
+    ` : ''}
+  `;
+}
+
+async function createBackup() {
+  if (!window.confirm('Se generara un respaldo completo de la informacion operativa del sistema.')) {
+    return;
+  }
+  createBackupButton.disabled = true;
+  createBackupButton.textContent = 'Generando respaldo...';
   try {
-    const data = await api('/api/admin/export-general-excel');
-    generateGeneralExcel(data);
+    const response = await fetch('/api/admin/backup');
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || 'No se pudo generar el respaldo.');
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `REVRAM_BACKUP_${today()}.json`;
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    window.alert('Respaldo generado correctamente.');
   } catch (error) {
-    window.alert(error.message || 'No se pudo generar el Excel.');
+    window.alert(error.message || 'No se pudo generar el respaldo.');
+  } finally {
+    createBackupButton.disabled = false;
+    createBackupButton.textContent = 'Crear respaldo';
   }
-});
+}
 
-function generateGeneralExcel(data) {
-  const projectColumns = [
-    ['ID', (p) => p.id],
-    ['Cotizacion', (p) => p.quote_number],
-    ['Cliente', (p) => p.client_name],
-    ['Estado', (p) => p.status],
-    ['Facturado MXN', (p) => p.total_invoiced_mxn],
-    ['Cobrado MXN', (p) => p.total_charged],
-    ['Gastado MXN', (p) => p.spent],
-    ['Pendiente MXN', (p) => p.pending_collection],
-  ];
+function openBackupModal() {
+  backupModal.classList.remove('hidden');
+  backupConfirmCheckbox.checked = false;
+  backupImportConfirm.disabled = true;
+  setMessage(backupMessage, '');
+}
 
-  const closedColumns = [
-    ['ID', (p) => p.id],
-    ['Cotizacion', (p) => p.quote_number],
-    ['Cliente', (p) => p.client_name],
-    ['Cerrado', (p) => p.closed_at || ''],
-    ['Facturado MXN', (p) => p.total_invoiced_mxn],
-    ['Cobrado MXN', (p) => p.total_charged],
-    ['Gastado MXN', (p) => p.spent],
-  ];
+function closeBackupModal() {
+  backupModal.classList.add('hidden');
+  state.pendingBackupImport = null;
+  backupFileInput.value = '';
+}
 
-  const costColumns = [
-    ['Proyecto ID', (c) => c.project_id],
-    ['Fecha', (c) => c.cost_date],
-    ['Tipo', (c) => c.category],
-    ['Descripcion', (c) => c.description],
-    ['Monto', (c) => c.amount],
-    ['Moneda', (c) => c.currency],
-    ['Monto MXN', (c) => c.amount_mxn],
-  ];
-
-  const employeeColumns = [
-    ['No. Empleado', (e) => e.employee_number],
-    ['Nombre', (e) => e.full_name],
-    ['Ingreso', (e) => e.hire_date],
-    ['Activo', (e) => e.active ? 'Si' : 'No'],
-  ];
-
-  const ecovisProjectColumns = [
-    ['ID', (p) => p.id],
-    ['Proyecto', (p) => p.project_name],
-    ['Fecha', (p) => p.project_date],
-    ['Monto', (p) => p.total_amount],
-    ['Moneda', (p) => p.currency],
-    ['Estado', (p) => p.status],
-  ];
-
-  const ecovisPaymentColumns = [
-    ['ID', (p) => p.id],
-    ['Fecha', (p) => p.payment_date],
-    ['Monto', (p) => p.amount],
-    ['Moneda', (p) => p.currency],
-    ['Metodo', (p) => p.payment_method],
-    ['Referencia', (p) => p.bank_reference],
-    ['Sin asignar', (p) => p.unallocated_amount],
-  ];
-
-  const ecovisMovementColumns = [
-    ['ID', (m) => m.id],
-    ['Fecha', (m) => m.movement_date],
-    ['Tipo', (m) => m.movement_type],
-    ['Descripcion', (m) => m.description],
-    ['Monto', (m) => m.amount],
-    ['Moneda', (m) => m.currency],
-    ['Direccion', (m) => m.direction],
-    ['Usuario', (m) => m.created_by],
-  ];
-
-  const worksheets = [
-    worksheetXml('Proyectos Activos', [
-      projectColumns.map(([l]) => l),
-      ...(data.projects || []).map((p) => projectColumns.map(([, fn]) => fn(p))),
-    ]),
-    worksheetXml('Proyectos Cerrados', [
-      closedColumns.map(([l]) => l),
-      ...(data.closedProjects || []).map((p) => closedColumns.map(([, fn]) => fn(p))),
-    ]),
-    worksheetXml('Costos', [
-      costColumns.map(([l]) => l),
-      ...(data.costs || []).map((c) => costColumns.map(([, fn]) => fn(c))),
-    ]),
-    worksheetXml('Empleados', [
-      employeeColumns.map(([l]) => l),
-      ...(data.employees || []).map((e) => employeeColumns.map(([, fn]) => fn(e))),
-    ]),
-    worksheetXml('ECOVIS Proyectos', [
-      ecovisProjectColumns.map(([l]) => l),
-      ...(data.ecovisProjects || []).map((p) => ecovisProjectColumns.map(([, fn]) => fn(p))),
-    ]),
-    worksheetXml('ECOVIS Pagos', [
-      ecovisPaymentColumns.map(([l]) => l),
-      ...(data.ecovisPayments || []).map((p) => ecovisPaymentColumns.map(([, fn]) => fn(p))),
-    ]),
-    worksheetXml('ECOVIS Movimientos', [
-      ecovisMovementColumns.map(([l]) => l),
-      ...(data.ecovisMovements || []).map((m) => ecovisMovementColumns.map(([, fn]) => fn(m))),
-    ]),
-  ];
-
-  if (data.ecovisSummary) {
-    const s = data.ecovisSummary;
-    worksheets.push(worksheetXml('ECOVIS Resumen', [
-      ['Concepto', 'Valor'],
-      ['Total proyectos', s.total_projected],
-      ['Pagado a proyectos', s.total_paid_to_projects],
-      ['Pendiente proyectos', s.pending_project_amount],
-      ['Pagos recibidos', s.total_payments_received],
-      ['Asignado', s.total_allocated],
-      ['Saldo a favor', s.credit_balance],
-      ['Prestamos vigentes', s.outstanding_loans],
-      ['Balance neto', s.net_balance],
-    ]));
+async function previewBackupFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.json') || file.size > 10 * 1024 * 1024) {
+    window.alert('El archivo seleccionado no corresponde a un respaldo valido de REVRAM.');
+    backupFileInput.value = '';
+    return;
   }
+  try {
+    const text = await file.text();
+    const backup = JSON.parse(text);
+    const preview = await api('/api/admin/backup/preview', {
+      method: 'POST',
+      body: JSON.stringify({ fileName: file.name, backup }),
+    });
+    state.pendingBackupImport = { fileName: file.name, backup };
+    openBackupModal();
+    renderBackupPreview(preview);
+  } catch (error) {
+    window.alert(error.message || 'El archivo seleccionado no corresponde a un respaldo valido de REVRAM.');
+    backupFileInput.value = '';
+  }
+}
 
-  const workbookXml = '<?xml version="1.0"?>' +
-    '<?mso-application progid="Excel.Sheet"?>' +
-    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"' +
-    ' xmlns:o="urn:schemas-microsoft-com:office:office"' +
-    ' xmlns:x="urn:schemas-microsoft-com:office:excel"' +
-    ' xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
-    worksheets.join('') +
-    '</Workbook>';
+async function importPendingBackup() {
+  if (!state.pendingBackupImport || !backupConfirmCheckbox.checked) return;
+  backupImportConfirm.disabled = true;
+  backupImportConfirm.textContent = 'Importando...';
+  setMessage(backupMessage, '');
+  try {
+    const result = await api('/api/admin/backup/import', {
+      method: 'POST',
+      body: JSON.stringify(state.pendingBackupImport),
+    });
+    renderBackupPreview(result, 'result');
+    setMessage(backupMessage, 'Importacion finalizada. Revisa el resumen de agregados, duplicados y conflictos.', true);
+    await loadProjects();
+    if (!ecovisView.classList.contains('hidden')) {
+      await loadEcovisSummary();
+      await loadEcovisProjects();
+    }
+  } catch (error) {
+    setMessage(backupMessage, error.message || 'No se pudo importar el respaldo.');
+  } finally {
+    backupImportConfirm.textContent = 'Importar respaldo';
+    backupImportConfirm.disabled = !backupConfirmCheckbox.checked;
+  }
+}
 
-  const blob = new Blob([workbookXml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = 'reporte-general-' + today() + '.xls';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(link.href);
+if (createBackupButton) {
+  createBackupButton.addEventListener('click', createBackup);
+}
+
+if (importBackupButton) {
+  importBackupButton.addEventListener('click', () => backupFileInput.click());
+}
+
+if (backupFileInput) {
+  backupFileInput.addEventListener('change', () => previewBackupFile(backupFileInput.files[0]));
+}
+
+if (backupModalClose) {
+  backupModalClose.addEventListener('click', closeBackupModal);
+  backupModal.addEventListener('click', (event) => {
+    if (event.target === backupModal) closeBackupModal();
+  });
+}
+
+if (backupConfirmCheckbox) {
+  backupConfirmCheckbox.addEventListener('change', () => {
+    backupImportConfirm.disabled = !backupConfirmCheckbox.checked;
+  });
+}
+
+if (backupImportConfirm) {
+  backupImportConfirm.addEventListener('click', importPendingBackup);
 }
 
 // ===================== END ECOVIS MODULE =====================

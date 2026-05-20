@@ -44,7 +44,9 @@
             <button id="reports-tab" class="secondary" type="button">Reportes</button>
             <button id="vacations-tab" class="secondary hidden" type="button">Vacaciones</button>
             <button id="ecovis-tab" class="secondary hidden" type="button">Cuenta ECOVIS</button>
-            <button id="export-general-excel" class="secondary hidden" type="button">Exportar Excel</button>
+            <button id="create-backup-button" class="secondary hidden" type="button">Crear respaldo</button>
+            <button id="import-backup-button" class="secondary hidden" type="button">Importar respaldo</button>
+            <input id="backup-file-input" class="hidden" type="file" accept=".json,application/json" />
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
             <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
           </div>
@@ -1154,6 +1156,28 @@
             <div id="users-pagination"></div>
           </div>
         </section>
+
+        <div id="backup-modal" class="modal-overlay hidden">
+          <div class="modal-content panel modal-large">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Respaldos</p>
+                <h2>Importar respaldo</h2>
+                <p class="muted">Esta importacion no reemplazara datos existentes. Solo agregara registros faltantes.</p>
+              </div>
+              <button id="backup-modal-close" class="secondary" type="button">Cerrar</button>
+            </div>
+            <div id="backup-preview-summary"></div>
+            <label class="checkbox-row" style="margin-top:14px;">
+              <input id="backup-confirm-checkbox" type="checkbox" />
+              Confirmo que deseo importar este respaldo. El sistema solo agregara registros faltantes y no sustituira informacion existente.
+            </label>
+            <div class="row-actions" style="margin-top:14px;">
+              <button id="backup-import-confirm" type="button" disabled>Importar respaldo</button>
+            </div>
+            <p id="backup-message" class="message"></p>
+          </div>
+        </div>
       </section>
     </main>
 

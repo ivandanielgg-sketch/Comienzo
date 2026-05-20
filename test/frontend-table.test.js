@@ -26,3 +26,11 @@ test('main table keeps general search and sends sort before pagination', () => {
   assert.match(appJs, /new URLSearchParams\(\{\s*page: state\.projectsPag\.page,\s*limit: state\.projectsPag\.limit,\s*search: state\.projectsSearch,\s*\.\.\.buildTableParams\('projects'\),/s);
   assert.match(appJs, /renderPaginationControls\(\s*paginationContainerId,/);
 });
+
+test('admin backup buttons replace general Excel export UI', () => {
+  assert.match(indexHtml, /Crear respaldo/);
+  assert.match(indexHtml, /Importar respaldo/);
+  assert.doesNotMatch(indexHtml, /Exportar Excel General|export-general-excel/);
+  assert.match(appJs, /\/api\/admin\/backup/);
+  assert.doesNotMatch(appJs, /export-general-excel|generateGeneralExcel/);
+});
