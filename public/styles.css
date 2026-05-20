@@ -120,6 +120,26 @@ th {
   text-transform: uppercase;
 }
 
+.datatable-sort {
+  align-items: center;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  gap: 6px;
+  padding: 0;
+  text-transform: uppercase;
+}
+
+.datatable-sort:hover:not(:disabled) {
+  background: transparent;
+  color: var(--primary);
+}
+
+.datatable-sort:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
 .hidden {
   display: none !important;
 }

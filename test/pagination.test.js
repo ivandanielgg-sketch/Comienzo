@@ -1,6 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parsePaginationParams, buildPaginationMeta, ALLOWED_LIMITS, DEFAULT_LIMIT } = require('../src/pagination');
+const {
+  parsePaginationParams,
+  buildPaginationMeta,
+  ALLOWED_LIMITS,
+  DEFAULT_LIMIT,
+  normalizeSort,
+  addSqlFilters,
+} = require('../src/pagination');
 
 test('parsePaginationParams defaults', () => {
   const result = parsePaginationParams({});
@@ -108,4 +115,52 @@ test('buildPaginationMeta with limit 50', () => {
   const result = buildPaginationMeta(1, 50, 43);
   assert.equal(result.totalPages, 1);
   assert.equal(result.hasNextPage, false);
+});
+
+test('normalizeSort only allows whitelisted sort fields', () => {
+  const allowed = { order_number: 'p.order_number', id: 'p.id' };
+  assert.deepEqual(normalizeSort({ sortBy: 'order_number', sortOrder: 'desc' }, allowed, 'p.id DESC'), {
+    sortBy: 'order_number',
+    sortOrder: 'DESC',
+    orderBy: 'p.order_number DESC',
+  });
+  assert.deepEqual(normalizeSort({ sortBy: 'bad_field', sortOrder: 'desc' }, allowed, 'p.id DESC'), {
+    sortBy: '',
+    sortOrder: 'DESC',
+    orderBy: 'p.id DESC',
+  });
+});
+
+test('addSqlFilters builds text, number range, date range, select and boolean filters safely', () => {
+  const result = addSqlFilters(
+    {
+      order_number: '4587',
+      total_min: '10',
+      total_max: '20',
+      created_from: '2026-05-01',
+      created_to: '2026-05-19',
+      status: 'Pendiente',
+      active: 'false',
+      ignored: 'x',
+    },
+    {
+      order_number: { type: 'text', column: 'order_number' },
+      total: { type: 'number', column: 'total' },
+      created: { type: 'date', column: 'created_at' },
+      status: { type: 'select', column: 'status', options: ['Pendiente', 'Cerrado'] },
+      active: { type: 'boolean', column: 'active' },
+    },
+  );
+
+  assert.deepEqual(result.whereParts, [
+    'order_number LIKE ?',
+    'total >= ?',
+    'total <= ?',
+    'created_at >= ?',
+    'created_at <= ?',
+    'status = ?',
+    'active = ?',
+  ]);
+  assert.deepEqual(result.params, ['%4587%', 10, 20, '2026-05-01', '2026-05-19', 'Pendiente', 0]);
+  assert.equal(result.activeFilters.order_number, '4587');
 });
