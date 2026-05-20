@@ -37,7 +37,6 @@ state.ecovisMovementsPag = { page: 1, limit: 15 };
 state.ecovisMovementsSearch = '';
 state.ecovisMovementsTypeFilter = '';
 state.selectedEcovisPaymentId = null;
-state.tableFilters = {};
 state.tableSort = {};
 
 const loginView = document.querySelector('#login-view');
@@ -123,11 +122,6 @@ const defaultPagination = {
   hasPreviousPage: false,
 };
 
-function getTableFilters(tableKey) {
-  if (!state.tableFilters[tableKey]) state.tableFilters[tableKey] = {};
-  return state.tableFilters[tableKey];
-}
-
 function getTableSort(tableKey) {
   return state.tableSort[tableKey] || { sortBy: '', sortOrder: 'asc' };
 }
@@ -139,53 +133,11 @@ function buildTableParams(tableKey) {
     params.sortBy = sort.sortBy;
     params.sortOrder = sort.sortOrder || 'asc';
   }
-  Object.entries(getTableFilters(tableKey)).forEach(([key, value]) => {
-    if (value !== '' && value !== null && value !== undefined) params[key] = value;
-  });
   return params;
 }
 
-function hasActiveFilters(tableKey) {
-  return Object.values(getTableFilters(tableKey)).some((value) => value !== '' && value !== null && value !== undefined);
-}
-
 function resetTableControls(tableKey) {
-  state.tableFilters[tableKey] = {};
   state.tableSort[tableKey] = { sortBy: '', sortOrder: 'asc' };
-}
-
-function filterControlHtml(column, filters) {
-  if (!column.filterable) return '';
-  const key = column.key;
-  const value = filters[key] || '';
-  const min = filters[`${key}_min`] || filters[`${key}_from`] || '';
-  const max = filters[`${key}_max`] || filters[`${key}_to`] || '';
-
-  if (column.type === 'select') {
-    const options = (column.filterOptions || [])
-      .map((option) => `<option value="${escapeHtml(option.value)}" ${String(value) === String(option.value) ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
-      .join('');
-    return `<select data-filter-input data-filter-key="${key}"><option value="">Todos</option>${options}</select>`;
-  }
-  if (column.type === 'boolean') {
-    return `
-      <select data-filter-input data-filter-key="${key}">
-        <option value="">Todos</option>
-        <option value="true" ${value === true || value === 'true' ? 'selected' : ''}>Si</option>
-        <option value="false" ${value === false || value === 'false' ? 'selected' : ''}>No</option>
-      </select>`;
-  }
-  if (column.type === 'number' || column.type === 'currency') {
-    return `
-      <input data-filter-input data-filter-key="${key}_min" type="number" step="0.01" placeholder="Min" value="${escapeHtml(min)}" />
-      <input data-filter-input data-filter-key="${key}_max" type="number" step="0.01" placeholder="Max" value="${escapeHtml(max)}" />`;
-  }
-  if (column.type === 'date') {
-    return `
-      <input data-filter-input data-filter-key="${key}_from" type="date" value="${escapeHtml(min)}" />
-      <input data-filter-input data-filter-key="${key}_to" type="date" value="${escapeHtml(max)}" />`;
-  }
-  return `<input data-filter-input data-filter-key="${key}" type="text" placeholder="Contiene..." value="${escapeHtml(value)}" />`;
 }
 
 function renderDataTable({
@@ -197,6 +149,7 @@ function renderDataTable({
   paginationContainerId,
   emptyMessage,
   filteredEmptyMessage,
+  isFiltered = false,
   onRefresh,
   pageState,
   renderActions,
@@ -204,9 +157,7 @@ function renderDataTable({
 }) {
   const table = tableBody.closest('table');
   const thead = table.querySelector('thead');
-  const filters = getTableFilters(tableKey);
   const sort = getTableSort(tableKey);
-  const activeFilters = hasActiveFilters(tableKey);
   const visibleColumns = columns.filter((column) => column.visible !== false);
   const hasActionColumn = true;
 
@@ -214,29 +165,19 @@ function renderDataTable({
     <tr>
       ${visibleColumns.map((column) => {
         const isSorted = sort.sortBy === column.key;
-        const sortIcon = !isSorted ? '' : (sort.sortOrder === 'desc' ? '↓' : '↑');
-        const filtered = Object.keys(filters).some((key) => key === column.key || key.startsWith(`${column.key}_`));
-        return `<th class="${filtered ? 'datatable-filtered' : ''}">
+        const sortIcon = !column.sortable ? '' : (!isSorted ? '↕' : (sort.sortOrder === 'desc' ? '↓' : '↑'));
+        return `<th>
           <button class="datatable-sort" type="button" data-sort-key="${escapeHtml(column.key)}" ${column.sortable ? '' : 'disabled'}>
             ${escapeHtml(column.label)} <span>${sortIcon}</span>
           </button>
-          ${column.filterable ? '<span class="filter-dot" title="Filtro disponible">⌕</span>' : ''}
         </th>`;
       }).join('')}
       ${hasActionColumn ? '<th></th>' : ''}
     </tr>
-    <tr class="datatable-filters">
-      ${visibleColumns.map((column) => `<th>${filterControlHtml(column, filters)}${column.filterable ? `
-        <div class="filter-actions">
-          <button type="button" data-apply-filter="${escapeHtml(column.key)}">Aplicar</button>
-          <button type="button" data-clear-filter="${escapeHtml(column.key)}">Limpiar</button>
-        </div>` : ''}</th>`).join('')}
-      ${hasActionColumn ? `<th><button type="button" data-clear-all-filters ${!activeFilters && !sort.sortBy ? 'disabled' : ''}>Limpiar filtros</button>${activeFilters ? '<small class="filters-active">Filtros activos</small>' : ''}</th>` : ''}
-    </tr>
   `;
 
   if (!data.length) {
-    tableBody.innerHTML = `<tr><td colspan="${visibleColumns.length + (hasActionColumn ? 1 : 0)}" class="muted">${activeFilters ? filteredEmptyMessage : emptyMessage}</td></tr>`;
+    tableBody.innerHTML = `<tr><td colspan="${visibleColumns.length + (hasActionColumn ? 1 : 0)}" class="muted">${isFiltered ? filteredEmptyMessage : emptyMessage}</td></tr>`;
   } else {
     tableBody.innerHTML = data.map((row) => {
       const cells = visibleColumns.map((column) => {
@@ -254,61 +195,15 @@ function renderDataTable({
     button.addEventListener('click', () => {
       const key = button.dataset.sortKey;
       const current = getTableSort(tableKey);
-      if (current.sortBy !== key) {
+      if (current.sortBy === key && current.sortOrder === 'desc') {
         state.tableSort[tableKey] = { sortBy: key, sortOrder: 'asc' };
-      } else if (current.sortOrder === 'asc') {
+      } else {
         state.tableSort[tableKey] = { sortBy: key, sortOrder: 'desc' };
-      } else {
-        state.tableSort[tableKey] = { sortBy: '', sortOrder: 'asc' };
       }
       pageState.page = 1;
       onRefresh();
     });
   });
-
-  const applyColumnFilter = (columnKey) => {
-    const nextFilters = { ...getTableFilters(tableKey) };
-    thead.querySelectorAll(`[data-filter-input][data-filter-key^="${columnKey}"]`).forEach((input) => {
-      if (input.value) {
-        nextFilters[input.dataset.filterKey] = input.value;
-      } else {
-        delete nextFilters[input.dataset.filterKey];
-      }
-    });
-    state.tableFilters[tableKey] = nextFilters;
-    pageState.page = 1;
-    onRefresh();
-  };
-
-  thead.querySelectorAll('[data-apply-filter]').forEach((button) => {
-    button.addEventListener('click', () => applyColumnFilter(button.dataset.applyFilter));
-  });
-  thead.querySelectorAll('[data-clear-filter]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const key = button.dataset.clearFilter;
-      Object.keys(getTableFilters(tableKey)).forEach((filterKey) => {
-        if (filterKey === key || filterKey.startsWith(`${key}_`)) delete state.tableFilters[tableKey][filterKey];
-      });
-      pageState.page = 1;
-      onRefresh();
-    });
-  });
-  thead.querySelectorAll('[data-filter-input]').forEach((input) => {
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        const applyButton = input.closest('th').querySelector('[data-apply-filter]');
-        if (applyButton) applyColumnFilter(applyButton.dataset.applyFilter);
-      }
-    });
-  });
-  const clearAll = thead.querySelector('[data-clear-all-filters]');
-  if (clearAll) {
-    clearAll.addEventListener('click', () => {
-      resetTableControls(tableKey);
-      pageState.page = 1;
-      onRefresh();
-    });
-  }
 
   renderPaginationControls(
     paginationContainerId,
@@ -705,7 +600,8 @@ function renderProjects() {
     pagination: state.projectsPagination || defaultPagination,
     paginationContainerId: 'projects-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
+    isFiltered: Boolean(state.projectsSearch),
     onRefresh: loadProjects,
     pageState: state.projectsPag,
     renderActions: (project) => `
@@ -725,7 +621,8 @@ function renderClosedProjects() {
     pagination: state.closedPagination || defaultPagination,
     paginationContainerId: 'closed-projects-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
+    isFiltered: Boolean(state.closedSearch),
     onRefresh: loadClosedProjects,
     pageState: state.closedPag,
     renderActions: (project) => `
@@ -757,7 +654,7 @@ function renderUsers() {
     pagination: state.usersPagination || defaultPagination,
     paginationContainerId: 'users-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
     onRefresh: loadUsers,
     pageState: state.usersPag,
     renderActions: (user) => `<button class="secondary" data-action="select-user" data-id="${user.id}" type="button">Editar</button>`,
@@ -1516,7 +1413,8 @@ function renderEmployees() {
     pagination: state.employeesPagination || defaultPagination,
     paginationContainerId: 'employees-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
+    isFiltered: Boolean(state.employeesSearch || state.employeesActiveFilter !== 'all'),
     onRefresh: loadEmployees,
     pageState: state.employeesPag,
     rowClass: (emp) => (!emp.active ? 'row-inactive' : ''),
@@ -1619,7 +1517,7 @@ async function loadVacationRequests(employeeId) {
     pagination: state.vacReqPagination || defaultPagination,
     paginationContainerId: 'vacation-requests-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
     onRefresh: () => loadVacationRequests(employeeId),
     pageState: state.vacReqPag,
     renderActions: (req) => `
@@ -1924,7 +1822,8 @@ function renderReportsProjectsTable() {
     pagination: state.reportsProjPagination || defaultPagination,
     paginationContainerId: 'reports-projects-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
+    isFiltered: Boolean(state.reportsProjSearch || state.reportsProjStatus),
     onRefresh: loadReportsProjects,
     pageState: state.reportsProjPag,
     renderActions: (p) => `
@@ -2110,7 +2009,7 @@ function renderReportList(reports, pagination, projectId) {
     pagination: pagination || defaultPagination,
     paginationContainerId: 'project-reports-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
     onRefresh: () => loadProjectReports(pid),
     pageState: state.projReportsPag,
     renderActions: (r) => `
@@ -2442,7 +2341,8 @@ function renderEcovisProjects(projects, pagination) {
     pagination: pagination || defaultPagination,
     paginationContainerId: 'ecovis-projects-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
+    isFiltered: Boolean(state.ecovisProjectsSearch),
     onRefresh: loadEcovisProjects,
     pageState: state.ecovisProjectsPag,
     renderActions: (p) => {
@@ -2477,7 +2377,7 @@ function renderEcovisPayments(payments, pagination) {
     pagination: pagination || defaultPagination,
     paginationContainerId: 'ecovis-payments-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
     onRefresh: loadEcovisPayments,
     pageState: state.ecovisPaymentsPag,
     renderActions: (p) => '<div class="row-actions"><button class="secondary" data-action="ecovis-allocate-payment" data-id="' + p.id + '" type="button">Asignar</button></div>',
@@ -2503,7 +2403,7 @@ function renderEcovisLoans(loans, pagination) {
     pagination: pagination || defaultPagination,
     paginationContainerId: 'ecovis-loans-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
     onRefresh: loadEcovisLoans,
     pageState: state.ecovisLoansPag,
     renderActions: (l) => '<div class="row-actions"><button class="secondary" data-action="ecovis-repay-loan" data-id="' + l.id + '" type="button">Devolucion</button></div>',
@@ -2533,7 +2433,8 @@ function renderEcovisMovements(movements, pagination) {
     pagination: pagination || defaultPagination,
     paginationContainerId: 'ecovis-movements-pagination',
     emptyMessage: 'No hay registros para mostrar.',
-    filteredEmptyMessage: 'No se encontraron registros con los filtros actuales.',
+    filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
+    isFiltered: Boolean(state.ecovisMovementsSearch || state.ecovisMovementsTypeFilter),
     onRefresh: loadEcovisMovements,
     pageState: state.ecovisMovementsPag,
   });

@@ -140,52 +140,6 @@ th {
   opacity: 1;
 }
 
-.datatable-filters th {
-  background: #f8fbff;
-  min-width: 140px;
-  text-transform: none;
-  vertical-align: top;
-}
-
-.datatable-filters input,
-.datatable-filters select {
-  border-radius: 8px;
-  font-size: 0.78rem;
-  margin-bottom: 4px;
-  padding: 7px 8px;
-}
-
-.filter-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.filter-actions button,
-[data-clear-all-filters] {
-  border-radius: 8px;
-  font-size: 0.72rem;
-  padding: 6px 8px;
-}
-
-.filter-actions button:last-child,
-[data-clear-all-filters] {
-  background: #e9eefb;
-  color: var(--primary-dark);
-}
-
-.datatable-filtered {
-  background: #eef6ff;
-}
-
-.filter-dot,
-.filters-active {
-  color: var(--primary);
-  display: block;
-  font-size: 0.72rem;
-  font-weight: 800;
-  margin-top: 4px;
-}
-
 .hidden {
   display: none !important;
 }

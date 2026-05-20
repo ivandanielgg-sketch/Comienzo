@@ -12,15 +12,17 @@ test('dashboard exposes Numero de pedido column backed by order_number', () => {
   assert.match(appJs, /p\.order_number \|\| 'Sin pedido'/);
 });
 
-test('DataTable centralizes filter, sorting and pagination state', () => {
+test('DataTable centralizes header sorting and pagination state', () => {
   assert.match(appJs, /function renderDataTable/);
   assert.match(appJs, /data-sort-key/);
-  assert.match(appJs, /data-apply-filter/);
+  assert.match(appJs, /sortOrder: 'desc'/);
   assert.match(appJs, /pageState\.page = 1/);
   assert.match(appJs, /buildTableParams\('projects'\)/);
+  assert.doesNotMatch(appJs, /data-apply-filter/);
+  assert.doesNotMatch(appJs, /datatable-filters/);
 });
 
-test('main table filters are sent to backend before pagination', () => {
+test('main table keeps general search and sends sort before pagination', () => {
   assert.match(appJs, /new URLSearchParams\(\{\s*page: state\.projectsPag\.page,\s*limit: state\.projectsPag\.limit,\s*search: state\.projectsSearch,\s*\.\.\.buildTableParams\('projects'\),/s);
   assert.match(appJs, /renderPaginationControls\(\s*paginationContainerId,/);
 });
