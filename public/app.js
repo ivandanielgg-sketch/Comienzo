@@ -247,127 +247,127 @@ const ecovisMovementOptions = [
 ];
 
 const projectColumns = [
-  { key: 'id', label: 'ID', type: 'number', sortable: true, filterable: true },
-  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, filterable: true },
-  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
-  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true, filterable: true },
-  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.project_description || '') },
-  { key: 'status', label: 'Estado', type: 'select', sortable: true, filterable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status">${escapeHtml(p.status)}</span>` },
-  { key: 'risk', label: 'Riesgo', type: 'select', sortable: true, filterable: true, filterOptions: riskOptions, render: (p) => `<span class="badge risk-${escapeHtml(String(p.risk || '').toLowerCase())}">${escapeHtml(p.risk)}</span>` },
-  { key: 'promised_delivery_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
-  { key: 'total_charged', label: 'Cobrado', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.total_charged) },
-  { key: 'spent', label: 'Gastado', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.spent) },
-  { key: 'pending_collection', label: 'Pendiente', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.pending_collection) },
-  { key: 'final_margin', label: 'Margen final', type: 'number', sortable: true, filterable: true, render: (p) => `<span class="badge margin-badge ${marginBadgeClass(p)}" title="Margen esperado: ${escapeHtml(p.expected_margin)}%">${formatPercentDecimal(p.final_margin)}</span>` },
+  { key: 'id', label: 'ID', type: 'number', sortable: true },
+  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true },
+  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
+  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
+  { key: 'status', label: 'Estado', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status">${escapeHtml(p.status)}</span>` },
+  { key: 'risk', label: 'Riesgo', type: 'select', sortable: true, filterOptions: riskOptions, render: (p) => `<span class="badge risk-${escapeHtml(String(p.risk || '').toLowerCase())}">${escapeHtml(p.risk)}</span>` },
+  { key: 'promised_delivery_date', label: 'Fecha', type: 'date', sortable: true },
+  { key: 'total_charged', label: 'Cobrado', type: 'currency', sortable: true, render: (p) => money.format(p.total_charged) },
+  { key: 'spent', label: 'Gastado', type: 'currency', sortable: true, render: (p) => money.format(p.spent) },
+  { key: 'pending_collection', label: 'Pendiente', type: 'currency', sortable: true, render: (p) => money.format(p.pending_collection) },
+  { key: 'final_margin', label: 'Margen final', type: 'number', sortable: true, render: (p) => `<span class="badge margin-badge ${marginBadgeClass(p)}" title="Margen esperado: ${escapeHtml(p.expected_margin)}%">${formatPercentDecimal(p.final_margin)}</span>` },
 ];
 
 const closedProjectColumns = [
-  { key: 'id', label: 'ID', type: 'number', sortable: true, filterable: true },
-  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, filterable: true },
-  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
-  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true, filterable: true },
-  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.project_description || '') },
-  { key: 'closed_at', label: 'Cerrado', type: 'date', sortable: true, filterable: true },
-  { key: 'total_invoiced_mxn', label: 'Facturado MXN', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.total_invoiced_mxn) },
-  { key: 'total_charged', label: 'Cobrado MXN', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.total_charged) },
-  { key: 'spent', label: 'Gastado MXN', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(p.spent) },
-  { key: 'final_margin', label: 'Margen final', type: 'number', sortable: true, filterable: true, render: (p) => `<span class="badge margin-badge ${marginBadgeClass(p)}">${formatPercentDecimal(p.final_margin)}</span>` },
+  { key: 'id', label: 'ID', type: 'number', sortable: true },
+  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true },
+  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
+  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
+  { key: 'closed_at', label: 'Cerrado', type: 'date', sortable: true },
+  { key: 'total_invoiced_mxn', label: 'Facturado MXN', type: 'currency', sortable: true, render: (p) => money.format(p.total_invoiced_mxn) },
+  { key: 'total_charged', label: 'Cobrado MXN', type: 'currency', sortable: true, render: (p) => money.format(p.total_charged) },
+  { key: 'spent', label: 'Gastado MXN', type: 'currency', sortable: true, render: (p) => money.format(p.spent) },
+  { key: 'final_margin', label: 'Margen final', type: 'number', sortable: true, render: (p) => `<span class="badge margin-badge ${marginBadgeClass(p)}">${formatPercentDecimal(p.final_margin)}</span>` },
 ];
 
 const userColumns = [
-  { key: 'id', label: 'ID', type: 'number', sortable: true, filterable: true },
-  { key: 'username', label: 'Usuario', type: 'text', sortable: true, filterable: true },
-  { key: 'created_at', label: 'Creado', type: 'date', sortable: true, filterable: true },
+  { key: 'id', label: 'ID', type: 'number', sortable: true },
+  { key: 'username', label: 'Usuario', type: 'text', sortable: true },
+  { key: 'created_at', label: 'Creado', type: 'date', sortable: true },
 ];
 
 const employeeColumns = [
-  { key: 'employee_number', label: 'No. Empleado', type: 'text', sortable: true, filterable: true },
-  { key: 'full_name', label: 'Nombre', type: 'text', sortable: true, filterable: true },
-  { key: 'hire_date', label: 'Fecha ingreso', type: 'date', sortable: true, filterable: true },
-  { key: 'seniority_years', label: 'Antiguedad', type: 'number', sortable: true, filterable: true, render: (emp) => `${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}` },
-  { key: 'active', label: 'Estatus', type: 'boolean', sortable: true, filterable: true, filterOptions: employeeStatusOptions, render: (emp) => !emp.active ? `<span class="badge badge-inactive">INACTIVO</span>${emp.termination_date ? `<br><small class="muted">${escapeHtml(emp.termination_date)}</small>` : ''}` : '<span class="badge badge-active">Activo</span>' },
-  { key: 'termination_date', label: 'Fecha de baja', type: 'date', sortable: true, filterable: true, render: (emp) => escapeHtml(emp.termination_date || '') },
-  { key: 'accrued_days', label: 'Dias generados acumulados', type: 'number', sortable: true, filterable: true },
-  { key: 'days_taken', label: 'Tomados', type: 'number', sortable: true, filterable: true },
-  { key: 'days_scheduled', label: 'Programados', type: 'number', sortable: true, filterable: true },
-  { key: 'days_pending', label: 'Disponibles', type: 'number', sortable: true, filterable: true, render: (emp) => emp.days_pending < 0 ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo</small>` : `${emp.days_pending}` },
+  { key: 'employee_number', label: 'No. Empleado', type: 'text', sortable: true },
+  { key: 'full_name', label: 'Nombre', type: 'text', sortable: true },
+  { key: 'hire_date', label: 'Fecha ingreso', type: 'date', sortable: true },
+  { key: 'seniority_years', label: 'Antiguedad', type: 'number', sortable: true, render: (emp) => `${emp.seniority_years} año${emp.seniority_years !== 1 ? 's' : ''}` },
+  { key: 'active', label: 'Estatus', type: 'boolean', sortable: true, filterOptions: employeeStatusOptions, render: (emp) => !emp.active ? `<span class="badge badge-inactive">INACTIVO</span>${emp.termination_date ? `<br><small class="muted">${escapeHtml(emp.termination_date)}</small>` : ''}` : '<span class="badge badge-active">Activo</span>' },
+  { key: 'termination_date', label: 'Fecha de baja', type: 'date', sortable: true, render: (emp) => escapeHtml(emp.termination_date || '') },
+  { key: 'accrued_days', label: 'Dias generados acumulados', type: 'number', sortable: true },
+  { key: 'days_taken', label: 'Tomados', type: 'number', sortable: true },
+  { key: 'days_scheduled', label: 'Programados', type: 'number', sortable: true },
+  { key: 'days_pending', label: 'Disponibles', type: 'number', sortable: true, render: (emp) => emp.days_pending < 0 ? `<span class="badge badge-negative">${emp.days_pending}</span><br><small class="text-negative">Saldo negativo</small>` : `${emp.days_pending}` },
 ];
 
 const vacationRequestColumns = [
-  { key: 'start_date', label: 'Fecha inicio', type: 'date', sortable: true, filterable: true },
-  { key: 'end_date', label: 'Fecha fin', type: 'date', sortable: true, filterable: true },
-  { key: 'requested_days', label: 'Dias', type: 'number', sortable: true, filterable: true },
-  { key: 'vacation_exercise_year', label: 'Ejercicio', type: 'number', sortable: true, filterable: true },
-  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterable: true, filterOptions: vacationStatusOptions, render: (req) => `<span class="badge status-${escapeHtml(req.status)}">${escapeHtml(req.status)}</span>` },
-  { key: 'include_vacation_bonus', label: 'Prima', type: 'boolean', sortable: true, filterable: true, render: (req) => req.include_vacation_bonus ? 'Si' : 'No' },
-  { key: 'notes', label: 'Notas', type: 'text', sortable: false, filterable: true, render: (req) => escapeHtml(req.notes || '') },
-  { key: 'created_at', label: 'Registrado', type: 'date', sortable: true, filterable: true, render: (req) => escapeHtml((req.created_at || '').slice(0, 10)) },
+  { key: 'start_date', label: 'Fecha inicio', type: 'date', sortable: true },
+  { key: 'end_date', label: 'Fecha fin', type: 'date', sortable: true },
+  { key: 'requested_days', label: 'Dias', type: 'number', sortable: true },
+  { key: 'vacation_exercise_year', label: 'Ejercicio', type: 'number', sortable: true },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterOptions: vacationStatusOptions, render: (req) => `<span class="badge status-${escapeHtml(req.status)}">${escapeHtml(req.status)}</span>` },
+  { key: 'include_vacation_bonus', label: 'Prima', type: 'boolean', sortable: true, render: (req) => req.include_vacation_bonus ? 'Si' : 'No' },
+  { key: 'notes', label: 'Notas', type: 'text', sortable: false, render: (req) => escapeHtml(req.notes || '') },
+  { key: 'created_at', label: 'Registrado', type: 'date', sortable: true, render: (req) => escapeHtml((req.created_at || '').slice(0, 10)) },
 ];
 
 const reportsProjectColumns = [
-  { key: 'id', label: 'ID', type: 'number', sortable: true, filterable: true },
-  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, filterable: true },
-  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
-  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true, filterable: true },
-  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.project_description || '') },
-  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status">${escapeHtml(p.status)}</span>` },
-  { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, filterable: true, render: (p) => p.report_count || 0 },
+  { key: 'id', label: 'ID', type: 'number', sortable: true },
+  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true },
+  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
+  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status">${escapeHtml(p.status)}</span>` },
+  { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, render: (p) => p.report_count || 0 },
 ];
 
 const reportListColumns = [
-  { key: 'report_folio', label: 'Folio', type: 'text', sortable: true, filterable: true },
-  { key: 'report_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
-  { key: 'service_name', label: 'Servicio', type: 'text', sortable: true, filterable: true, render: (r) => escapeHtml(r.service_name || '') },
-  { key: 'technician_name', label: 'Tecnico', type: 'text', sortable: true, filterable: true, render: (r) => escapeHtml(r.technician_name || '') },
+  { key: 'report_folio', label: 'Folio', type: 'text', sortable: true },
+  { key: 'report_date', label: 'Fecha', type: 'date', sortable: true },
+  { key: 'service_name', label: 'Servicio', type: 'text', sortable: true, render: (r) => escapeHtml(r.service_name || '') },
+  { key: 'technician_name', label: 'Tecnico', type: 'text', sortable: true, render: (r) => escapeHtml(r.technician_name || '') },
 ];
 
 const ecovisProjectColumns = [
-  { key: 'project_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
-  { key: 'project_name', label: 'Proyecto', type: 'text', sortable: true, filterable: true },
-  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.quote_number || '') },
-  { key: 'purchase_order_number', label: 'OC', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.purchase_order_number || '') },
-  { key: 'invoice_number', label: 'Factura', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.invoice_number || '') },
-  { key: 'total_amount', label: 'Monto total', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.total_amount || 0)) },
-  { key: 'paid_amount', label: 'Pagado', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.paid_amount || 0)) },
-  { key: 'pending_amount', label: 'Pendiente', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.pending_amount || 0)) },
-  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterable: true, filterOptions: ecovisStatusOptions, render: (p) => `<span class="badge ecovis-status-${escapeHtml(p.status || 'pendiente')}">${escapeHtml(p.status || 'pendiente')}</span>` },
+  { key: 'project_date', label: 'Fecha', type: 'date', sortable: true },
+  { key: 'project_name', label: 'Proyecto', type: 'text', sortable: true },
+  { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, render: (p) => escapeHtml(p.quote_number || '') },
+  { key: 'purchase_order_number', label: 'OC', type: 'text', sortable: true, render: (p) => escapeHtml(p.purchase_order_number || '') },
+  { key: 'invoice_number', label: 'Factura', type: 'text', sortable: true, render: (p) => escapeHtml(p.invoice_number || '') },
+  { key: 'total_amount', label: 'Monto total', type: 'currency', sortable: true, render: (p) => money.format(Number(p.total_amount || 0)) },
+  { key: 'paid_amount', label: 'Pagado', type: 'currency', sortable: true, render: (p) => money.format(Number(p.paid_amount || 0)) },
+  { key: 'pending_amount', label: 'Pendiente', type: 'currency', sortable: true, render: (p) => money.format(Number(p.pending_amount || 0)) },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterOptions: ecovisStatusOptions, render: (p) => `<span class="badge ecovis-status-${escapeHtml(p.status || 'pendiente')}">${escapeHtml(p.status || 'pendiente')}</span>` },
 ];
 
 const ecovisPaymentColumns = [
-  { key: 'payment_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
-  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.amount || 0)) },
-  { key: 'currency', label: 'Moneda', type: 'select', sortable: true, filterable: true, filterOptions: ['MXN', 'USD', 'EUR'].map((value) => ({ value, label: value })) },
-  { key: 'payment_method', label: 'Metodo', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.payment_method || '') },
-  { key: 'bank_reference', label: 'Referencia', type: 'text', sortable: true, filterable: true, render: (p) => escapeHtml(p.bank_reference || '') },
-  { key: 'allocated_amount', label: 'Asignado', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.allocated_amount ?? (Number(p.amount || 0) - Number(p.unallocated_amount || 0)))) },
-  { key: 'unallocated_amount', label: 'Sin asignar', type: 'currency', sortable: true, filterable: true, render: (p) => money.format(Number(p.unallocated_amount || 0)) },
-  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterable: true, filterOptions: ecovisPaymentStatusOptions, render: (p) => {
+  { key: 'payment_date', label: 'Fecha', type: 'date', sortable: true },
+  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, render: (p) => money.format(Number(p.amount || 0)) },
+  { key: 'currency', label: 'Moneda', type: 'select', sortable: true, filterOptions: ['MXN', 'USD', 'EUR'].map((value) => ({ value, label: value })) },
+  { key: 'payment_method', label: 'Metodo', type: 'text', sortable: true, render: (p) => escapeHtml(p.payment_method || '') },
+  { key: 'bank_reference', label: 'Referencia', type: 'text', sortable: true, render: (p) => escapeHtml(p.bank_reference || '') },
+  { key: 'allocated_amount', label: 'Asignado', type: 'currency', sortable: true, render: (p) => money.format(Number(p.allocated_amount ?? (Number(p.amount || 0) - Number(p.unallocated_amount || 0)))) },
+  { key: 'unallocated_amount', label: 'Sin asignar', type: 'currency', sortable: true, render: (p) => money.format(Number(p.unallocated_amount || 0)) },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterOptions: ecovisPaymentStatusOptions, render: (p) => {
     const statusLabel = p.is_cancelled ? 'cancelado' : (Number(p.unallocated_amount || 0) > 0 ? 'parcial' : 'asignado');
     return `<span class="badge ecovis-status-${p.is_cancelled ? 'cancelado' : 'pendiente'}">${escapeHtml(statusLabel)}</span>`;
   } },
 ];
 
 const ecovisLoanColumns = [
-  { key: 'movement_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
-  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, filterable: true, render: (l) => money.format(Number(l.amount || 0)) },
-  { key: 'currency', label: 'Moneda', type: 'select', sortable: true, filterable: true, filterOptions: ['MXN', 'USD', 'EUR'].map((value) => ({ value, label: value })) },
-  { key: 'reference', label: 'Referencia', type: 'text', sortable: true, filterable: true, render: (l) => escapeHtml(l.reference || '') },
-  { key: 'description', label: 'Descripcion', type: 'text', sortable: true, filterable: true, render: (l) => escapeHtml(l.description || '') },
-  { key: 'outstanding', label: 'Saldo', type: 'currency', sortable: true, filterable: true, render: (l) => money.format(Number(l.outstanding || 0)) },
+  { key: 'movement_date', label: 'Fecha', type: 'date', sortable: true },
+  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, render: (l) => money.format(Number(l.amount || 0)) },
+  { key: 'currency', label: 'Moneda', type: 'select', sortable: true, filterOptions: ['MXN', 'USD', 'EUR'].map((value) => ({ value, label: value })) },
+  { key: 'reference', label: 'Referencia', type: 'text', sortable: true, render: (l) => escapeHtml(l.reference || '') },
+  { key: 'description', label: 'Descripcion', type: 'text', sortable: true, render: (l) => escapeHtml(l.description || '') },
+  { key: 'outstanding', label: 'Saldo', type: 'currency', sortable: true, render: (l) => money.format(Number(l.outstanding || 0)) },
 ];
 
 const ecovisMovementColumns = [
-  { key: 'movement_date', label: 'Fecha', type: 'date', sortable: true, filterable: true },
-  { key: 'movement_type', label: 'Tipo', type: 'select', sortable: true, filterable: true, filterOptions: ecovisMovementOptions, render: (m) => escapeHtml(ECOVIS_MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type) },
-  { key: 'description', label: 'Descripcion', type: 'text', sortable: true, filterable: true, render: (m) => escapeHtml(m.description || '') },
-  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, filterable: true, render: (m) => money.format(Number(m.amount || 0)) },
-  { key: 'direction', label: 'Direccion', type: 'select', sortable: true, filterable: true, filterOptions: [
+  { key: 'movement_date', label: 'Fecha', type: 'date', sortable: true },
+  { key: 'movement_type', label: 'Tipo', type: 'select', sortable: true, filterOptions: ecovisMovementOptions, render: (m) => escapeHtml(ECOVIS_MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type) },
+  { key: 'description', label: 'Descripcion', type: 'text', sortable: true, render: (m) => escapeHtml(m.description || '') },
+  { key: 'amount', label: 'Monto', type: 'currency', sortable: true, render: (m) => money.format(Number(m.amount || 0)) },
+  { key: 'direction', label: 'Direccion', type: 'select', sortable: true, filterOptions: [
     { value: 'ecovis_debe_a_revram', label: 'ECOVIS debe' },
     { value: 'revram_debe_a_ecovis', label: 'REVRAM debe' },
     { value: 'neutral', label: 'Neutral' },
   ], render: (m) => escapeHtml(ECOVIS_DIRECTION_LABELS[m.direction] || m.direction) },
-  { key: 'related_project_name', label: 'Proyecto relacionado', type: 'text', sortable: true, filterable: true, render: (m) => escapeHtml(m.related_project_name || m.reference || '') },
-  { key: 'created_by', label: 'Usuario', type: 'text', sortable: true, filterable: true, render: (m) => escapeHtml(m.created_by || '') },
+  { key: 'related_project_name', label: 'Proyecto relacionado', type: 'text', sortable: true, render: (m) => escapeHtml(m.related_project_name || m.reference || '') },
+  { key: 'created_by', label: 'Usuario', type: 'text', sortable: true, render: (m) => escapeHtml(m.created_by || '') },
 ];
 
 function renderPaginationControls(containerId, pagination, onPageChange, onLimitChange) {
