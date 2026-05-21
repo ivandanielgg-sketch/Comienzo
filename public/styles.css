@@ -35,10 +35,10 @@ body {
 }
 
 main {
-  width: 100%;
-  max-width: 1440px;
+  width: min(96vw, 1800px);
+  max-width: calc(100vw - 32px);
   margin: 0 auto;
-  padding: 32px clamp(16px, 2vw, 32px);
+  padding: 32px clamp(12px, 1.5vw, 24px);
 }
 
 h1,
@@ -761,6 +761,36 @@ button.active {
   }
 }
 
+@media (max-width: 932px) and (orientation: landscape) {
+  main {
+    width: calc(100vw - 24px);
+    max-width: none;
+    padding: 16px 12px;
+  }
+
+  .cards {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .detail-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .grid-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topbar,
+  .panel-header {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .modal-content {
+    max-width: 90vw;
+  }
+}
+
 .pagination-controls {
   display: flex;
   align-items: center;
@@ -892,7 +922,7 @@ button.active {
 
 @media (min-width: 1920px) {
   main {
-    max-width: 1536px;
+    width: min(94vw, 1800px);
   }
 }
 
