@@ -565,7 +565,7 @@ button.active {
   }
 
   .money-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 80px;
   }
 
   .topbar,

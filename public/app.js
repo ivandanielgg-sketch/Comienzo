@@ -873,8 +873,12 @@ function resetProjectForm() {
   projectFormTitle.textContent = 'Nuevo proyecto';
   projectForm.elements.id.value = '';
   projectForm.elements.expected_margin.value = 0;
-  projectForm.elements.total_invoiced.value = 0;
   projectForm.elements.total_invoiced_currency.value = 'MXN';
+  if (projectForm.elements.total_invoiced.setCurrencyValue) {
+    projectForm.elements.total_invoiced.setCurrencyValue(0);
+  } else {
+    projectForm.elements.total_invoiced.value = 0;
+  }
   projectForm.elements.progress_percent.value = 0;
   togglePurchaseOrder();
   setMessage(projectMessage, '');

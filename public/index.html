@@ -1106,6 +1106,29 @@
           </div>
         </section>
 
+        <div id="backup-import-modal" class="modal-overlay hidden">
+          <div class="modal-content modal-large panel">
+            <h2>Importar respaldo</h2>
+            <p class="muted">Selecciona un archivo .json de respaldo para previsualizar la importación.</p>
+            <input type="file" id="backup-file-input" accept=".json" />
+            <div id="backup-preview-area" class="hidden" style="margin-top:16px;">
+              <h3>Vista previa de importación</h3>
+              <p class="muted">Esta importación no reemplazará datos existentes. Primero agregará registros faltantes. Los conflictos serán reportados para revisión manual.</p>
+              <div id="backup-preview-table"></div>
+              <div id="backup-preview-conflicts" class="hidden" style="margin-top:12px;">
+                <h4 style="color:var(--warning);">Conflictos detectados</h4>
+                <div id="backup-conflicts-detail"></div>
+              </div>
+              <div style="display:flex;gap:12px;margin-top:16px;">
+                <button id="backup-confirm-import" type="button">Confirmar importación</button>
+                <button id="backup-cancel-import" class="secondary" type="button">Cancelar</button>
+              </div>
+            </div>
+            <p id="backup-import-message" class="message" style="margin-top:12px;"></p>
+            <button id="backup-close-modal" class="secondary" type="button" style="margin-top:12px;">Cerrar</button>
+          </div>
+        </div>
+
         <section id="users-view" class="layout hidden">
           <div class="panel">
             <div class="panel-header">

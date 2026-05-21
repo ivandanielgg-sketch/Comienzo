@@ -2405,52 +2405,312 @@ app.post('/api/ecovis/apply-credit', requireAuth, requireAdmin, (req, res, next)
   }
 });
 
-app.get('/api/admin/export-general-excel', requireAuth, requireAdmin, (req, res) => {
-  const projects = db.prepare('SELECT * FROM projects WHERE closed_at IS NULL ORDER BY id DESC').all();
-  const closedProjects = db.prepare('SELECT * FROM projects WHERE closed_at IS NOT NULL ORDER BY closed_at DESC').all();
+// ===================== END ECOVIS MODULE =====================
 
-  const allProjectIds = [...projects, ...closedProjects].map((p) => p.id);
-  const costs = allProjectIds.length > 0
-    ? db.prepare(
-      `SELECT * FROM project_costs WHERE project_id IN (${allProjectIds.map(() => '?').join(',')}) ORDER BY cost_date DESC`,
-    ).all(...allProjectIds)
-    : [];
+// ===================== BACKUP MODULE =====================
 
-  const employees = db.prepare('SELECT * FROM employees ORDER BY full_name ASC').all();
-  const vacationRequests = db.prepare('SELECT * FROM vacation_requests ORDER BY start_date DESC').all();
-  const reports = db.prepare(
-    `SELECT r.*, p.quote_number, p.client_name AS project_client
-     FROM project_reports r
-     JOIN projects p ON r.project_id = p.id
-     ORDER BY r.created_at DESC`,
-  ).all();
+const BACKUP_SCHEMA_VERSION = '1.0.0';
 
-  const ecovisProjects = db.prepare('SELECT * FROM ecovis_projects ORDER BY project_date DESC').all();
-  const ecovisPayments = db.prepare('SELECT * FROM ecovis_payments ORDER BY payment_date DESC').all();
-  const ecovisAllocations = db.prepare('SELECT * FROM ecovis_payment_allocations ORDER BY id DESC').all();
-  const ecovisMovements = db.prepare('SELECT * FROM ecovis_movements ORDER BY movement_date DESC, id DESC').all();
+const BACKUP_ENTITIES = [
+  { key: 'projects', table: 'projects', query: "SELECT * FROM projects WHERE closed_at IS NULL ORDER BY id", stableKeys: ['quote_number'] },
+  { key: 'closedProjects', table: 'projects', query: "SELECT * FROM projects WHERE closed_at IS NOT NULL ORDER BY id", stableKeys: ['quote_number'] },
+  { key: 'projectPayments', table: 'project_payments', query: "SELECT * FROM project_payments ORDER BY id", stableKeys: ['project_id', 'payment_date', 'amount', 'currency'] },
+  { key: 'projectCosts', table: 'project_costs', query: "SELECT * FROM project_costs ORDER BY id", stableKeys: ['project_id', 'cost_date', 'amount', 'category', 'description'] },
+  { key: 'projectReports', table: 'project_reports', query: "SELECT * FROM project_reports ORDER BY id", stableKeys: ['report_folio'] },
+  { key: 'employees', table: 'employees', query: "SELECT * FROM employees ORDER BY id", stableKeys: ['employee_number'] },
+  { key: 'vacationRequests', table: 'vacation_requests', query: "SELECT * FROM vacation_requests ORDER BY id", stableKeys: ['employee_id', 'start_date', 'end_date', 'requested_days'] },
+  { key: 'exchangeRates', table: 'exchange_rates', query: "SELECT * FROM exchange_rates ORDER BY currency", stableKeys: ['currency'] },
+  { key: 'ecovisProjects', table: 'ecovis_projects', query: "SELECT * FROM ecovis_projects ORDER BY id", stableKeys: ['project_name', 'project_date', 'total_amount'] },
+  { key: 'ecovisPayments', table: 'ecovis_payments', query: "SELECT * FROM ecovis_payments ORDER BY id", stableKeys: ['payment_date', 'amount', 'bank_reference'] },
+  { key: 'ecovisPaymentAllocations', table: 'ecovis_payment_allocations', query: "SELECT * FROM ecovis_payment_allocations ORDER BY id", stableKeys: ['payment_id', 'amount', 'allocation_type'] },
+  { key: 'ecovisMovements', table: 'ecovis_movements', query: "SELECT * FROM ecovis_movements ORDER BY id", stableKeys: ['movement_date', 'movement_type', 'amount', 'description'] },
+  { key: 'usersSafe', table: 'users', query: "SELECT id, username, role, created_at FROM users ORDER BY id", stableKeys: ['username'] },
+];
 
-  const ecovisSummary = calculateEcovisAccountSummary(ecovisProjects, ecovisPayments, ecovisAllocations, ecovisMovements);
+app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
+  const data = {};
+  const recordCounts = {};
+  const entityChecksums = {};
+  const includedEntities = [];
+  const warnings = [];
 
-  const users = db.prepare('SELECT id, username, role, created_at FROM users ORDER BY username ASC').all();
+  for (const entity of BACKUP_ENTITIES) {
+    try {
+      const rows = db.prepare(entity.query).all();
+      data[entity.key] = rows;
+      recordCounts[entity.key] = rows.length;
+      entityChecksums[entity.key] = String(rows.length);
+      includedEntities.push(entity.key);
+    } catch (err) {
+      data[entity.key] = [];
+      recordCounts[entity.key] = 0;
+      warnings.push(`No se pudo respaldar ${entity.key}: ${err.message}`);
+    }
+  }
 
-  res.json({
-    projects,
-    closedProjects,
-    costs,
-    employees,
-    vacationRequests,
-    reports,
-    ecovisProjects,
-    ecovisPayments,
-    ecovisAllocations,
-    ecovisMovements,
-    ecovisSummary,
-    users,
-  });
+  const excludedEntities = [
+    { entity: 'sessions', reason: 'Datos sensibles de sesion activa' },
+    { entity: 'password_hash', reason: 'Credenciales sensibles excluidas por seguridad' },
+  ];
+
+  const backup = {
+    backupMetadata: {
+      schemaVersion: BACKUP_SCHEMA_VERSION,
+      appName: 'REVRAM Dashboard',
+      exportedAt: new Date().toISOString(),
+      exportedBy: req.session.username || 'admin',
+      environment: process.env.NODE_ENV || 'development',
+      recordCounts,
+      entityChecksums,
+      includedEntities,
+      excludedEntities: excludedEntities.map((e) => e.entity),
+      warnings,
+    },
+    coverageManifest: {
+      routesDetected: ['/projects', '/closed-projects', '/reports', '/vacations', '/ecovis', '/users'],
+      modulesDetected: ['projects', 'closedProjects', 'payments', 'costs', 'reports', 'employees', 'vacations', 'ecovis', 'exchangeRates', 'users'],
+      entitiesDetected: BACKUP_ENTITIES.map((e) => e.key),
+      entitiesIncluded: includedEntities,
+      entitiesExcluded: excludedEntities,
+      coverageStatus: warnings.length > 0 ? 'incomplete' : 'complete',
+    },
+    data,
+  };
+
+  if (warnings.length > 0) {
+    return res.status(207).json(backup);
+  }
+
+  res.json(backup);
 });
 
-// ===================== END ECOVIS MODULE =====================
+app.post('/api/admin/backup/preview', requireAuth, requireAdmin, (req, res) => {
+  const backup = req.body;
+  if (!backup || !backup.backupMetadata || !backup.data) {
+    return res.status(400).json({ message: 'Archivo de respaldo invalido. Faltan backupMetadata o data.' });
+  }
+
+  if (!backup.backupMetadata.schemaVersion) {
+    return res.status(400).json({ message: 'El respaldo no contiene schemaVersion.' });
+  }
+
+  const preview = {};
+  const conflicts = [];
+
+  for (const entity of BACKUP_ENTITIES) {
+    const backupRows = backup.data[entity.key] || [];
+    let existingRows = [];
+    try {
+      existingRows = db.prepare(entity.query).all();
+    } catch (e) {
+      existingRows = [];
+    }
+
+    const newRecords = [];
+    const duplicates = [];
+    const entityConflicts = [];
+
+    for (const row of backupRows) {
+      const match = existingRows.find((existing) => {
+        if (entity.stableKeys.length === 0) return existing.id === row.id;
+        return entity.stableKeys.every((k) => existing[k] != null && String(existing[k]) === String(row[k]));
+      });
+
+      if (!match) {
+        if (entity.key === 'projectPayments' || entity.key === 'projectCosts') {
+          const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
+          if (!parentExists) {
+            entityConflicts.push({ row, reason: `Proyecto padre id=${row.project_id} no encontrado` });
+            continue;
+          }
+        }
+        if (entity.key === 'vacationRequests') {
+          const parentExists = db.prepare('SELECT id FROM employees WHERE id = ?').get(row.employee_id);
+          if (!parentExists) {
+            entityConflicts.push({ row, reason: `Empleado padre id=${row.employee_id} no encontrado` });
+            continue;
+          }
+        }
+        if (entity.key === 'projectReports') {
+          const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
+          if (!parentExists) {
+            entityConflicts.push({ row, reason: `Proyecto padre id=${row.project_id} no encontrado` });
+            continue;
+          }
+        }
+        if (entity.key === 'ecovisPaymentAllocations') {
+          const paymentExists = db.prepare('SELECT id FROM ecovis_payments WHERE id = ?').get(row.payment_id);
+          if (!paymentExists) {
+            entityConflicts.push({ row, reason: `Pago ECOVIS padre id=${row.payment_id} no encontrado` });
+            continue;
+          }
+        }
+        newRecords.push(row);
+      } else {
+        const hasChanges = Object.keys(row).some((k) => {
+          if (k === 'id' || k === 'created_at' || k === 'updated_at') return false;
+          if (entity.stableKeys.includes(k)) return false;
+          return String(row[k] ?? '') !== String(match[k] ?? '');
+        });
+        if (hasChanges) {
+          entityConflicts.push({ row, existing: match, reason: 'Datos difieren del registro existente' });
+        } else {
+          duplicates.push(row);
+        }
+      }
+    }
+
+    preview[entity.key] = {
+      inBackup: backupRows.length,
+      existing: existingRows.length,
+      newToAdd: newRecords.length,
+      duplicatesOmitted: duplicates.length,
+      conflicts: entityConflicts.length,
+    };
+
+    if (entityConflicts.length > 0) {
+      conflicts.push({ entity: entity.key, items: entityConflicts.slice(0, 20) });
+    }
+  }
+
+  res.json({ preview, conflicts, schemaVersion: backup.backupMetadata.schemaVersion });
+});
+
+app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
+  const backup = req.body;
+  if (!backup || !backup.backupMetadata || !backup.data) {
+    return res.status(400).json({ message: 'Archivo de respaldo invalido.' });
+  }
+
+  const importLog = {
+    importedAt: new Date().toISOString(),
+    importedBy: req.session.username || 'admin',
+    fileName: backup.backupMetadata.appName || 'unknown',
+    schemaVersion: backup.backupMetadata.schemaVersion || '0.0.0',
+    backupExportedAt: backup.backupMetadata.exportedAt || null,
+    status: 'completed',
+    summary: {},
+    conflicts: [],
+    errors: [],
+  };
+
+  const importInTransaction = db.transaction(() => {
+    const orderedEntities = [
+      'exchangeRates', 'usersSafe', 'projects', 'closedProjects',
+      'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
+      'projectReports', 'ecovisProjects', 'ecovisPayments',
+      'ecovisPaymentAllocations', 'ecovisMovements',
+    ];
+
+    for (const entityKey of orderedEntities) {
+      const entityDef = BACKUP_ENTITIES.find((e) => e.key === entityKey);
+      if (!entityDef) continue;
+
+      const backupRows = backup.data[entityKey] || [];
+      let existingRows = [];
+      try { existingRows = db.prepare(entityDef.query).all(); } catch (e) { existingRows = []; }
+
+      let added = 0;
+      let skipped = 0;
+      const entityConflicts = [];
+
+      for (const row of backupRows) {
+        const match = existingRows.find((existing) => {
+          if (entityDef.stableKeys.length === 0) return existing.id === row.id;
+          return entityDef.stableKeys.every((k) => existing[k] != null && String(existing[k]) === String(row[k]));
+        });
+
+        if (match) {
+          const hasChanges = Object.keys(row).some((k) => {
+            if (k === 'id' || k === 'created_at' || k === 'updated_at') return false;
+            if (entityDef.stableKeys.includes(k)) return false;
+            return String(row[k] ?? '') !== String(match[k] ?? '');
+          });
+          if (hasChanges) entityConflicts.push({ backupId: row.id, existingId: match.id, reason: 'Datos difieren' });
+          skipped++;
+          continue;
+        }
+
+        if (entityKey === 'usersSafe' || entityKey === 'exchangeRates') { skipped++; continue; }
+
+        try {
+          if (entityKey === 'projects' || entityKey === 'closedProjects') {
+            const existing = db.prepare('SELECT id FROM projects WHERE quote_number = ?').get(row.quote_number);
+            if (existing) { skipped++; continue; }
+            const cols = ['quote_number', 'order_number', 'purchase_order_number', 'purchase_order_not_applicable', 'seller', 'client_name', 'project_description', 'expected_margin', 'total_invoiced', 'total_invoiced_currency', 'progress_percent', 'technician_name', 'promised_delivery_date', 'status', 'risk', 'observations', 'closed_at'];
+            const vals = cols.map((c) => row[c] !== undefined ? row[c] : null);
+            db.prepare(`INSERT INTO projects (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
+            added++;
+          } else if (entityKey === 'projectPayments') {
+            const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
+            if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Proyecto padre no encontrado' }); continue; }
+            db.prepare('INSERT INTO project_payments (project_id, amount, currency, payment_date, notes) VALUES (?, ?, ?, ?, ?)').run(row.project_id, row.amount, row.currency || 'MXN', row.payment_date, row.notes || null);
+            added++;
+          } else if (entityKey === 'projectCosts') {
+            const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
+            if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Proyecto padre no encontrado' }); continue; }
+            db.prepare('INSERT INTO project_costs (project_id, category, description, amount, currency, cost_date) VALUES (?, ?, ?, ?, ?, ?)').run(row.project_id, row.category, row.description, row.amount, row.currency || 'MXN', row.cost_date);
+            added++;
+          } else if (entityKey === 'employees') {
+            const existing = db.prepare('SELECT id FROM employees WHERE employee_number = ?').get(row.employee_number);
+            if (existing) { skipped++; continue; }
+            db.prepare('INSERT INTO employees (employee_number, full_name, hire_date, department, position, immediate_boss, active, termination_date, inactive_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.employee_number, row.full_name, row.hire_date, row.department || null, row.position || null, row.immediate_boss || null, row.active ?? 1, row.termination_date || null, row.inactive_reason || null);
+            added++;
+          } else if (entityKey === 'vacationRequests') {
+            const parentExists = db.prepare('SELECT id FROM employees WHERE id = ?').get(row.employee_id);
+            if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Empleado padre no encontrado' }); continue; }
+            db.prepare('INSERT INTO vacation_requests (employee_id, start_date, end_date, requested_days, vacation_exercise_year, status, is_first_vacation_of_exercise, include_vacation_bonus, created_by, authorized_by, hr_responsible, notes, creates_negative_balance, negative_days_generated, admin_override_reason, balance_after_request) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.employee_id, row.start_date, row.end_date, row.requested_days, row.vacation_exercise_year, row.status, row.is_first_vacation_of_exercise ?? 0, row.include_vacation_bonus ?? 1, row.created_by || null, row.authorized_by || null, row.hr_responsible || null, row.notes || null, row.creates_negative_balance ?? 0, row.negative_days_generated ?? 0, row.admin_override_reason || null, row.balance_after_request ?? null);
+            added++;
+          } else if (entityKey === 'projectReports') {
+            const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
+            if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Proyecto padre no encontrado' }); continue; }
+            const existing = db.prepare('SELECT id FROM project_reports WHERE report_folio = ?').get(row.report_folio);
+            if (existing) { skipped++; continue; }
+            db.prepare('INSERT INTO project_reports (project_id, report_folio, client_name, client_address, service_name, report_date, assigned_technicians, burner_model, equipment_model_serial, pumps_motors_model, fuel, voltage, gas_pressure_inh2o, liquid_fuel_pressure_psi, working_pressure, pump_amperage, fan_amperage, condensate_tank_temp_c, operating_output_temp_c, flue_gas_temp_c, safety_tests, comments, emissions_low_fire, emissions_high_fire, technician_name, plant_manager_name, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.project_id, row.report_folio, row.client_name, row.client_address || null, row.service_name, row.report_date, row.assigned_technicians || null, row.burner_model || null, row.equipment_model_serial || null, row.pumps_motors_model || null, row.fuel || null, row.voltage || null, row.gas_pressure_inh2o || null, row.liquid_fuel_pressure_psi || null, row.working_pressure || null, row.pump_amperage || null, row.fan_amperage || null, row.condensate_tank_temp_c || null, row.operating_output_temp_c || null, row.flue_gas_temp_c || null, row.safety_tests || null, row.comments || null, row.emissions_low_fire || null, row.emissions_high_fire || null, row.technician_name || null, row.plant_manager_name || null, row.created_by || null, row.updated_by || null);
+            added++;
+          } else if (entityKey === 'ecovisProjects') {
+            db.prepare('INSERT INTO ecovis_projects (project_name, client_name, quote_number, purchase_order_number, invoice_number, project_date, description, total_amount, currency, status, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.project_name, row.client_name || 'ECOVIS', row.quote_number || null, row.purchase_order_number || null, row.invoice_number || null, row.project_date, row.description || null, row.total_amount, row.currency || 'MXN', row.status || 'pendiente', row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null, row.updated_by || null);
+            added++;
+          } else if (entityKey === 'ecovisPayments') {
+            db.prepare('INSERT INTO ecovis_payments (payment_date, amount, currency, payment_method, bank_reference, source_description, notes, unallocated_amount, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.payment_date, row.amount, row.currency || 'MXN', row.payment_method || null, row.bank_reference || null, row.source_description || null, row.notes || null, row.unallocated_amount ?? 0, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null, row.updated_by || null);
+            added++;
+          } else if (entityKey === 'ecovisPaymentAllocations') {
+            const paymentExists = db.prepare('SELECT id FROM ecovis_payments WHERE id = ?').get(row.payment_id);
+            if (!paymentExists) { entityConflicts.push({ backupId: row.id, reason: 'Pago ECOVIS padre no encontrado' }); continue; }
+            db.prepare('INSERT INTO ecovis_payment_allocations (payment_id, ecovis_project_id, allocation_type, amount, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.payment_id, row.ecovis_project_id || null, row.allocation_type, row.amount, row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null);
+            added++;
+          } else if (entityKey === 'ecovisMovements') {
+            db.prepare('INSERT INTO ecovis_movements (movement_date, movement_type, description, amount, currency, direction, reference, related_project_id, related_payment_id, payment_method, bank_reference, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.movement_date, row.movement_type, row.description, row.amount, row.currency || 'MXN', row.direction || 'neutral', row.reference || null, row.related_project_id || null, row.related_payment_id || null, row.payment_method || null, row.bank_reference || null, row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null, row.updated_by || null);
+            added++;
+          }
+        } catch (err) {
+          importLog.errors.push({ entity: entityKey, rowId: row.id, error: err.message });
+        }
+      }
+
+      importLog.summary[entityKey] = { added, skipped, conflicts: entityConflicts.length };
+      if (entityConflicts.length > 0) {
+        importLog.conflicts.push({ entity: entityKey, items: entityConflicts });
+      }
+    }
+  });
+
+  try {
+    importInTransaction();
+  } catch (err) {
+    importLog.status = 'failed';
+    importLog.errors.push({ critical: true, error: err.message });
+    return res.status(500).json({ message: 'Error critico durante importacion. Se realizo rollback.', importLog });
+  }
+
+  if (importLog.errors.length > 0) {
+    importLog.status = 'completed_with_warnings';
+  }
+
+  res.json({ message: 'Importacion completada.', importLog });
+});
+
+// ===================== END BACKUP MODULE =====================
 
 app.use((err, req, res, next) => {
   if (res.headersSent) {
