@@ -127,7 +127,6 @@ th {
   color: var(--muted);
   font-size: 0.82rem;
   text-transform: uppercase;
-  white-space: nowrap;
 }
 
 .datatable-sort {
@@ -275,7 +274,7 @@ button.active {
 
 .layout {
   display: grid;
-  grid-template-columns: 0.7fr 1.3fr;
+  grid-template-columns: minmax(280px, 25%) 1fr;
   gap: 24px;
 }
 
@@ -345,6 +344,46 @@ button.active {
   -webkit-overflow-scrolling: touch;
 }
 
+td.col-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 90px;
+}
+
+td.col-currency {
+  text-align: right;
+  white-space: nowrap;
+}
+
+td.col-number {
+  text-align: right;
+  white-space: nowrap;
+}
+
+td.col-date {
+  white-space: nowrap;
+}
+
+td.col-select,
+td.col-boolean {
+  white-space: nowrap;
+}
+
+td.col-actions {
+  white-space: nowrap;
+}
+
+th.col-currency .datatable-sort,
+th.col-number .datatable-sort {
+  justify-content: flex-end;
+}
+
+th.col-currency,
+th.col-number {
+  text-align: right;
+}
+
 .row-actions {
   display: flex;
   gap: 8px;
@@ -363,6 +402,21 @@ button.active {
 .badge.status {
   background: #e0f2fe;
   color: #075985;
+}
+
+.badge.status-terminado {
+  background: #dcfae6;
+  color: #087443;
+}
+
+.badge.status-pendiente {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.badge.status-en-proceso {
+  background: #fef0c7;
+  color: #b54708;
 }
 
 .badge.risk-alto {
