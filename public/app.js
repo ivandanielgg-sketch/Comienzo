@@ -571,6 +571,9 @@ function exchangeRatePayload() {
 }
 
 function switchView(viewName) {
+  if (state.userRole === 'tecnico' && viewName !== 'reports' && viewName !== 'report-archive') {
+    viewName = 'reports';
+  }
   const showingProjects = viewName === 'projects';
   const showingClosedProjects = viewName === 'closed-projects';
   const showingUsers = viewName === 'users';
@@ -3030,12 +3033,18 @@ function applyRoleVisibility() {
   projectsTab.classList.toggle('hidden', isTecnico);
   closedProjectsTab.classList.toggle('hidden', isTecnico);
   usersTab.classList.toggle('hidden', isTecnico);
+  if (vacationsTab) vacationsTab.classList.toggle('hidden', isTecnico || !isAdmin);
+  if (ecovisTab) ecovisTab.classList.toggle('hidden', isTecnico || !isAdmin);
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('hidden', false);
   const backupCreateBtn = document.getElementById('backup-create-btn');
   const backupImportBtn = document.getElementById('backup-import-btn');
-  if (backupCreateBtn) backupCreateBtn.classList.toggle('hidden', !isAdmin);
-  if (backupImportBtn) backupImportBtn.classList.toggle('hidden', !isAdmin);
+  if (backupCreateBtn) backupCreateBtn.classList.toggle('hidden', isTecnico || !isAdmin);
+  if (backupImportBtn) backupImportBtn.classList.toggle('hidden', isTecnico || !isAdmin);
+  if (isTecnico) {
+    const exchangePanel = document.querySelector('.exchange-panel');
+    if (exchangePanel) exchangePanel.classList.add('hidden');
+  }
 }
 
 function openReportPrintView(reportId, reportType) {
