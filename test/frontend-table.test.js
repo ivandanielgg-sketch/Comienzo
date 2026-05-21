@@ -34,3 +34,11 @@ test('admin backup buttons replace general Excel export UI', () => {
   assert.match(appJs, /\/api\/admin\/backup/);
   assert.doesNotMatch(appJs, /export-general-excel|generateGeneralExcel/);
 });
+
+test('money inputs format visually and normalize payload values', () => {
+  assert.match(appJs, /function initializeMoneyInputs/);
+  assert.match(appJs, /function formatMoneyInput/);
+  assert.match(appJs, /normalizeMoneyPayload/);
+  assert.match(appJs, /projectForm\.querySelectorAll\('input\[inputmode="decimal"\]'\)\.forEach\(formatMoneyInput\)/);
+  assert.match(indexHtml, /Total facturado con IVA[\s\S]*class="money-row"/);
+});

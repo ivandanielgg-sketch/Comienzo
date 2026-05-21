@@ -477,9 +477,99 @@ function setDefaultDates() {
   }
 }
 
+function parseMoneyInput(value) {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) return '';
+  const numericValue = rawValue.replace(/[^\d.,-]/g, '');
+  const lastDotIndex = numericValue.lastIndexOf('.');
+  const lastCommaIndex = numericValue.lastIndexOf(',');
+  const decimalSeparator =
+    lastDotIndex > lastCommaIndex
+      ? '.'
+      : lastCommaIndex > lastDotIndex
+        ? ','
+        : null;
+
+  if (!decimalSeparator) {
+    return numericValue.replace(/[^\d-]/g, '');
+  }
+
+  return numericValue
+    .split('')
+    .filter((character, index) => {
+      if (character !== '.' && character !== ',') return true;
+      return index === (decimalSeparator === '.' ? lastDotIndex : lastCommaIndex);
+    })
+    .join('')
+    .replace(decimalSeparator, '.');
+}
+
+function moneyInputCurrency(input) {
+  const row = input.closest('.money-row');
+  const rowCurrency = row ? row.querySelector('select') : null;
+  if (rowCurrency) return rowCurrency.value || 'MXN';
+  if (input.form?.elements.currency) return input.form.elements.currency.value || 'MXN';
+  if (input.form?.elements.total_invoiced_currency) return input.form.elements.total_invoiced_currency.value || 'MXN';
+  return 'MXN';
+}
+
+function isMoneyInput(input) {
+  if (!input || input.matches('[name="USD"], [name="EUR"]')) return false;
+  return input.closest('.money-row') || ['amount', 'total_amount', 'total_invoiced'].includes(input.name);
+}
+
+function formatMoneyInput(input) {
+  if (!isMoneyInput(input)) return;
+  const numericValue = parseMoneyInput(input.value);
+  if (numericValue === '' || !Number.isFinite(Number(numericValue))) {
+    input.value = '';
+    return;
+  }
+  input.value = formatCurrency(numericValue, moneyInputCurrency(input));
+}
+
+function unformatMoneyInput(input) {
+  if (!isMoneyInput(input)) return;
+  input.value = parseMoneyInput(input.value);
+}
+
+function normalizeMoneyPayload(payload, form) {
+  form.querySelectorAll('input[inputmode="decimal"]').forEach((input) => {
+    if (isMoneyInput(input) && Object.prototype.hasOwnProperty.call(payload, input.name)) {
+      payload[input.name] = parseMoneyInput(payload[input.name]);
+    }
+  });
+  return payload;
+}
+
+function initializeMoneyInputs() {
+  document.querySelectorAll('input[inputmode="decimal"]').forEach((input) => {
+    if (!isMoneyInput(input)) return;
+    input.addEventListener('focus', () => unformatMoneyInput(input));
+    input.addEventListener('blur', () => formatMoneyInput(input));
+    input.form?.addEventListener('reset', () => {
+      setTimeout(() => {
+        input.form.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
+      });
+    });
+  });
+
+  document.querySelectorAll('.money-row select, form select[name="currency"], form select[name="total_invoiced_currency"]').forEach((select) => {
+    select.addEventListener('change', () => {
+      const form = select.form;
+      if (!form) return;
+      form.querySelectorAll('input[inputmode="decimal"]').forEach((input) => {
+        if (isMoneyInput(input) && document.activeElement !== input) formatMoneyInput(input);
+      });
+    });
+  });
+
+  document.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
+}
+
 function projectPayload() {
   const formData = new FormData(projectForm);
-  const payload = Object.fromEntries(formData.entries());
+  const payload = normalizeMoneyPayload(Object.fromEntries(formData.entries()), projectForm);
   payload.purchase_order_not_applicable = purchaseOrderNotApplicable.checked;
   if (purchaseOrderNotApplicable.checked) {
     payload.purchase_order_number = '';
@@ -489,7 +579,7 @@ function projectPayload() {
 }
 
 function simpleFormPayload(form) {
-  return Object.fromEntries(new FormData(form).entries());
+  return normalizeMoneyPayload(Object.fromEntries(new FormData(form).entries()), form);
 }
 
 function userPayload() {
@@ -875,6 +965,7 @@ function fillProjectForm(project) {
   projectForm.elements.risk.value = project.risk;
   projectForm.elements.observations.value = project.observations || '';
   togglePurchaseOrder();
+  projectForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
   setMessage(projectMessage, '');
 }
 
@@ -887,6 +978,7 @@ function resetProjectForm() {
   projectForm.elements.total_invoiced_currency.value = 'MXN';
   projectForm.elements.progress_percent.value = 0;
   togglePurchaseOrder();
+  projectForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
   setMessage(projectMessage, '');
 }
 
@@ -2468,6 +2560,7 @@ document.getElementById('ecovis-new-project-btn').addEventListener('click', () =
   ecovisProjectForm.elements.id.value = '';
   ecovisProjectFormTitle.textContent = 'Agregar proyecto ECOVIS';
   ecovisProjectForm.elements.project_date.value = today();
+  ecovisProjectForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
   setMessage(ecovisProjectMessage, '');
   ecovisProjectModal.classList.remove('hidden');
 });
@@ -2515,6 +2608,7 @@ ecovisProjectsTable.addEventListener('click', async (event) => {
       ecovisProjectForm.elements.currency.value = project.currency || 'MXN';
       ecovisProjectForm.elements.description.value = project.description || '';
       ecovisProjectForm.elements.notes.value = project.notes || '';
+      ecovisProjectForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
       setMessage(ecovisProjectMessage, '');
       ecovisProjectModal.classList.remove('hidden');
     } catch (error) {
@@ -2549,6 +2643,7 @@ ecovisProjectsTable.addEventListener('click', async (event) => {
 document.getElementById('ecovis-new-payment-btn').addEventListener('click', () => {
   ecovisPaymentForm.reset();
   ecovisPaymentForm.elements.payment_date.value = today();
+  ecovisPaymentForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
   setMessage(ecovisPaymentMessage, '');
   ecovisPaymentModal.classList.remove('hidden');
 });
@@ -2588,6 +2683,7 @@ async function openAllocationModal(paymentId) {
   state.selectedEcovisPaymentId = Number(paymentId);
   setMessage(ecovisAllocationMessage, '');
   ecovisAllocationForm.reset();
+  ecovisAllocationForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
   ecovisAllocationModal.classList.remove('hidden');
 
   try {
@@ -2666,6 +2762,7 @@ document.getElementById('ecovis-new-loan-btn').addEventListener('click', () => {
   ecovisLoanForm.reset();
   ecovisLoanFormTitle.textContent = 'Registrar prestamo';
   ecovisLoanForm.elements.movement_date.value = today();
+  ecovisLoanForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
   setMessage(ecovisLoanMessage, '');
   ecovisLoanModal.classList.remove('hidden');
 });
@@ -2717,6 +2814,7 @@ ecovisLoansTable.addEventListener('click', async (event) => {
 document.getElementById('ecovis-adjustment-btn').addEventListener('click', () => {
   ecovisAdjustmentForm.reset();
   ecovisAdjustmentForm.elements.movement_date.value = today();
+  ecovisAdjustmentForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
   setMessage(ecovisAdjustmentMessage, '');
   ecovisAdjustmentModal.classList.remove('hidden');
 });
@@ -2748,6 +2846,7 @@ ecovisAdjustmentModal.addEventListener('click', (event) => {
 async function openApplyCreditModal(projectId) {
   ecovisApplyCreditForm.reset();
   ecovisApplyCreditForm.elements.movement_date.value = today();
+  ecovisApplyCreditForm.querySelectorAll('input[inputmode="decimal"]').forEach(formatMoneyInput);
   setMessage(ecovisApplyCreditMessage, '');
 
   try {
@@ -3007,6 +3106,8 @@ if (backupImportConfirm) {
 }
 
 // ===================== END ECOVIS MODULE =====================
+
+initializeMoneyInputs();
 
 api('/api/session')
   .then((session) => {

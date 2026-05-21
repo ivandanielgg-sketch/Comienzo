@@ -295,18 +295,20 @@ button.active {
 }
 
 .money-field .money-row {
-  max-width: 520px;
+  max-width: 100%;
 }
 
 .money-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 112px;
+  grid-template-columns: minmax(0, 1fr) minmax(86px, 112px);
   gap: 8px;
   width: 100%;
 }
 
-.money-row input {
+.money-row input,
+.money-row select {
   min-width: 0;
+  width: 100%;
 }
 
 .checkbox-row {
