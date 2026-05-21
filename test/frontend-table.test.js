@@ -6,9 +6,9 @@ const path = require('node:path');
 const appJs = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 
-test('dashboard exposes Numero de pedido column backed by order_number', () => {
-  assert.match(indexHtml, /Numero de pedido/);
-  assert.match(appJs, /key: 'order_number', label: 'Numero de pedido'/);
+test('dashboard exposes N. Pedido column backed by order_number', () => {
+  assert.match(indexHtml, /N\. Pedido/);
+  assert.match(appJs, /key: 'order_number', label: 'N\. Pedido'/);
   assert.match(appJs, /p\.order_number \|\| 'Sin pedido'/);
 });
 

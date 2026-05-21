@@ -208,13 +208,14 @@ function renderDataTable({
       ${visibleColumns.map((column) => {
         const isSorted = sort.sortBy === column.key;
         const sortIcon = !column.sortable ? '' : (!isSorted ? '↕' : (sort.sortOrder === 'desc' ? '↓' : '↑'));
-        return `<th>
+        const colClass = column.type ? `col-${column.type}` : '';
+        return `<th class="${colClass}">
           <button class="datatable-sort" type="button" data-sort-key="${escapeHtml(column.key)}" ${column.sortable ? '' : 'disabled'}>
             ${escapeHtml(column.label)} <span>${sortIcon}</span>
           </button>
         </th>`;
       }).join('')}
-      ${hasActionColumn ? '<th></th>' : ''}
+      ${hasActionColumn ? '<th class="col-actions"></th>' : ''}
     </tr>
   `;
 
@@ -225,9 +226,10 @@ function renderDataTable({
       const cells = visibleColumns.map((column) => {
         const raw = row[column.key];
         const value = column.render ? column.render(row) : escapeHtml(raw ?? '');
-        return `<td>${value}</td>`;
+        const colClass = column.type ? `col-${column.type}` : '';
+        return `<td class="${colClass}">${value}</td>`;
       }).join('');
-      const actions = hasActionColumn ? `<td>${renderActions ? renderActions(row) : ''}</td>` : '';
+      const actions = hasActionColumn ? `<td class="col-actions">${renderActions ? renderActions(row) : ''}</td>` : '';
       const cssClass = rowClass ? rowClass(row) : '';
       return `<tr class="${escapeHtml(cssClass)}">${cells}${actions}</tr>`;
     }).join('');
@@ -288,13 +290,18 @@ const ecovisMovementOptions = [
   { value: 'cancelacion', label: 'Cancelacion' },
 ];
 
+function statusBadgeClass(status) {
+  const s = String(status || '').toLowerCase().replace(/\s+/g, '-');
+  return `status-${s}`;
+}
+
 const projectColumns = [
   { key: 'id', label: 'ID', type: 'number', sortable: true },
   { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true },
-  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'order_number', label: 'N. Pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
   { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
   { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
-  { key: 'status', label: 'Estado', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status">${escapeHtml(p.status)}</span>` },
+  { key: 'status', label: 'Estado', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status ${statusBadgeClass(p.status)}">${escapeHtml(p.status)}</span>` },
   { key: 'risk', label: 'Riesgo', type: 'select', sortable: true, filterOptions: riskOptions, render: (p) => `<span class="badge risk-${escapeHtml(String(p.risk || '').toLowerCase())}">${escapeHtml(p.risk)}</span>` },
   { key: 'promised_delivery_date', label: 'Fecha', type: 'date', sortable: true },
   { key: 'total_charged', label: 'Cobrado', type: 'currency', sortable: true, render: (p) => money.format(p.total_charged) },
@@ -306,7 +313,7 @@ const projectColumns = [
 const closedProjectColumns = [
   { key: 'id', label: 'ID', type: 'number', sortable: true },
   { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true },
-  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'order_number', label: 'N. Pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
   { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
   { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
   { key: 'closed_at', label: 'Cerrado', type: 'date', sortable: true },
@@ -349,10 +356,10 @@ const vacationRequestColumns = [
 const reportsProjectColumns = [
   { key: 'id', label: 'ID', type: 'number', sortable: true },
   { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true },
-  { key: 'order_number', label: 'Numero de pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'order_number', label: 'N. Pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
   { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
   { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
-  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status">${escapeHtml(p.status)}</span>` },
+  { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status ${statusBadgeClass(p.status)}">${escapeHtml(p.status)}</span>` },
   { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, render: (p) => p.report_count || 0 },
 ];
 
