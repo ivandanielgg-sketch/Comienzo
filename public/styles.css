@@ -19,17 +19,26 @@
   box-sizing: border-box;
 }
 
+html {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   background: linear-gradient(135deg, #eef4ff 0%, var(--bg) 45%, #ffffff 100%);
   color: var(--text);
+  overflow-x: hidden;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 main {
-  width: min(1440px, calc(100% - 32px));
+  width: 100%;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 32px 0;
+  padding: 32px clamp(16px, 2vw, 32px);
 }
 
 h1,
@@ -104,7 +113,6 @@ textarea {
 table {
   width: 100%;
   border-collapse: collapse;
-  white-space: nowrap;
 }
 
 th,
@@ -112,12 +120,14 @@ td {
   border-bottom: 1px solid var(--border);
   padding: 12px;
   text-align: left;
+  overflow-wrap: break-word;
 }
 
 th {
   color: var(--muted);
   font-size: 0.82rem;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .datatable-sort {
@@ -269,18 +279,25 @@ button.active {
   gap: 24px;
 }
 
+.layout > * {
+  min-width: 0;
+}
+
 .two-columns {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .panel {
   padding: 24px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .grid-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  min-width: 0;
 }
 
 .grid-form button,
@@ -321,12 +338,17 @@ button.active {
 }
 
 .table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .row-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
   white-space: nowrap;
 }
 
@@ -437,6 +459,26 @@ button.active {
   .exchange-form,
   .detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .topbar-actions {
+    justify-content: flex-start;
+  }
+
+  .topbar-actions button {
+    font-size: 0.82rem;
+    padding: 8px 12px;
+  }
+
+  .panel {
+    padding: 18px;
+  }
+
+  th, td {
+    padding: 10px 8px;
+    font-size: 0.88rem;
   }
 }
 
@@ -553,8 +595,7 @@ button.active {
 
 @media (max-width: 700px) {
   main {
-    width: min(100% - 20px, 1440px);
-    padding: 18px 0;
+    padding: 12px clamp(10px, 3vw, 16px);
   }
 
   .cards,
@@ -575,17 +616,148 @@ button.active {
   }
 
   .topbar-actions {
-    justify-content: stretch;
+    justify-content: flex-start;
+  }
+
+  .topbar-actions button {
+    font-size: 0.78rem;
+    padding: 8px 10px;
+  }
+
+  .panel {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .auth-card {
+    padding: 24px 18px;
+    margin-top: 4vh;
+  }
+
+  .cards article,
+  .detail-grid article {
+    padding: 14px;
+  }
+
+  .cards strong,
+  .detail-grid strong {
+    font-size: 1.15rem;
   }
 
   .pagination-controls {
     flex-direction: column;
     gap: 10px;
+    align-items: stretch;
   }
 
   .pagination-buttons {
     flex-wrap: wrap;
     justify-content: center;
+  }
+
+  .pagination-info {
+    text-align: center;
+  }
+
+  .modal-overlay {
+    padding: 16px 8px;
+    align-items: flex-start;
+  }
+
+  .modal-content {
+    max-width: 100%;
+    border-radius: 16px;
+  }
+
+  .modal-content .grid-form {
+    grid-template-columns: 1fr;
+  }
+
+  .search-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-bar input[type="text"] {
+    max-width: 100%;
+  }
+
+  .search-bar select {
+    width: 100%;
+  }
+
+  input, select, textarea {
+    font-size: 16px;
+  }
+
+  .ecovis-subtabs {
+    gap: 6px;
+  }
+
+  .ecovis-subtabs button {
+    font-size: 0.78rem;
+    padding: 7px 10px;
+  }
+
+  .table-wrapper {
+    margin: 0 -14px;
+    padding: 0 14px;
+    width: calc(100% + 28px);
+    max-width: calc(100% + 28px);
+  }
+
+  th, td {
+    padding: 8px 6px;
+    font-size: 0.82rem;
+  }
+
+  .row-actions {
+    gap: 4px;
+  }
+
+  .row-actions button {
+    padding: 6px 8px;
+    font-size: 0.75rem;
+  }
+
+  .exchange-panel .panel-header {
+    gap: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar h1 {
+    font-size: 1.3rem;
+  }
+
+  .topbar-actions {
+    gap: 6px;
+  }
+
+  .topbar-actions button {
+    font-size: 0.72rem;
+    padding: 6px 8px;
+  }
+
+  .cards span {
+    font-size: 0.78rem;
+  }
+
+  .cards strong {
+    font-size: 1rem;
+  }
+
+  .detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .badge {
+    font-size: 0.72rem;
+    padding: 3px 6px;
+  }
+
+  .margin-badge {
+    min-width: 60px;
   }
 }
 
@@ -685,6 +857,18 @@ button.active {
 .ecovis-status-pagado { background: #dcfae6; color: #087443; }
 .ecovis-status-cancelado { background: #fee4e2; color: #b42318; }
 
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.search-row input {
+  max-width: 300px;
+}
+
 .search-bar {
   display: flex;
   align-items: center;
@@ -704,4 +888,21 @@ button.active {
   min-width: 120px;
   padding: 8px 12px;
   font-size: 0.88rem;
+}
+
+@media (min-width: 1920px) {
+  main {
+    max-width: 1536px;
+  }
+}
+
+@media (max-width: 700px) {
+  .search-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-row input {
+    max-width: 100%;
+  }
 }
