@@ -92,6 +92,48 @@ const currencyFormatters = {
   EUR: new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'EUR' }),
 };
 
+
+function parseCurrencyInput(value) {
+  if (value == null || value === '') return NaN;
+  const cleaned = String(value).replace(/[$,\s]/g, '');
+  return Number(cleaned);
+}
+
+function formatCurrencyDisplay(value, currency) {
+  const num = typeof value === 'number' ? value : parseCurrencyInput(value);
+  if (isNaN(num)) return '';
+  const fmt = currencyFormatters[currency] || money;
+  return fmt.format(num);
+}
+
+function initCurrencyInput(input, getCurrency) {
+  let rawValue = parseCurrencyInput(input.value) || 0;
+  function formatDisplay() {
+    const cur = getCurrency ? getCurrency() : 'MXN';
+    if (input === document.activeElement) return;
+    input.value = formatCurrencyDisplay(rawValue, cur);
+  }
+  input.addEventListener('focus', () => {
+    input.value = rawValue === 0 ? '' : String(rawValue);
+    input.select();
+  });
+  input.addEventListener('blur', () => {
+    const parsed = parseCurrencyInput(input.value);
+    if (!isNaN(parsed)) rawValue = parsed;
+    formatDisplay();
+  });
+  input.addEventListener('input', () => {
+    const parsed = parseCurrencyInput(input.value);
+    if (!isNaN(parsed)) rawValue = parsed;
+  });
+  input.getCurrencyValue = () => rawValue;
+  input.setCurrencyValue = (v) => {
+    rawValue = typeof v === 'number' ? v : (parseCurrencyInput(v) || 0);
+    formatDisplay();
+  };
+  formatDisplay();
+}
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -452,6 +494,27 @@ async function showApp() {
   await loadProjects();
 }
 
+(function setupMainCurrencyInputs() {
+  var totalInvoicedInput = projectForm.elements.total_invoiced;
+  var totalInvoicedCurrency = projectForm.elements.total_invoiced_currency;
+  if (totalInvoicedInput) {
+    initCurrencyInput(totalInvoicedInput, function() { return totalInvoicedCurrency ? totalInvoicedCurrency.value : 'MXN'; });
+    if (totalInvoicedCurrency) totalInvoicedCurrency.addEventListener('change', function() { if (totalInvoicedInput.setCurrencyValue) totalInvoicedInput.setCurrencyValue(totalInvoicedInput.getCurrencyValue()); });
+  }
+  var payAmt = paymentForm.elements.amount;
+  var payCur = paymentForm.elements.currency;
+  if (payAmt) {
+    initCurrencyInput(payAmt, function() { return payCur ? payCur.value : 'MXN'; });
+    if (payCur) payCur.addEventListener('change', function() { if (payAmt.setCurrencyValue) payAmt.setCurrencyValue(payAmt.getCurrencyValue()); });
+  }
+  var costAmt = costForm.elements.amount;
+  var costCur = costForm.elements.currency;
+  if (costAmt) {
+    initCurrencyInput(costAmt, function() { return costCur ? costCur.value : 'MXN'; });
+    if (costCur) costCur.addEventListener('change', function() { if (costAmt.setCurrencyValue) costAmt.setCurrencyValue(costAmt.getCurrencyValue()); });
+  }
+})();
+
 function setMessage(element, message, isSuccess = false) {
   element.textContent = message || '';
   element.classList.toggle('success', Boolean(isSuccess));
@@ -474,12 +537,18 @@ function projectPayload() {
   if (purchaseOrderNotApplicable.checked) {
     payload.purchase_order_number = '';
   }
-
+  var ti = projectForm.elements.total_invoiced;
+  if (ti && ti.getCurrencyValue) payload.total_invoiced = ti.getCurrencyValue();
   return payload;
 }
 
 function simpleFormPayload(form) {
-  return Object.fromEntries(new FormData(form).entries());
+  var payload = Object.fromEntries(new FormData(form).entries());
+  var ai = form.elements.amount;
+  if (ai && ai.getCurrencyValue) payload.amount = ai.getCurrencyValue();
+  var tai = form.elements.total_amount;
+  if (tai && tai.getCurrencyValue) payload.total_amount = tai.getCurrencyValue();
+  return payload;
 }
 
 function userPayload() {
@@ -856,7 +925,7 @@ function fillProjectForm(project) {
   projectForm.elements.client_name.value = project.client_name;
   projectForm.elements.project_description.value = project.project_description || '';
   projectForm.elements.expected_margin.value = project.expected_margin;
-  projectForm.elements.total_invoiced.value = project.total_invoiced;
+  if (projectForm.elements.total_invoiced.setCurrencyValue) { projectForm.elements.total_invoiced.setCurrencyValue(project.total_invoiced); } else { projectForm.elements.total_invoiced.value = project.total_invoiced; }
   projectForm.elements.total_invoiced_currency.value = project.total_invoiced_currency || 'MXN';
   projectForm.elements.progress_percent.value = project.progress_percent;
   projectForm.elements.technician_name.value = project.technician_name;
@@ -873,12 +942,8 @@ function resetProjectForm() {
   projectFormTitle.textContent = 'Nuevo proyecto';
   projectForm.elements.id.value = '';
   projectForm.elements.expected_margin.value = 0;
+  if (projectForm.elements.total_invoiced.setCurrencyValue) { projectForm.elements.total_invoiced.setCurrencyValue(0); } else { projectForm.elements.total_invoiced.value = 0; }
   projectForm.elements.total_invoiced_currency.value = 'MXN';
-  if (projectForm.elements.total_invoiced.setCurrencyValue) {
-    projectForm.elements.total_invoiced.setCurrencyValue(0);
-  } else {
-    projectForm.elements.total_invoiced.value = 0;
-  }
   projectForm.elements.progress_percent.value = 0;
   togglePurchaseOrder();
   setMessage(projectMessage, '');
@@ -2254,6 +2319,20 @@ const ecovisProjectsSearchInput = document.querySelector('#ecovis-projects-searc
 const ecovisMovementsSearchInput = document.querySelector('#ecovis-movements-search');
 const ecovisMovementsTypeFilterSelect = document.querySelector('#ecovis-movements-type-filter');
 
+(function setupEcovisCurrencyInputs() {
+  if (ecovisProjectForm && ecovisProjectForm.elements.total_amount) {
+    initCurrencyInput(ecovisProjectForm.elements.total_amount, function() { return ecovisProjectForm.elements.currency ? ecovisProjectForm.elements.currency.value : 'MXN'; });
+  }
+  if (ecovisPaymentForm && ecovisPaymentForm.elements.amount) {
+    initCurrencyInput(ecovisPaymentForm.elements.amount, function() { return ecovisPaymentForm.elements.currency ? ecovisPaymentForm.elements.currency.value : 'MXN'; });
+  }
+  if (ecovisLoanForm && ecovisLoanForm.elements.amount) {
+    initCurrencyInput(ecovisLoanForm.elements.amount, function() { return ecovisLoanForm.elements.currency ? ecovisLoanForm.elements.currency.value : 'MXN'; });
+  }
+  var allocForm = document.querySelector('#ecovis-allocation-form');
+  if (allocForm && allocForm.elements.amount) initCurrencyInput(allocForm.elements.amount, function() { return 'MXN'; });
+})();
+
 const ECOVIS_MOVEMENT_TYPE_LABELS = {
   proyecto: 'Proyecto',
   pago_recibido: 'Pago recibido',
@@ -2274,10 +2353,12 @@ const ECOVIS_DIRECTION_LABELS = {
 function showEcovisTab() {
   if (state.userRole === 'admin') {
     ecovisTab.classList.remove('hidden');
-    document.getElementById('export-general-excel').classList.remove('hidden');
+    document.getElementById('backup-create-btn').classList.remove('hidden');
+    document.getElementById('backup-import-btn').classList.remove('hidden');
   } else {
     ecovisTab.classList.add('hidden');
-    document.getElementById('export-general-excel').classList.add('hidden');
+    document.getElementById('backup-create-btn').classList.add('hidden');
+    document.getElementById('backup-import-btn').classList.add('hidden');
   }
 }
 
@@ -2807,150 +2888,128 @@ if (ecovisMovementsTypeFilterSelect) {
   });
 }
 
-document.getElementById('export-general-excel').addEventListener('click', async () => {
+// ===================== BACKUP MODULE =====================
+
+document.getElementById('backup-create-btn').addEventListener('click', async () => {
+  if (!window.confirm('Se generara un respaldo integral de todas las areas del sistema.')) return;
+  const btn = document.getElementById('backup-create-btn');
   try {
-    const data = await api('/api/admin/export-general-excel');
-    generateGeneralExcel(data);
+    btn.textContent = 'Generando respaldo...';
+    btn.disabled = true;
+    const response = await fetch('/api/admin/backup', { headers: { 'Content-Type': 'application/json' } });
+    const backup = await response.json();
+    if (!response.ok && response.status !== 207) throw new Error(backup.message || 'Error generando respaldo.');
+    if (backup.backupMetadata && backup.backupMetadata.warnings && backup.backupMetadata.warnings.length > 0) {
+      window.alert('Respaldo generado con advertencias:\n' + backup.backupMetadata.warnings.join('\n'));
+    }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    const dateStr = new Date().toISOString().replace(/[T:]/g, '-').slice(0, 16);
+    link.href = URL.createObjectURL(blob);
+    link.download = 'REVRAM_BACKUP_' + dateStr + '.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    window.alert('Respaldo generado correctamente.');
   } catch (error) {
-    window.alert(error.message || 'No se pudo generar el Excel.');
+    window.alert(error.message || 'No se pudo generar el respaldo.');
+  } finally {
+    btn.textContent = 'Crear respaldo';
+    btn.disabled = false;
   }
 });
 
-function generateGeneralExcel(data) {
-  const projectColumns = [
-    ['ID', (p) => p.id],
-    ['Cotizacion', (p) => p.quote_number],
-    ['Cliente', (p) => p.client_name],
-    ['Estado', (p) => p.status],
-    ['Facturado MXN', (p) => p.total_invoiced_mxn],
-    ['Cobrado MXN', (p) => p.total_charged],
-    ['Gastado MXN', (p) => p.spent],
-    ['Pendiente MXN', (p) => p.pending_collection],
-  ];
+document.getElementById('backup-import-btn').addEventListener('click', () => {
+  document.getElementById('backup-import-modal').classList.remove('hidden');
+  document.getElementById('backup-file-input').value = '';
+  document.getElementById('backup-preview-area').classList.add('hidden');
+  document.getElementById('backup-import-message').textContent = '';
+});
 
-  const closedColumns = [
-    ['ID', (p) => p.id],
-    ['Cotizacion', (p) => p.quote_number],
-    ['Cliente', (p) => p.client_name],
-    ['Cerrado', (p) => p.closed_at || ''],
-    ['Facturado MXN', (p) => p.total_invoiced_mxn],
-    ['Cobrado MXN', (p) => p.total_charged],
-    ['Gastado MXN', (p) => p.spent],
-  ];
+document.getElementById('backup-close-modal').addEventListener('click', () => {
+  document.getElementById('backup-import-modal').classList.add('hidden');
+});
 
-  const costColumns = [
-    ['Proyecto ID', (c) => c.project_id],
-    ['Fecha', (c) => c.cost_date],
-    ['Tipo', (c) => c.category],
-    ['Descripcion', (c) => c.description],
-    ['Monto', (c) => c.amount],
-    ['Moneda', (c) => c.currency],
-    ['Monto MXN', (c) => c.amount_mxn],
-  ];
+document.getElementById('backup-cancel-import').addEventListener('click', () => {
+  document.getElementById('backup-import-modal').classList.add('hidden');
+});
 
-  const employeeColumns = [
-    ['No. Empleado', (e) => e.employee_number],
-    ['Nombre', (e) => e.full_name],
-    ['Ingreso', (e) => e.hire_date],
-    ['Activo', (e) => e.active ? 'Si' : 'No'],
-  ];
+let pendingBackupData = null;
 
-  const ecovisProjectColumns = [
-    ['ID', (p) => p.id],
-    ['Proyecto', (p) => p.project_name],
-    ['Fecha', (p) => p.project_date],
-    ['Monto', (p) => p.total_amount],
-    ['Moneda', (p) => p.currency],
-    ['Estado', (p) => p.status],
-  ];
-
-  const ecovisPaymentColumns = [
-    ['ID', (p) => p.id],
-    ['Fecha', (p) => p.payment_date],
-    ['Monto', (p) => p.amount],
-    ['Moneda', (p) => p.currency],
-    ['Metodo', (p) => p.payment_method],
-    ['Referencia', (p) => p.bank_reference],
-    ['Sin asignar', (p) => p.unallocated_amount],
-  ];
-
-  const ecovisMovementColumns = [
-    ['ID', (m) => m.id],
-    ['Fecha', (m) => m.movement_date],
-    ['Tipo', (m) => m.movement_type],
-    ['Descripcion', (m) => m.description],
-    ['Monto', (m) => m.amount],
-    ['Moneda', (m) => m.currency],
-    ['Direccion', (m) => m.direction],
-    ['Usuario', (m) => m.created_by],
-  ];
-
-  const worksheets = [
-    worksheetXml('Proyectos Activos', [
-      projectColumns.map(([l]) => l),
-      ...(data.projects || []).map((p) => projectColumns.map(([, fn]) => fn(p))),
-    ]),
-    worksheetXml('Proyectos Cerrados', [
-      closedColumns.map(([l]) => l),
-      ...(data.closedProjects || []).map((p) => closedColumns.map(([, fn]) => fn(p))),
-    ]),
-    worksheetXml('Costos', [
-      costColumns.map(([l]) => l),
-      ...(data.costs || []).map((c) => costColumns.map(([, fn]) => fn(c))),
-    ]),
-    worksheetXml('Empleados', [
-      employeeColumns.map(([l]) => l),
-      ...(data.employees || []).map((e) => employeeColumns.map(([, fn]) => fn(e))),
-    ]),
-    worksheetXml('ECOVIS Proyectos', [
-      ecovisProjectColumns.map(([l]) => l),
-      ...(data.ecovisProjects || []).map((p) => ecovisProjectColumns.map(([, fn]) => fn(p))),
-    ]),
-    worksheetXml('ECOVIS Pagos', [
-      ecovisPaymentColumns.map(([l]) => l),
-      ...(data.ecovisPayments || []).map((p) => ecovisPaymentColumns.map(([, fn]) => fn(p))),
-    ]),
-    worksheetXml('ECOVIS Movimientos', [
-      ecovisMovementColumns.map(([l]) => l),
-      ...(data.ecovisMovements || []).map((m) => ecovisMovementColumns.map(([, fn]) => fn(m))),
-    ]),
-  ];
-
-  if (data.ecovisSummary) {
-    const s = data.ecovisSummary;
-    worksheets.push(worksheetXml('ECOVIS Resumen', [
-      ['Concepto', 'Valor'],
-      ['Total proyectos', s.total_projected],
-      ['Pagado a proyectos', s.total_paid_to_projects],
-      ['Pendiente proyectos', s.pending_project_amount],
-      ['Pagos recibidos', s.total_payments_received],
-      ['Asignado', s.total_allocated],
-      ['Saldo a favor', s.credit_balance],
-      ['Prestamos vigentes', s.outstanding_loans],
-      ['Balance neto', s.net_balance],
-    ]));
+document.getElementById('backup-file-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  const msgEl = document.getElementById('backup-import-message');
+  msgEl.textContent = '';
+  if (!file) return;
+  if (!file.name.endsWith('.json')) { msgEl.textContent = 'Solo se permiten archivos .json'; return; }
+  try {
+    const text = await file.text();
+    const backup = JSON.parse(text);
+    if (!backup.backupMetadata || !backup.data) { msgEl.textContent = 'Archivo de respaldo invalido.'; return; }
+    pendingBackupData = backup;
+    msgEl.textContent = 'Analizando respaldo...';
+    const result = await api('/api/admin/backup/preview', { method: 'POST', body: JSON.stringify(backup) });
+    renderBackupPreview(result);
+    msgEl.textContent = '';
+  } catch (error) {
+    msgEl.textContent = error.message || 'Error al procesar el archivo.';
+    pendingBackupData = null;
   }
+});
 
-  const workbookXml = '<?xml version="1.0"?>' +
-    '<?mso-application progid="Excel.Sheet"?>' +
-    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"' +
-    ' xmlns:o="urn:schemas-microsoft-com:office:office"' +
-    ' xmlns:x="urn:schemas-microsoft-com:office:excel"' +
-    ' xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
-    worksheets.join('') +
-    '</Workbook>';
-
-  const blob = new Blob([workbookXml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = 'reporte-general-' + today() + '.xls';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(link.href);
+function renderBackupPreview(result) {
+  const area = document.getElementById('backup-preview-area');
+  const tableDiv = document.getElementById('backup-preview-table');
+  area.classList.remove('hidden');
+  const labels = { projects:'Proyectos activos', closedProjects:'Proyectos cerrados', projectPayments:'Pagos', projectCosts:'Costos', projectReports:'Reportes', employees:'Empleados', vacationRequests:'Vacaciones', exchangeRates:'Tipos de cambio', ecovisProjects:'ECOVIS Proyectos', ecovisPayments:'ECOVIS Pagos', ecovisPaymentAllocations:'ECOVIS Asignaciones', ecovisMovements:'ECOVIS Movimientos', usersSafe:'Usuarios' };
+  let html = '<table style="width:100%;font-size:0.88rem;"><thead><tr><th>Entidad</th><th>Respaldo</th><th>Existentes</th><th>Nuevos</th><th>Duplicados</th><th>Conflictos</th></tr></thead><tbody>';
+  for (const [key, info] of Object.entries(result.preview)) {
+    html += '<tr><td>' + (labels[key]||key) + '</td><td>' + info.inBackup + '</td><td>' + info.existing + '</td><td style="color:var(--success);font-weight:700;">' + info.newToAdd + '</td><td>' + info.duplicatesOmitted + '</td><td style="color:' + (info.conflicts>0?'var(--warning)':'inherit') + ';font-weight:' + (info.conflicts>0?'700':'normal') + ';">' + info.conflicts + '</td></tr>';
+  }
+  html += '</tbody></table>';
+  tableDiv.innerHTML = html;
+  const conflictsDiv = document.getElementById('backup-preview-conflicts');
+  if (result.conflicts && result.conflicts.length > 0) {
+    conflictsDiv.classList.remove('hidden');
+    let cHtml = '';
+    for (const c of result.conflicts) {
+      cHtml += '<p><strong>' + (labels[c.entity]||c.entity) + '</strong>: ' + c.items.length + ' conflicto(s)</p>';
+    }
+    document.getElementById('backup-conflicts-detail').innerHTML = cHtml;
+  } else {
+    conflictsDiv.classList.add('hidden');
+  }
 }
 
-// ===================== END ECOVIS MODULE =====================
+document.getElementById('backup-confirm-import').addEventListener('click', async () => {
+  if (!pendingBackupData) return;
+  if (!window.confirm('Confirmar importacion? Se agregaran los registros faltantes sin modificar existentes.')) return;
+  const msgEl = document.getElementById('backup-import-message');
+  try {
+    msgEl.textContent = 'Importando registros...';
+    document.getElementById('backup-confirm-import').disabled = true;
+    const result = await api('/api/admin/backup/import', { method: 'POST', body: JSON.stringify(pendingBackupData) });
+    let msg = 'Importacion completada.\n\n';
+    if (result.importLog && result.importLog.summary) {
+      for (const [key, val] of Object.entries(result.importLog.summary)) {
+        if (val.added > 0) msg += key + ': +' + val.added + ' agregados\n';
+      }
+    }
+    window.alert(msg);
+    msgEl.classList.add('success');
+    msgEl.textContent = 'Importacion completada exitosamente.';
+    pendingBackupData = null;
+    document.getElementById('backup-import-modal').classList.add('hidden');
+    await loadProjects();
+  } catch (error) {
+    msgEl.textContent = error.message || 'Error durante la importacion.';
+  } finally {
+    document.getElementById('backup-confirm-import').disabled = false;
+  }
+});
+
+// ===================== END BACKUP MODULE =====================
 
 api('/api/session')
   .then((session) => {
