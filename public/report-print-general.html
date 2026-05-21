@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ENTREGA GENERAL DE EQUIPO/SERVICIO - REVRAM</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 11pt; color: #1a1a1a; padding: 20px; }
+    .report-container { max-width: 750px; margin: 0 auto; }
+    .header { text-align: center; margin-bottom: 24px; border-bottom: 2px solid #1d4ed8; padding-bottom: 12px; }
+    .header h1 { font-size: 16pt; color: #1d4ed8; margin-bottom: 4px; }
+    .header h2 { font-size: 12pt; color: #333; font-weight: normal; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin-bottom: 20px; }
+    .info-item { display: flex; gap: 6px; padding: 4px 0; border-bottom: 1px solid #e5e7eb; }
+    .info-item .label { font-weight: bold; min-width: 140px; color: #374151; }
+    .info-item .value { flex: 1; }
+    .full-width { grid-column: 1 / -1; }
+    .section-title { font-size: 12pt; font-weight: bold; color: #1d4ed8; margin: 20px 0 10px; border-bottom: 1px solid #d1d5db; padding-bottom: 4px; }
+    .activity-box { border: 1px solid #d1d5db; border-radius: 4px; padding: 12px; min-height: 120px; white-space: pre-wrap; line-height: 1.6; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; margin-top: 60px; }
+    .signature-block { text-align: center; }
+    .signature-line { border-top: 1px solid #1a1a1a; margin-top: 50px; padding-top: 6px; }
+    .signature-name { font-weight: bold; margin-top: 4px; }
+    .signature-role { font-size: 9pt; color: #555; }
+    .folio { font-size: 9pt; color: #666; margin-top: 20px; text-align: right; }
+    .no-print { text-align: center; margin-bottom: 20px; }
+    .no-print button { background: #1d4ed8; color: white; border: none; padding: 10px 24px; border-radius: 8px; font-size: 11pt; cursor: pointer; margin: 0 6px; }
+    .no-print button:hover { background: #1e40af; }
+    .no-print button.secondary { background: #e9eefb; color: #1e40af; }
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none !important; }
+      .report-container { max-width: 100%; }
+      @page { size: letter; margin: 15mm 12mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <button onclick="window.print()">Imprimir / Guardar PDF</button>
+    <button class="secondary" onclick="window.close()">Cerrar</button>
+  </div>
+  <div class="report-container" id="report-content">
+    <div class="header">
+      <h1>ENTREGA GENERAL DE EQUIPO/SERVICIO</h1>
+      <h2>REVRAM</h2>
+    </div>
+    <div class="info-grid">
+      <div class="info-item"><span class="label">Folio:</span><span class="value" id="r-folio"></span></div>
+      <div class="info-item"><span class="label">Fecha:</span><span class="value" id="r-date"></span></div>
+      <div class="info-item"><span class="label">Cliente:</span><span class="value" id="r-client"></span></div>
+      <div class="info-item"><span class="label">Domicilio:</span><span class="value" id="r-address"></span></div>
+      <div class="info-item"><span class="label">Servicio/Equipo:</span><span class="value" id="r-service"></span></div>
+      <div class="info-item"><span class="label">Técnico Asignado:</span><span class="value" id="r-technician"></span></div>
+      <div class="info-item full-width"><span class="label">Zona del Equipo/Servicio:</span><span class="value" id="r-zone"></span></div>
+    </div>
+    <div class="section-title">Descripción de Actividades</div>
+    <div class="activity-box" id="r-activities"></div>
+    <div class="signatures">
+      <div class="signature-block">
+        <div class="signature-line"></div>
+        <div class="signature-name" id="r-tech-name"></div>
+        <div class="signature-role">Técnico</div>
+      </div>
+      <div class="signature-block">
+        <div class="signature-line"></div>
+        <div class="signature-name" id="r-manager-name"></div>
+        <div class="signature-role">V.B. Encargado de Planta</div>
+      </div>
+    </div>
+    <div class="folio" id="r-folio-footer"></div>
+  </div>
+  <script>
+    (async function() {
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get('id');
+      if (!id) { document.body.innerHTML = '<p>ID de reporte no proporcionado.</p>'; return; }
+      try {
+        const res = await fetch('/api/reports/' + id);
+        if (!res.ok) throw new Error('No encontrado');
+        const report = await res.json();
+        const data = report.report_data ? JSON.parse(report.report_data) : {};
+        document.getElementById('r-folio').textContent = report.report_folio || '';
+        document.getElementById('r-date').textContent = report.report_date || '';
+        document.getElementById('r-client').textContent = report.client_name || '';
+        document.getElementById('r-address').textContent = report.client_address || '';
+        document.getElementById('r-service').textContent = report.service_name || '';
+        document.getElementById('r-technician').textContent = report.assigned_technicians || '';
+        document.getElementById('r-zone').textContent = data.equipment_zone || '';
+        document.getElementById('r-activities').textContent = data.activity_description || '';
+        document.getElementById('r-tech-name').textContent = report.technician_name || report.assigned_technicians || '';
+        document.getElementById('r-manager-name').textContent = report.plant_manager_name || '';
+        document.getElementById('r-folio-footer').textContent = 'Folio: ' + (report.report_folio || '');
+      } catch (e) {
+        document.body.innerHTML = '<p>Error al cargar el reporte: ' + e.message + '</p>';
+      }
+    })();
+  </script>
+</body>
+</html>

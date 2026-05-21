@@ -489,9 +489,15 @@ async function showApp() {
   setDefaultDates();
   resetUserForm();
   state.adminVerified = false;
-  switchView('projects');
-  await loadExchangeRates();
-  await loadProjects();
+  applyRoleVisibility();
+  if (state.userRole === 'tecnico') {
+    switchView('reports');
+    await loadReportsProjects();
+  } else {
+    switchView('projects');
+    await loadExchangeRates();
+    await loadProjects();
+  }
 }
 
 (function setupMainCurrencyInputs() {
@@ -571,18 +577,23 @@ function switchView(viewName) {
   const showingVacations = viewName === 'vacations';
   const showingReports = viewName === 'reports';
   const showingEcovis = viewName === 'ecovis';
+  const showingArchive = viewName === 'report-archive';
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
   if (vacationsView) vacationsView.classList.toggle('hidden', !showingVacations);
   if (reportsView) reportsView.classList.toggle('hidden', !showingReports);
   if (ecovisView) ecovisView.classList.toggle('hidden', !showingEcovis);
+  const archiveView = document.getElementById('report-archive-view');
+  if (archiveView) archiveView.classList.toggle('hidden', !showingArchive);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
   if (vacationsTab) vacationsTab.classList.toggle('active', showingVacations);
   if (reportsTab) reportsTab.classList.toggle('active', showingReports);
   if (ecovisTab) ecovisTab.classList.toggle('active', showingEcovis);
+  const archiveTab = document.getElementById('report-archive-tab');
+  if (archiveTab) archiveTab.classList.toggle('active', showingArchive);
 }
 
 async function requestAdminAuthorization(message = 'Ingresa la contrasena del admin:') {
@@ -2084,7 +2095,7 @@ function renderReportList(reports, pagination, projectId) {
     renderActions: (r) => `
       <div class="row-actions">
         <button class="secondary" data-action="report-edit" data-id="${r.id}" type="button">Editar</button>
-        <button class="secondary" data-action="report-print" data-id="${r.id}" type="button">Imprimir</button>
+        <button class="secondary" data-action="report-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>
       </div>`,
   });
 }
@@ -2146,7 +2157,7 @@ if (reportsProjectsTable) {
   reportsProjectsTable.addEventListener('click', (event) => {
     const newBtn = event.target.closest('[data-action="report-new"]');
     if (newBtn) {
-      openReportForm(newBtn.dataset.id, null);
+      showReportTypeSelector(newBtn.dataset.id);
       return;
     }
     const listBtn = event.target.closest('[data-action="report-list"]');
@@ -2171,7 +2182,7 @@ if (reportListBack) {
 if (reportListNew) {
   reportListNew.addEventListener('click', () => {
     if (state.currentReportProjectId) {
-      openReportForm(state.currentReportProjectId, null);
+      showReportTypeSelector(state.currentReportProjectId);
     }
   });
 }
@@ -2190,7 +2201,7 @@ if (reportListTable) {
     }
     const printBtn = event.target.closest('[data-action="report-print"]');
     if (printBtn) {
-      window.open('/report-print.html?id=' + printBtn.dataset.id, '_blank');
+      openReportPrintView(printBtn.dataset.id, printBtn.dataset.type);
     }
   });
 }
@@ -2234,7 +2245,7 @@ if (detailReportsList) {
     }
     const printBtn = event.target.closest('[data-action="detail-report-print"]');
     if (printBtn) {
-      window.open('/report-print.html?id=' + printBtn.dataset.id, '_blank');
+      openReportPrintView(printBtn.dataset.id, printBtn.dataset.type);
     }
   });
 }
@@ -2244,7 +2255,7 @@ if (detailNewReport) {
     if (!state.selectedProjectId) return;
     state.reportsAllProjects = state.projects;
     switchView('reports');
-    openReportForm(state.selectedProjectId, null);
+    showReportTypeSelector(state.selectedProjectId);
   });
 }
 
@@ -2264,7 +2275,7 @@ if (closedDetailReportsList) {
     }
     const printBtn = event.target.closest('[data-action="detail-report-print"]');
     if (printBtn) {
-      window.open('/report-print.html?id=' + printBtn.dataset.id, '_blank');
+      openReportPrintView(printBtn.dataset.id, printBtn.dataset.type);
     }
   });
 }
@@ -2274,7 +2285,7 @@ if (closedDetailNewReport) {
     if (!state.selectedClosedProjectId) return;
     state.reportsAllProjects = state.closedProjects;
     switchView('reports');
-    openReportForm(state.selectedClosedProjectId, null);
+    showReportTypeSelector(state.selectedClosedProjectId);
   });
 }
 
@@ -3010,6 +3021,588 @@ document.getElementById('backup-confirm-import').addEventListener('click', async
 });
 
 // ===================== END BACKUP MODULE =====================
+
+// ===================== ROLE VISIBILITY & REPORT TYPE SELECTOR =====================
+
+function applyRoleVisibility() {
+  const isTecnico = state.userRole === 'tecnico';
+  const isAdmin = state.userRole === 'admin';
+  projectsTab.classList.toggle('hidden', isTecnico);
+  closedProjectsTab.classList.toggle('hidden', isTecnico);
+  usersTab.classList.toggle('hidden', isTecnico);
+  const archiveTab = document.getElementById('report-archive-tab');
+  if (archiveTab) archiveTab.classList.toggle('hidden', false);
+  const backupCreateBtn = document.getElementById('backup-create-btn');
+  const backupImportBtn = document.getElementById('backup-import-btn');
+  if (backupCreateBtn) backupCreateBtn.classList.toggle('hidden', !isAdmin);
+  if (backupImportBtn) backupImportBtn.classList.toggle('hidden', !isAdmin);
+}
+
+function openReportPrintView(reportId, reportType) {
+  const type = reportType || 'boiler_startup';
+  let url = '/report-print.html?id=' + reportId;
+  if (type === 'general_equipment_service_delivery') {
+    url = '/report-print-general.html?id=' + reportId;
+  } else if (type === 'autoflame_system_startup') {
+    url = '/report-print-autoflame.html?id=' + reportId;
+  }
+  window.open(url, '_blank');
+}
+
+let pendingReportProjectId = null;
+
+function showReportTypeSelector(projectId) {
+  pendingReportProjectId = projectId;
+  const modal = document.getElementById('report-type-modal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+(function initReportTypeModal() {
+  const modal = document.getElementById('report-type-modal');
+  if (!modal) return;
+  const cancelBtn = document.getElementById('report-type-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => modal.classList.add('hidden'));
+  modal.querySelectorAll('.report-type-option').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      modal.classList.add('hidden');
+      const type = btn.dataset.type;
+      if (type === 'boiler_startup') {
+        openReportForm(pendingReportProjectId, null);
+      } else if (type === 'general_equipment_service_delivery') {
+        openGeneralEquipmentForm(pendingReportProjectId);
+      } else if (type === 'autoflame_system_startup') {
+        openAutoflameForm(pendingReportProjectId);
+      }
+    });
+  });
+})();
+
+// ===================== GENERAL EQUIPMENT/SERVICE DELIVERY REPORT =====================
+
+function openGeneralEquipmentForm(projectId) {
+  const project = state.reportsAllProjects.find((p) => p.id === Number(projectId));
+  if (!project) return;
+  state.currentReportProjectId = Number(projectId);
+  reportsProjectsTable.closest('.panel').classList.add('hidden');
+  reportListPanel.classList.add('hidden');
+  reportFormPanel.classList.remove('hidden');
+  reportForm.reset();
+  setMessage(reportMessage, '');
+  reportFormTitle.textContent = 'ENTREGA GENERAL DE EQUIPO/SERVICIO';
+  reportFormSubtitle.textContent = `Proyecto #${project.id} - ${project.client_name}`;
+  reportForm.elements.id.value = '';
+  reportForm.elements.project_id.value = project.id;
+  reportForm.elements.report_date.value = today();
+  reportForm.elements.client_name.value = project.client_name || '';
+  reportForm.elements.service_name.value = project.project_description || '';
+  reportForm.elements.assigned_technicians.value = project.technician_name || '';
+  state.currentReportType = 'general_equipment_service_delivery';
+  showGeneralEquipmentFields();
+}
+
+function showGeneralEquipmentFields() {
+  const technicalFields = reportFormPanel.querySelectorAll('.boiler-fields');
+  technicalFields.forEach((el) => el.classList.add('hidden'));
+  let extraPanel = document.getElementById('general-equipment-extra');
+  if (!extraPanel) {
+    extraPanel = document.createElement('div');
+    extraPanel.id = 'general-equipment-extra';
+    extraPanel.className = 'grid-form';
+    extraPanel.style.marginTop = '16px';
+    extraPanel.innerHTML = `
+      <label>Domicilio<input name="ge_address" /></label>
+      <label>Zona del Equipo/Servicio<input name="ge_zone" /></label>
+      <label class="full">Descripcion de Actividades<textarea name="ge_activities" rows="5" required></textarea></label>
+    `;
+    reportForm.appendChild(extraPanel);
+  }
+  extraPanel.classList.remove('hidden');
+  let autoflamePanel = document.getElementById('autoflame-extra');
+  if (autoflamePanel) autoflamePanel.classList.add('hidden');
+}
+
+// ===================== AUTOFLAME SYSTEM STARTUP REPORT =====================
+
+function openAutoflameForm(projectId) {
+  const project = state.reportsAllProjects.find((p) => p.id === Number(projectId));
+  if (!project) return;
+  state.currentReportProjectId = Number(projectId);
+  reportsProjectsTable.closest('.panel').classList.add('hidden');
+  reportListPanel.classList.add('hidden');
+  reportFormPanel.classList.remove('hidden');
+  reportForm.reset();
+  setMessage(reportMessage, '');
+  reportFormTitle.textContent = 'ARRANQUE DE SISTEMA AUTOFLAME';
+  reportFormSubtitle.textContent = `Proyecto #${project.id} - ${project.client_name}`;
+  reportForm.elements.id.value = '';
+  reportForm.elements.project_id.value = project.id;
+  reportForm.elements.report_date.value = today();
+  reportForm.elements.client_name.value = project.client_name || '';
+  reportForm.elements.service_name.value = project.project_description || '';
+  reportForm.elements.assigned_technicians.value = project.technician_name || '';
+  state.currentReportType = 'autoflame_system_startup';
+  showAutoflameFields();
+}
+
+function showAutoflameFields() {
+  const technicalFields = reportFormPanel.querySelectorAll('.boiler-fields');
+  technicalFields.forEach((el) => el.classList.add('hidden'));
+  let extraPanel = document.getElementById('general-equipment-extra');
+  if (extraPanel) extraPanel.classList.add('hidden');
+  let afPanel = document.getElementById('autoflame-extra');
+  if (!afPanel) {
+    afPanel = document.createElement('div');
+    afPanel.id = 'autoflame-extra';
+    afPanel.style.marginTop = '16px';
+    let pointsHtml = '';
+    for (let i = 1; i <= 15; i++) {
+      pointsHtml += `<tr>
+        <td>${i}</td>
+        <td><input name="af_p${i}_high" /></td><td><input name="af_p${i}_low" /></td>
+        <td><input name="af_p${i}_ch1" /></td><td><input name="af_p${i}_ch2" /></td>
+        <td><input name="af_p${i}_ch3" /></td><td><input name="af_p${i}_ch4" /></td>
+        <td><input name="af_p${i}_ch5" /></td><td><input name="af_p${i}_ch6" /></td>
+        <td><input name="af_p${i}_o2" /></td><td><input name="af_p${i}_co2" /></td>
+        <td><input name="af_p${i}_co" /></td><td><input name="af_p${i}_no" /></td>
+        <td><input name="af_p${i}_so2" /></td><td><input name="af_p${i}_tgas" /></td>
+        <td><input name="af_p${i}_p_horno" /></td><td><input name="af_p${i}_p_windbox" /></td>
+        <td><input name="af_p${i}_p_stack" /></td><td><input name="af_p${i}_smoke" /></td>
+        <td><input name="af_p${i}_comments" /></td>
+      </tr>`;
+    }
+    afPanel.innerHTML = `
+      <div class="grid-form">
+        <label>Sitio / Planta<input name="af_site" required /></label>
+        <label>Quemador / Equipo<input name="af_burner" /></label>
+        <label>Tipo de combustible<input name="af_fuel" /></label>
+        <label>Presion suministro<input name="af_supply_pressure" /></label>
+        <label>Unidad presion suministro<input name="af_supply_unit" placeholder="psi, bar, mbar..." /></label>
+        <label>Presion retorno (aceite)<input name="af_return_pressure" /></label>
+        <label>Unidad presion retorno<input name="af_return_unit" /></label>
+        <label class="full">Comentarios datos generales<textarea name="af_data_comments" rows="2"></textarea></label>
+      </div>
+      <h3 style="margin:16px 0 8px;">Puntos de Ajuste / Curva de Combustion</h3>
+      <div class="table-wrapper">
+        <table class="emissions-table" style="font-size:0.78rem;">
+          <thead><tr>
+            <th>Pto</th><th>Alto</th><th>Bajo</th><th>Ch1</th><th>Ch2</th><th>Ch3</th>
+            <th>Ch4</th><th>Ch5</th><th>Ch6</th><th>O2</th><th>CO2</th><th>CO</th>
+            <th>NO</th><th>SO2</th><th>T.Gas</th><th>P.Horno</th><th>P.Wind</th>
+            <th>P.Stack</th><th>Humo</th><th>Coment.</th>
+          </tr></thead>
+          <tbody>${pointsHtml}</tbody>
+        </table>
+      </div>
+      <div class="grid-form" style="margin-top:16px;">
+        <label>Inicio FGR<input name="af_fgr" /></label>
+        <label>Golden Start<input name="af_golden" /></label>
+        <label class="full">Comentarios generales<textarea name="af_general_comments" rows="3"></textarea></label>
+      </div>
+    `;
+    reportForm.appendChild(afPanel);
+  }
+  afPanel.classList.remove('hidden');
+}
+
+// Override collectReportPayload for new types
+const originalCollectReportPayload = collectReportPayload;
+collectReportPayload = function() {
+  if (state.currentReportType === 'general_equipment_service_delivery') {
+    return {
+      project_id: Number(reportForm.elements.project_id.value),
+      report_type: 'general_equipment_service_delivery',
+      report_folio: reportForm.elements.report_folio.value || '',
+      report_date: reportForm.elements.report_date.value,
+      client_name: reportForm.elements.client_name.value,
+      client_address: (reportForm.elements.ge_address || {}).value || reportForm.elements.client_address.value || '',
+      service_name: reportForm.elements.service_name.value,
+      assigned_technicians: reportForm.elements.assigned_technicians.value,
+      technician_name: reportForm.elements.technician_name.value || reportForm.elements.assigned_technicians.value,
+      plant_manager_name: reportForm.elements.plant_manager_name.value,
+      comments: reportForm.elements.comments.value,
+      report_data: {
+        equipment_zone: (reportForm.elements.ge_zone || {}).value || '',
+        activity_description: (reportForm.elements.ge_activities || {}).value || '',
+      },
+    };
+  }
+  if (state.currentReportType === 'autoflame_system_startup') {
+    const points = [];
+    for (let i = 1; i <= 15; i++) {
+      points.push({
+        high: (reportForm.elements['af_p' + i + '_high'] || {}).value || '',
+        low: (reportForm.elements['af_p' + i + '_low'] || {}).value || '',
+        ch1: (reportForm.elements['af_p' + i + '_ch1'] || {}).value || '',
+        ch2: (reportForm.elements['af_p' + i + '_ch2'] || {}).value || '',
+        ch3: (reportForm.elements['af_p' + i + '_ch3'] || {}).value || '',
+        ch4: (reportForm.elements['af_p' + i + '_ch4'] || {}).value || '',
+        ch5: (reportForm.elements['af_p' + i + '_ch5'] || {}).value || '',
+        ch6: (reportForm.elements['af_p' + i + '_ch6'] || {}).value || '',
+        o2: (reportForm.elements['af_p' + i + '_o2'] || {}).value || '',
+        co2: (reportForm.elements['af_p' + i + '_co2'] || {}).value || '',
+        co: (reportForm.elements['af_p' + i + '_co'] || {}).value || '',
+        no: (reportForm.elements['af_p' + i + '_no'] || {}).value || '',
+        so2: (reportForm.elements['af_p' + i + '_so2'] || {}).value || '',
+        tgas: (reportForm.elements['af_p' + i + '_tgas'] || {}).value || '',
+        p_horno: (reportForm.elements['af_p' + i + '_p_horno'] || {}).value || '',
+        p_windbox: (reportForm.elements['af_p' + i + '_p_windbox'] || {}).value || '',
+        p_stack: (reportForm.elements['af_p' + i + '_p_stack'] || {}).value || '',
+        smoke_number: (reportForm.elements['af_p' + i + '_smoke'] || {}).value || '',
+        comments: (reportForm.elements['af_p' + i + '_comments'] || {}).value || '',
+      });
+    }
+    return {
+      project_id: Number(reportForm.elements.project_id.value),
+      report_type: 'autoflame_system_startup',
+      report_folio: reportForm.elements.report_folio.value || '',
+      report_date: reportForm.elements.report_date.value,
+      client_name: reportForm.elements.client_name.value,
+      client_address: reportForm.elements.client_address.value,
+      service_name: reportForm.elements.service_name.value,
+      assigned_technicians: reportForm.elements.assigned_technicians.value,
+      technician_name: reportForm.elements.technician_name.value || reportForm.elements.assigned_technicians.value,
+      plant_manager_name: reportForm.elements.plant_manager_name.value,
+      comments: reportForm.elements.comments.value,
+      report_data: {
+        site_name: (reportForm.elements.af_site || {}).value || '',
+        burner_equipment: (reportForm.elements.af_burner || {}).value || '',
+        fuel_type: (reportForm.elements.af_fuel || {}).value || '',
+        supply_pressure: (reportForm.elements.af_supply_pressure || {}).value || '',
+        supply_pressure_unit: (reportForm.elements.af_supply_unit || {}).value || '',
+        return_pressure: (reportForm.elements.af_return_pressure || {}).value || '',
+        return_pressure_unit: (reportForm.elements.af_return_unit || {}).value || '',
+        general_data_comments: (reportForm.elements.af_data_comments || {}).value || '',
+        combustion_points: points,
+        fgr_start: (reportForm.elements.af_fgr || {}).value || '',
+        golden_start: (reportForm.elements.af_golden || {}).value || '',
+        general_comments: (reportForm.elements.af_general_comments || {}).value || '',
+      },
+    };
+  }
+  state.currentReportType = 'boiler_startup';
+  const base = originalCollectReportPayload();
+  base.report_type = 'boiler_startup';
+  return base;
+};
+
+function resetReportTypeFields() {
+  state.currentReportType = null;
+  const technicalFields = reportFormPanel.querySelectorAll('.boiler-fields');
+  technicalFields.forEach((el) => el.classList.remove('hidden'));
+  let extraPanel = document.getElementById('general-equipment-extra');
+  if (extraPanel) extraPanel.classList.add('hidden');
+  let afPanel = document.getElementById('autoflame-extra');
+  if (afPanel) afPanel.classList.add('hidden');
+}
+
+const origOpenReportForm = openReportForm;
+openReportForm = function(projectId, reportData) {
+  resetReportTypeFields();
+  if (reportData && reportData.report_type && reportData.report_type !== 'boiler_startup') {
+    if (reportData.report_type === 'general_equipment_service_delivery') {
+      openGeneralEquipmentForm(projectId);
+      reportForm.elements.id.value = reportData.id;
+      reportFormTitle.textContent = 'Editar - ENTREGA GENERAL DE EQUIPO/SERVICIO';
+      reportFormSubtitle.textContent = `Folio: ${reportData.report_folio}`;
+      reportForm.elements.report_folio.value = reportData.report_folio || '';
+      reportForm.elements.report_date.value = reportData.report_date || '';
+      reportForm.elements.client_name.value = reportData.client_name || '';
+      reportForm.elements.service_name.value = reportData.service_name || '';
+      reportForm.elements.assigned_technicians.value = reportData.assigned_technicians || '';
+      reportForm.elements.technician_name.value = reportData.technician_name || '';
+      reportForm.elements.plant_manager_name.value = reportData.plant_manager_name || '';
+      reportForm.elements.comments.value = reportData.comments || '';
+      const d = reportData.report_data ? JSON.parse(reportData.report_data) : {};
+      if (reportForm.elements.ge_address) reportForm.elements.ge_address.value = reportData.client_address || '';
+      if (reportForm.elements.ge_zone) reportForm.elements.ge_zone.value = d.equipment_zone || '';
+      if (reportForm.elements.ge_activities) reportForm.elements.ge_activities.value = d.activity_description || '';
+      return;
+    }
+    if (reportData.report_type === 'autoflame_system_startup') {
+      openAutoflameForm(projectId);
+      reportForm.elements.id.value = reportData.id;
+      reportFormTitle.textContent = 'Editar - ARRANQUE DE SISTEMA AUTOFLAME';
+      reportFormSubtitle.textContent = `Folio: ${reportData.report_folio}`;
+      reportForm.elements.report_folio.value = reportData.report_folio || '';
+      reportForm.elements.report_date.value = reportData.report_date || '';
+      reportForm.elements.client_name.value = reportData.client_name || '';
+      reportForm.elements.service_name.value = reportData.service_name || '';
+      reportForm.elements.assigned_technicians.value = reportData.assigned_technicians || '';
+      reportForm.elements.technician_name.value = reportData.technician_name || '';
+      reportForm.elements.plant_manager_name.value = reportData.plant_manager_name || '';
+      reportForm.elements.comments.value = reportData.comments || '';
+      const d = reportData.report_data ? JSON.parse(reportData.report_data) : {};
+      if (reportForm.elements.af_site) reportForm.elements.af_site.value = d.site_name || '';
+      if (reportForm.elements.af_burner) reportForm.elements.af_burner.value = d.burner_equipment || '';
+      if (reportForm.elements.af_fuel) reportForm.elements.af_fuel.value = d.fuel_type || '';
+      if (reportForm.elements.af_supply_pressure) reportForm.elements.af_supply_pressure.value = d.supply_pressure || '';
+      if (reportForm.elements.af_supply_unit) reportForm.elements.af_supply_unit.value = d.supply_pressure_unit || '';
+      if (reportForm.elements.af_return_pressure) reportForm.elements.af_return_pressure.value = d.return_pressure || '';
+      if (reportForm.elements.af_return_unit) reportForm.elements.af_return_unit.value = d.return_pressure_unit || '';
+      if (reportForm.elements.af_data_comments) reportForm.elements.af_data_comments.value = d.general_data_comments || '';
+      if (reportForm.elements.af_fgr) reportForm.elements.af_fgr.value = d.fgr_start || '';
+      if (reportForm.elements.af_golden) reportForm.elements.af_golden.value = d.golden_start || '';
+      if (reportForm.elements.af_general_comments) reportForm.elements.af_general_comments.value = d.general_comments || '';
+      const pts = d.combustion_points || [];
+      for (let i = 0; i < 15; i++) {
+        const p = pts[i] || {};
+        const idx = i + 1;
+        ['high','low','ch1','ch2','ch3','ch4','ch5','ch6','o2','co2','co','no','so2','tgas','p_horno','p_windbox','p_stack','smoke','comments'].forEach((k) => {
+          const field = reportForm.elements['af_p' + idx + '_' + k];
+          if (field) field.value = p[k] || p[k === 'smoke' ? 'smoke_number' : k] || '';
+        });
+      }
+      return;
+    }
+  }
+  state.currentReportType = 'boiler_startup';
+  origOpenReportForm(projectId, reportData);
+};
+
+// ===================== REPORT ARCHIVE MODULE =====================
+
+const archiveTab = document.getElementById('report-archive-tab');
+if (archiveTab) {
+  archiveTab.addEventListener('click', async () => {
+    if (state.userRole === 'tecnico') {
+      switchView('report-archive');
+    } else {
+      switchView('report-archive');
+    }
+    await loadArchiveClients();
+  });
+}
+
+async function loadArchiveClients() {
+  const panel = document.getElementById('archive-client-reports-panel');
+  if (panel) panel.classList.add('hidden');
+  const list = document.getElementById('archive-clients-list');
+  if (!list) return;
+  const search = (document.getElementById('archive-client-search') || {}).value || '';
+  try {
+    const result = await api('/api/reports/archive/clients?search=' + encodeURIComponent(search));
+    const clients = result.data || [];
+    if (!clients.length) {
+      list.innerHTML = '<p class="muted">No hay reportes archivados.</p>';
+      return;
+    }
+    list.innerHTML = clients.map((c) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:#f8fbff;">
+        <div>
+          <strong>${escapeHtml(c.client_name)}</strong>
+          <small class="muted" style="display:block;">Proyectos cerrados: ${c.closed_projects_count} | Reportes: ${c.reports_count} | Ultimo: ${c.last_report_date || 'N/A'}</small>
+        </div>
+        <button class="secondary" data-action="archive-view-client" data-client="${escapeHtml(c.client_name)}" type="button">Ver reportes</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = '<p class="muted">Error al cargar archivo.</p>';
+  }
+}
+
+const archiveSearchInput = document.getElementById('archive-client-search');
+if (archiveSearchInput) {
+  archiveSearchInput.addEventListener('input', debounce(() => loadArchiveClients()));
+}
+
+document.addEventListener('click', async (event) => {
+  const viewBtn = event.target.closest('[data-action="archive-view-client"]');
+  if (viewBtn) {
+    await loadArchiveClientReports(viewBtn.dataset.client);
+  }
+  const archivePrintBtn = event.target.closest('[data-action="archive-print"]');
+  if (archivePrintBtn) {
+    openReportPrintView(archivePrintBtn.dataset.id, archivePrintBtn.dataset.type);
+  }
+  const archiveDeleteBtn = event.target.closest('[data-action="archive-delete"]');
+  if (archiveDeleteBtn) {
+    const reason = window.prompt('Motivo de eliminacion (obligatorio):');
+    if (!reason || !reason.trim()) return;
+    try {
+      await api('/api/reports/' + archiveDeleteBtn.dataset.id, {
+        method: 'DELETE',
+        body: JSON.stringify({ delete_reason: reason }),
+      });
+      window.alert('Reporte eliminado logicamente.');
+      loadArchiveClientReports(archiveDeleteBtn.dataset.client);
+    } catch (err) {
+      window.alert(err.message);
+    }
+  }
+});
+
+state.archiveReportsPag = { page: 1, limit: 15 };
+
+async function loadArchiveClientReports(clientName) {
+  const panel = document.getElementById('archive-client-reports-panel');
+  const title = document.getElementById('archive-client-title');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  if (title) title.textContent = clientName;
+  const tbody = document.getElementById('archive-reports-table');
+  try {
+    const params = new URLSearchParams({ page: state.archiveReportsPag.page, limit: state.archiveReportsPag.limit });
+    const result = await api(`/api/reports/archive/client/${encodeURIComponent(clientName)}?${params}`);
+    const reports = result.data || [];
+    const typeLabels = { boiler_startup: 'Arranque Caldera', general_equipment_service_delivery: 'Entrega General', autoflame_system_startup: 'Autoflame' };
+    if (!reports.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="muted">Sin reportes archivados para este cliente.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = reports.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.report_folio)}</td>
+        <td>${typeLabels[r.report_type] || r.report_type || 'Caldera'}</td>
+        <td>${escapeHtml(r.project_description || '')}</td>
+        <td>${escapeHtml(r.report_date)}</td>
+        <td>${escapeHtml(r.assigned_technicians || r.technician_name || '')}</td>
+        <td>
+          <div class="row-actions">
+            <button class="secondary" data-action="archive-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>
+            ${state.userRole === 'admin' ? `<button class="danger" data-action="archive-delete" data-id="${r.id}" data-client="${escapeHtml(clientName)}" type="button">Eliminar</button>` : ''}
+          </div>
+        </td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Error al cargar reportes.</td></tr>';
+  }
+}
+
+const archiveBackBtn = document.getElementById('archive-back-to-clients');
+if (archiveBackBtn) {
+  archiveBackBtn.addEventListener('click', () => {
+    const panel = document.getElementById('archive-client-reports-panel');
+    if (panel) panel.classList.add('hidden');
+  });
+}
+
+// ===================== CLOSED PROJECTS VIEW MODES =====================
+
+const closedViewMode = document.getElementById('closed-view-mode');
+const closedDateRangeControls = document.getElementById('closed-date-range-controls');
+const closedByClientPanel = document.getElementById('closed-by-client-panel');
+
+if (closedViewMode) {
+  closedViewMode.addEventListener('change', async () => {
+    const mode = closedViewMode.value;
+    const tableWrapper = closedProjectsTable.closest('.table-wrapper');
+    const paginationEl = document.getElementById('closed-projects-pagination');
+    if (closedDateRangeControls) closedDateRangeControls.classList.toggle('hidden', mode !== 'date-range');
+    if (closedByClientPanel) closedByClientPanel.classList.toggle('hidden', mode !== 'by-client');
+    if (tableWrapper) tableWrapper.classList.toggle('hidden', mode === 'by-client');
+    if (paginationEl) paginationEl.classList.toggle('hidden', mode === 'by-client');
+    if (mode === 'list') {
+      await loadClosedProjects();
+    } else if (mode === 'by-client') {
+      await loadClosedProjectsByClient();
+    } else if (mode === 'date-range') {
+      // Wait for user to apply
+    }
+  });
+}
+
+async function loadClosedProjectsByClient() {
+  if (!closedByClientPanel) return;
+  const search = closedProjectsSearchInput ? closedProjectsSearchInput.value : '';
+  try {
+    const result = await api('/api/closed-projects/by-client?search=' + encodeURIComponent(search));
+    const clients = result.data || [];
+    if (!clients.length) {
+      closedByClientPanel.innerHTML = '<p class="muted">No hay proyectos cerrados.</p>';
+      return;
+    }
+    closedByClientPanel.innerHTML = clients.map((c) => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:#f8fbff;">
+        <div>
+          <strong>${escapeHtml(c.client_name)}</strong>
+          <small class="muted" style="display:block;">Proyectos: ${c.projects_count} | Facturado: ${money.format(c.total_invoiced_mxn || 0)} | Ultimo cierre: ${c.last_closed_at ? c.last_closed_at.slice(0, 10) : 'N/A'}</small>
+        </div>
+        <button class="secondary" data-action="closed-view-client" data-client="${escapeHtml(c.client_name)}" type="button">Ver proyectos</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    closedByClientPanel.innerHTML = '<p class="muted">Error al cargar agrupacion.</p>';
+  }
+}
+
+document.addEventListener('click', async (event) => {
+  const btn = event.target.closest('[data-action="closed-view-client"]');
+  if (btn) {
+    const clientName = btn.dataset.client;
+    try {
+      const result = await api(`/api/closed-projects/client/${encodeURIComponent(clientName)}?limit=50`);
+      const projects = result.data || [];
+      closedByClientPanel.innerHTML = `
+        <div style="margin-bottom:12px;"><button class="secondary" id="closed-client-back" type="button">← Volver a clientes</button> <strong>${escapeHtml(clientName)}</strong></div>
+        ${projects.length ? projects.map((p) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;">
+            <div>
+              <strong>#${p.id} - ${escapeHtml(p.quote_number)}</strong>
+              <small class="muted" style="display:block;">${escapeHtml(p.project_description || '')} | Cerrado: ${p.closed_at ? p.closed_at.slice(0, 10) : ''} | Reportes: ${p.report_count || 0}</small>
+            </div>
+          </div>
+        `).join('') : '<p class="muted">Sin proyectos cerrados.</p>'}
+      `;
+      const backBtn = document.getElementById('closed-client-back');
+      if (backBtn) backBtn.addEventListener('click', () => loadClosedProjectsByClient());
+    } catch (e) {
+      window.alert(e.message);
+    }
+  }
+});
+
+const closedDateApply = document.getElementById('closed-date-apply');
+if (closedDateApply) {
+  closedDateApply.addEventListener('click', async () => {
+    const from = (document.getElementById('closed-date-from') || {}).value || '';
+    const to = (document.getElementById('closed-date-to') || {}).value || '';
+    if (!from && !to) { window.alert('Selecciona al menos una fecha.'); return; }
+    const params = new URLSearchParams({ page: 1, limit: state.closedPag.limit });
+    if (from) params.set('closed_at_from', from);
+    if (to) params.set('closed_at_to', to);
+    const search = closedProjectsSearchInput ? closedProjectsSearchInput.value : '';
+    if (search) params.set('search', search);
+    try {
+      const result = await api('/api/closed-projects/date-range?' + params);
+      state.closedProjects = result.data;
+      renderClosedProjects(result.data, result.pagination);
+      const info = document.getElementById('closed-date-info');
+      if (info) info.textContent = `Mostrando ${result.pagination.totalRecords} proyectos cerrados del rango seleccionado.`;
+    } catch (e) {
+      window.alert(e.message);
+    }
+  });
+}
+
+function setDateRange(from, to) {
+  const fromInput = document.getElementById('closed-date-from');
+  const toInput = document.getElementById('closed-date-to');
+  if (fromInput) fromInput.value = from;
+  if (toInput) toInput.value = to;
+}
+
+const closedDateThisMonth = document.getElementById('closed-date-this-month');
+if (closedDateThisMonth) closedDateThisMonth.addEventListener('click', () => {
+  const now = new Date();
+  const y = now.getFullYear(); const m = String(now.getMonth() + 1).padStart(2, '0');
+  setDateRange(`${y}-${m}-01`, `${y}-${m}-${new Date(y, now.getMonth() + 1, 0).getDate()}`);
+});
+
+const closedDateLastMonth = document.getElementById('closed-date-last-month');
+if (closedDateLastMonth) closedDateLastMonth.addEventListener('click', () => {
+  const now = new Date(); now.setMonth(now.getMonth() - 1);
+  const y = now.getFullYear(); const m = String(now.getMonth() + 1).padStart(2, '0');
+  setDateRange(`${y}-${m}-01`, `${y}-${m}-${new Date(y, now.getMonth() + 1, 0).getDate()}`);
+});
+
+const closedDateThisYear = document.getElementById('closed-date-this-year');
+if (closedDateThisYear) closedDateThisYear.addEventListener('click', () => {
+  const y = new Date().getFullYear();
+  setDateRange(`${y}-01-01`, `${y}-12-31`);
+});
+
+// ===================== END NEW MODULES =====================
 
 api('/api/session')
   .then((session) => {

@@ -38,6 +38,12 @@ const VALID_COST_CATEGORIES = [
   'Otros',
 ];
 const VALID_CURRENCIES = ['MXN', 'USD', 'EUR'];
+const VALID_REPORT_TYPES = ['boiler_startup', 'general_equipment_service_delivery', 'autoflame_system_startup'];
+const REPORT_TYPE_LABELS = {
+  boiler_startup: 'FORMATO DE ARRANQUE DE CALDERA',
+  general_equipment_service_delivery: 'ENTREGA GENERAL DE EQUIPO/SERVICIO',
+  autoflame_system_startup: 'ARRANQUE DE SISTEMA AUTOFLAME',
+};
 const SESSION_TTL_MS = 1000 * 60 * 60;
 const isProduction = process.env.NODE_ENV === 'production';
 const trustProxy = isProduction || process.env.TRUST_PROXY === 'true';
@@ -86,6 +92,16 @@ function requireAdmin(req, res, next) {
   if (req.session.role !== 'admin') {
     return res.status(403).json({
       message: 'Acceso restringido. Solo el administrador puede consultar y programar vacaciones.',
+    });
+  }
+
+  return next();
+}
+
+function requireNotTecnico(req, res, next) {
+  if (req.session.role === 'tecnico') {
+    return res.status(403).json({
+      message: 'Acceso restringido. El usuario tecnico no tiene acceso a este modulo.',
     });
   }
 
@@ -267,6 +283,7 @@ function mapUser(row) {
   return {
     id: row.id,
     username: row.username,
+    role: row.role || 'user',
     created_at: row.created_at,
   };
 }
@@ -639,9 +656,10 @@ app.post('/api/users', requireAuth, requireAdminVerified, (req, res, next) => {
   try {
     const user = normalizeUser(req.body, { requirePassword: true });
     const passwordHash = bcrypt.hashSync(user.password, 12);
+    const role = ['admin', 'user', 'tecnico'].includes(trim(req.body.role)) ? trim(req.body.role) : 'user';
     const result = db
-      .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
-      .run(user.username, passwordHash);
+      .prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
+      .run(user.username, passwordHash, role);
 
     res.status(201).json(mapUser(getUserOrFail(result.lastInsertRowid)));
   } catch (error) {
@@ -653,6 +671,7 @@ app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) =>
   try {
     getUserOrFail(req.params.id);
     const user = normalizeUser(req.body);
+    const role = ['admin', 'user', 'tecnico'].includes(trim(req.body.role)) ? trim(req.body.role) : undefined;
 
     if (user.password) {
       db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?').run(
@@ -664,8 +683,13 @@ app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) =>
       db.prepare('UPDATE users SET username = ? WHERE id = ?').run(user.username, req.params.id);
     }
 
+    if (role) {
+      db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+    }
+
     if (Number(req.session.userId) === Number(req.params.id)) {
       req.session.username = user.username;
+      if (role) req.session.role = role;
     }
 
     res.json(mapUser(getUserOrFail(req.params.id)));
@@ -718,7 +742,7 @@ app.put('/api/exchange-rates', requireAuth, (req, res, next) => {
   }
 });
 
-app.get('/api/projects', requireAuth, (req, res) => {
+app.get('/api/projects', requireAuth, requireNotTecnico, (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.promised_delivery_date ASC, p.id DESC');
@@ -786,7 +810,7 @@ app.get('/api/projects', requireAuth, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters, { summary }));
 });
 
-app.get('/api/closed-projects', requireAuth, (req, res) => {
+app.get('/api/closed-projects', requireAuth, requireNotTecnico, (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.closed_at DESC, p.id DESC');
@@ -830,7 +854,7 @@ app.get('/api/projects/:id', requireAuth, (req, res, next) => {
   }
 });
 
-app.post('/api/projects', requireAuth, (req, res, next) => {
+app.post('/api/projects', requireAuth, requireNotTecnico, (req, res, next) => {
   try {
     const project = normalizeProject(req.body);
     const result = db
@@ -879,7 +903,7 @@ app.post('/api/projects', requireAuth, (req, res, next) => {
   }
 });
 
-app.put('/api/projects/:id', requireAuth, (req, res, next) => {
+app.put('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
     const project = normalizeProject(req.body);
@@ -911,7 +935,7 @@ app.put('/api/projects/:id', requireAuth, (req, res, next) => {
   }
 });
 
-app.delete('/api/projects/:id', requireAuth, (req, res, next) => {
+app.delete('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
     verifyAdminPassword(req.body);
@@ -1013,7 +1037,7 @@ function generateReportFolio(projectId) {
 app.get('/api/reports/projects', requireAuth, (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
-  const reportCountSql = '(SELECT COUNT(*) FROM project_reports WHERE project_id = p.id)';
+  const reportCountSql = '(SELECT COUNT(*) FROM project_reports WHERE project_id = p.id AND deleted_at IS NULL)';
   const sorting = normalizeSort(req.query, {
     ...PROJECT_SORTS,
     report_count: reportCountSql,
@@ -1024,6 +1048,7 @@ app.get('/api/reports/projects', requireAuth, (req, res) => {
       ...PROJECT_FILTERS,
       report_count: { type: 'number', column: reportCountSql },
     },
+    baseWhere: ['p.closed_at IS NULL'],
     search: {
       value: search,
       columns: ['p.client_name', 'p.project_description', 'p.quote_number', 'p.order_number', 'p.purchase_order_number'],
@@ -1088,7 +1113,7 @@ app.get('/api/projects/:id/reports', requireAuth, (req, res, next) => {
         technician_name: { type: 'text', column: 'technician_name' },
         created_at: { type: 'date', column: 'date(created_at)' },
       },
-      baseWhere: ['project_id = ?'],
+      baseWhere: ['project_id = ?', 'deleted_at IS NULL'],
       params: [req.params.id],
       search: {
         value: search,
@@ -1134,9 +1159,30 @@ app.post('/api/reports', requireAuth, (req, res, next) => {
     }
     getProjectOrFail(projectId);
 
+    const reportType = trim(req.body.report_type) || 'boiler_startup';
+    if (!VALID_REPORT_TYPES.includes(reportType)) {
+      throw badRequest('Tipo de reporte no valido.');
+    }
+
     const clientName = requiredText(req.body, 'client_name', 'Cliente');
     const serviceName = requiredText(req.body, 'service_name', 'Nombre de servicio');
     const reportDate = requiredText(req.body, 'report_date', 'Fecha del reporte');
+
+    if (reportType === 'general_equipment_service_delivery') {
+      requiredText(req.body, 'assigned_technicians', 'Tecnico asignado');
+      const reportData = req.body.report_data || {};
+      if (!reportData.activity_description || !String(reportData.activity_description).trim()) {
+        throw badRequest('Descripcion de Actividades es obligatorio.');
+      }
+    }
+
+    if (reportType === 'autoflame_system_startup') {
+      const reportData = req.body.report_data || {};
+      if (!reportData.site_name || !String(reportData.site_name).trim()) {
+        throw badRequest('Sitio / planta es obligatorio.');
+      }
+      requiredText(req.body, 'assigned_technicians', 'Tecnico / ingeniero responsable');
+    }
 
     let reportFolio = trim(req.body.report_folio);
     if (!reportFolio) {
@@ -1151,28 +1197,30 @@ app.post('/api/reports', requireAuth, (req, res, next) => {
     const safetyTests = req.body.safety_tests ? JSON.stringify(req.body.safety_tests) : null;
     const emissionsLow = req.body.emissions_low_fire ? JSON.stringify(req.body.emissions_low_fire) : null;
     const emissionsHigh = req.body.emissions_high_fire ? JSON.stringify(req.body.emissions_high_fire) : null;
+    const reportData = req.body.report_data ? JSON.stringify(req.body.report_data) : null;
 
     const result = db.prepare(
       `INSERT INTO project_reports (
-        project_id, report_folio, client_name, client_address, service_name,
+        project_id, report_folio, report_type, client_name, client_address, service_name,
         report_date, assigned_technicians, burner_model, equipment_model_serial,
         pumps_motors_model, fuel, voltage, gas_pressure_inh2o, liquid_fuel_pressure_psi,
         working_pressure, pump_amperage, fan_amperage, condensate_tank_temp_c,
         operating_output_temp_c, flue_gas_temp_c, safety_tests, comments,
         emissions_low_fire, emissions_high_fire, technician_name, plant_manager_name,
-        created_by, updated_by
+        report_data, created_by, updated_by
       ) VALUES (
-        @project_id, @report_folio, @client_name, @client_address, @service_name,
+        @project_id, @report_folio, @report_type, @client_name, @client_address, @service_name,
         @report_date, @assigned_technicians, @burner_model, @equipment_model_serial,
         @pumps_motors_model, @fuel, @voltage, @gas_pressure_inh2o, @liquid_fuel_pressure_psi,
         @working_pressure, @pump_amperage, @fan_amperage, @condensate_tank_temp_c,
         @operating_output_temp_c, @flue_gas_temp_c, @safety_tests, @comments,
         @emissions_low_fire, @emissions_high_fire, @technician_name, @plant_manager_name,
-        @created_by, @updated_by
+        @report_data, @created_by, @updated_by
       )`,
     ).run({
       project_id: projectId,
       report_folio: reportFolio,
+      report_type: reportType,
       client_name: clientName,
       client_address: optionalText(req.body, 'client_address'),
       service_name: serviceName,
@@ -1197,6 +1245,7 @@ app.post('/api/reports', requireAuth, (req, res, next) => {
       emissions_high_fire: emissionsHigh,
       technician_name: optionalText(req.body, 'technician_name'),
       plant_manager_name: optionalText(req.body, 'plant_manager_name'),
+      report_data: reportData,
       created_by: req.session.username,
       updated_by: req.session.username,
     });
@@ -1217,6 +1266,12 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
       throw error;
     }
 
+    if (report.deleted_at) {
+      if (req.session.role !== 'admin') {
+        throw badRequest('Acceso restringido. Solo el administrador puede modificar reportes archivados.');
+      }
+    }
+
     const clientName = requiredText(req.body, 'client_name', 'Cliente');
     const serviceName = requiredText(req.body, 'service_name', 'Nombre de servicio');
     const reportDate = requiredText(req.body, 'report_date', 'Fecha del reporte');
@@ -1224,6 +1279,7 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
     const safetyTests = req.body.safety_tests ? JSON.stringify(req.body.safety_tests) : null;
     const emissionsLow = req.body.emissions_low_fire ? JSON.stringify(req.body.emissions_low_fire) : null;
     const emissionsHigh = req.body.emissions_high_fire ? JSON.stringify(req.body.emissions_high_fire) : null;
+    const reportData = req.body.report_data ? JSON.stringify(req.body.report_data) : report.report_data;
 
     db.prepare(
       `UPDATE project_reports SET
@@ -1238,7 +1294,7 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
         flue_gas_temp_c = @flue_gas_temp_c, safety_tests = @safety_tests, comments = @comments,
         emissions_low_fire = @emissions_low_fire, emissions_high_fire = @emissions_high_fire,
         technician_name = @technician_name, plant_manager_name = @plant_manager_name,
-        updated_by = @updated_by, updated_at = CURRENT_TIMESTAMP
+        report_data = @report_data, updated_by = @updated_by, updated_at = CURRENT_TIMESTAMP
       WHERE id = @id`,
     ).run({
       id: req.params.id,
@@ -1266,6 +1322,7 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
       emissions_high_fire: emissionsHigh,
       technician_name: optionalText(req.body, 'technician_name'),
       plant_manager_name: optionalText(req.body, 'plant_manager_name'),
+      report_data: reportData,
       updated_by: req.session.username,
     });
 
@@ -1274,6 +1331,206 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// ===================== REPORT ARCHIVE & NEW ENDPOINTS =====================
+
+app.get('/api/report-types', requireAuth, (req, res) => {
+  res.json(Object.entries(REPORT_TYPE_LABELS).map(([value, label]) => ({ value, label })));
+});
+
+app.get('/api/reports/active', requireAuth, (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const sorting = normalizeSort(req.query, {
+    id: 'r.id',
+    report_folio: 'r.report_folio',
+    report_date: 'r.report_date',
+    report_type: 'r.report_type',
+    service_name: 'r.service_name',
+    client_name: 'r.client_name',
+    technician_name: 'r.technician_name',
+    created_at: 'r.created_at',
+  }, 'r.created_at DESC');
+
+  const { whereClause, params, filters } = buildWhere({
+    query: req.query,
+    filters: {
+      report_type: { type: 'select', column: 'r.report_type', options: VALID_REPORT_TYPES },
+      client_name: { type: 'text', column: 'r.client_name' },
+      technician_name: { type: 'text', column: 'r.assigned_technicians' },
+      report_date: { type: 'date', column: 'r.report_date' },
+    },
+    baseWhere: ['p.closed_at IS NULL', 'r.deleted_at IS NULL'],
+    search: {
+      value: search,
+      columns: ['r.report_folio', 'r.client_name', 'r.service_name', 'r.assigned_technicians', 'p.project_description'],
+    },
+  });
+
+  const tableSql = `SELECT r.*, p.project_description, p.quote_number, p.status AS project_status
+    FROM project_reports r JOIN projects p ON r.project_id = p.id`;
+  const countSql = `SELECT COUNT(*) as count FROM project_reports r JOIN projects p ON r.project_id = p.id`;
+  const result = paginateSqlList({ tableSql, countSql, whereClause, params, page, limit, orderBy: sorting.orderBy });
+  res.json(buildListResponse(result.data, result.pagination, sorting, filters));
+});
+
+app.get('/api/reports/archive/clients', requireAuth, (req, res) => {
+  const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+  let sql = `
+    SELECT p.client_name,
+      COUNT(DISTINCT p.id) as closed_projects_count,
+      COUNT(r.id) as reports_count,
+      MAX(r.report_date) as last_report_date
+    FROM projects p
+    JOIN project_reports r ON r.project_id = p.id
+    WHERE p.closed_at IS NOT NULL AND r.deleted_at IS NULL
+  `;
+  const params = [];
+  if (search) {
+    sql += ' AND p.client_name LIKE ?';
+    params.push(`%${search}%`);
+  }
+  sql += ' GROUP BY p.client_name ORDER BY last_report_date DESC';
+  const clients = db.prepare(sql).all(...params);
+  res.json({ data: clients });
+});
+
+app.get('/api/reports/archive/client/:clientName', requireAuth, (req, res) => {
+  const clientName = decodeURIComponent(req.params.clientName);
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const sorting = normalizeSort(req.query, {
+    id: 'r.id',
+    report_folio: 'r.report_folio',
+    report_date: 'r.report_date',
+    report_type: 'r.report_type',
+    service_name: 'r.service_name',
+    technician_name: 'r.technician_name',
+    created_at: 'r.created_at',
+  }, 'r.report_date DESC');
+
+  const { whereClause, params, filters } = buildWhere({
+    query: req.query,
+    filters: {
+      report_type: { type: 'select', column: 'r.report_type', options: VALID_REPORT_TYPES },
+      report_date: { type: 'date', column: 'r.report_date' },
+    },
+    baseWhere: ['p.closed_at IS NOT NULL', 'r.deleted_at IS NULL', 'p.client_name = ?'],
+    params: [clientName],
+    search: {
+      value: search,
+      columns: ['r.report_folio', 'r.service_name', 'r.assigned_technicians', 'p.project_description'],
+    },
+  });
+
+  const tableSql = `SELECT r.*, p.project_description, p.quote_number, p.order_number, p.closed_at AS project_closed_at
+    FROM project_reports r JOIN projects p ON r.project_id = p.id`;
+  const countSql = `SELECT COUNT(*) as count FROM project_reports r JOIN projects p ON r.project_id = p.id`;
+  const result = paginateSqlList({ tableSql, countSql, whereClause, params, page, limit, orderBy: sorting.orderBy });
+  res.json(buildListResponse(result.data, result.pagination, sorting, filters));
+});
+
+app.delete('/api/reports/:id', requireAuth, (req, res, next) => {
+  try {
+    if (req.session.role !== 'admin') {
+      return res.status(403).json({
+        message: 'Acceso restringido. Solo el administrador puede modificar o eliminar reportes archivados.',
+      });
+    }
+    const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
+    if (!report) {
+      const error = new Error('Reporte no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    const reason = requiredText(req.body, 'delete_reason', 'Motivo de eliminacion');
+    db.prepare(
+      `UPDATE project_reports SET deleted_at = CURRENT_TIMESTAMP, deleted_by = ?, delete_reason = ? WHERE id = ?`,
+    ).run(req.session.username, reason, req.params.id);
+    res.json({ message: 'Reporte eliminado logicamente.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/closed-projects/by-client', requireAuth, (req, res) => {
+  const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+  const exchangeRates = getExchangeRateMap();
+  let sql = `
+    SELECT p.client_name,
+      COUNT(*) as projects_count,
+      MAX(p.closed_at) as last_closed_at,
+      SUM(p.total_invoiced * COALESCE((SELECT rate_to_mxn FROM exchange_rates WHERE currency = COALESCE(p.total_invoiced_currency, 'MXN')), 1)) as total_invoiced_mxn
+    FROM projects p
+    WHERE p.closed_at IS NOT NULL
+  `;
+  const params = [];
+  if (search) {
+    sql += ' AND p.client_name LIKE ?';
+    params.push(`%${search}%`);
+  }
+  sql += ' GROUP BY p.client_name ORDER BY last_closed_at DESC';
+  const clients = db.prepare(sql).all(...params);
+  res.json({ data: clients });
+});
+
+app.get('/api/closed-projects/client/:clientName', requireAuth, (req, res) => {
+  const clientName = decodeURIComponent(req.params.clientName);
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const exchangeRates = getExchangeRateMap();
+  const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.closed_at DESC, p.id DESC');
+  const { whereClause, params, filters } = buildWhere({
+    query: req.query,
+    filters: PROJECT_FILTERS,
+    baseWhere: ['p.closed_at IS NOT NULL', 'p.client_name = ?'],
+    params: [clientName],
+    search: {
+      value: search,
+      columns: ['p.quote_number', 'p.order_number', 'p.project_description', 'p.technician_name'],
+    },
+  });
+  const result = paginateSqlList({
+    tableSql: 'SELECT p.* FROM projects p',
+    countSql: 'SELECT COUNT(*) as count FROM projects p',
+    whereClause,
+    params,
+    page,
+    limit,
+    orderBy: sorting.orderBy,
+    map: (project) => ({
+      ...mapProject(project, exchangeRates),
+      report_count: db.prepare('SELECT COUNT(*) as count FROM project_reports WHERE project_id = ? AND deleted_at IS NULL').get(project.id).count,
+    }),
+  });
+  res.json(buildListResponse(result.data, result.pagination, sorting, filters));
+});
+
+app.get('/api/closed-projects/date-range', requireAuth, (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const exchangeRates = getExchangeRateMap();
+  const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.closed_at DESC, p.id DESC');
+  const { whereClause, params, filters } = buildWhere({
+    query: req.query,
+    filters: {
+      ...PROJECT_FILTERS,
+      closed_at: { type: 'date', column: 'date(p.closed_at)' },
+    },
+    baseWhere: ['p.closed_at IS NOT NULL'],
+    search: {
+      value: search,
+      columns: ['p.quote_number', 'p.client_name', 'p.order_number', 'p.project_description', 'p.technician_name'],
+    },
+  });
+  const result = paginateSqlList({
+    tableSql: 'SELECT p.* FROM projects p',
+    countSql: 'SELECT COUNT(*) as count FROM projects p',
+    whereClause,
+    params,
+    page,
+    limit,
+    orderBy: sorting.orderBy,
+    map: (project) => mapProject(project, exchangeRates),
+  });
+  res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
 // ===================== END REPORTS MODULE =====================

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARRANQUE DE SISTEMA AUTOFLAME - REVRAM</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 10pt; color: #1a1a1a; padding: 20px; }
+    .report-container { max-width: 780px; margin: 0 auto; }
+    .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #1d4ed8; padding-bottom: 10px; }
+    .header h1 { font-size: 15pt; color: #1d4ed8; margin-bottom: 4px; }
+    .header h2 { font-size: 11pt; color: #333; font-weight: normal; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; margin-bottom: 16px; }
+    .info-item { display: flex; gap: 6px; padding: 3px 0; border-bottom: 1px solid #e5e7eb; }
+    .info-item .label { font-weight: bold; min-width: 160px; color: #374151; font-size: 9pt; }
+    .info-item .value { flex: 1; }
+    .full-width { grid-column: 1 / -1; }
+    .section-title { font-size: 11pt; font-weight: bold; color: #1d4ed8; margin: 16px 0 8px; border-bottom: 1px solid #d1d5db; padding-bottom: 3px; }
+    .combustion-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-bottom: 12px; }
+    .combustion-table th, .combustion-table td { border: 1px solid #d1d5db; padding: 3px 4px; text-align: center; }
+    .combustion-table th { background: #f0f4ff; font-weight: bold; color: #1d4ed8; }
+    .combustion-table td { min-width: 30px; }
+    .comments-box { border: 1px solid #d1d5db; border-radius: 4px; padding: 10px; min-height: 60px; white-space: pre-wrap; line-height: 1.5; margin-bottom: 12px; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; margin-top: 40px; }
+    .signature-block { text-align: center; }
+    .signature-line { border-top: 1px solid #1a1a1a; margin-top: 40px; padding-top: 6px; }
+    .signature-name { font-weight: bold; margin-top: 4px; }
+    .signature-role { font-size: 9pt; color: #555; }
+    .folio { font-size: 9pt; color: #666; margin-top: 16px; text-align: right; }
+    .no-print { text-align: center; margin-bottom: 20px; }
+    .no-print button { background: #1d4ed8; color: white; border: none; padding: 10px 24px; border-radius: 8px; font-size: 11pt; cursor: pointer; margin: 0 6px; }
+    .no-print button:hover { background: #1e40af; }
+    .no-print button.secondary { background: #e9eefb; color: #1e40af; }
+    @media print {
+      body { padding: 0; font-size: 9pt; }
+      .no-print { display: none !important; }
+      .report-container { max-width: 100%; }
+      .combustion-table { font-size: 7pt; }
+      @page { size: letter; margin: 12mm 10mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <button onclick="window.print()">Imprimir / Guardar PDF</button>
+    <button class="secondary" onclick="window.close()">Cerrar</button>
+  </div>
+  <div class="report-container" id="report-content">
+    <div class="header">
+      <h1>ARRANQUE DE SISTEMA AUTOFLAME</h1>
+      <h2>REVRAM</h2>
+    </div>
+    <div class="info-grid">
+      <div class="info-item"><span class="label">Folio:</span><span class="value" id="r-folio"></span></div>
+      <div class="info-item"><span class="label">Fecha:</span><span class="value" id="r-date"></span></div>
+      <div class="info-item"><span class="label">Cliente:</span><span class="value" id="r-client"></span></div>
+      <div class="info-item"><span class="label">Sitio / Planta:</span><span class="value" id="r-site"></span></div>
+      <div class="info-item full-width"><span class="label">Ingeniero / Técnico responsable:</span><span class="value" id="r-technician"></span></div>
+    </div>
+    <div class="section-title">Datos Generales</div>
+    <div class="info-grid">
+      <div class="info-item"><span class="label">Nombre del sitio:</span><span class="value" id="r-site-name"></span></div>
+      <div class="info-item"><span class="label">Quemador / Equipo:</span><span class="value" id="r-burner"></span></div>
+      <div class="info-item"><span class="label">Tipo de combustible:</span><span class="value" id="r-fuel"></span></div>
+      <div class="info-item"><span class="label">Presión suministro:</span><span class="value" id="r-supply-pressure"></span></div>
+      <div class="info-item"><span class="label">Presión retorno (aceite):</span><span class="value" id="r-return-pressure"></span></div>
+      <div class="info-item full-width"><span class="label">Comentarios generales datos:</span><span class="value" id="r-general-comments-data"></span></div>
+    </div>
+    <div class="section-title">Puntos de Ajuste / Curva de Combustión</div>
+    <div style="overflow-x:auto;">
+      <table class="combustion-table" id="combustion-table">
+        <thead>
+          <tr>
+            <th>Punto</th><th>Alto</th><th>Bajo</th><th>Canal 1</th><th>Canal 2</th><th>Canal 3</th>
+            <th>Canal 4</th><th>Canal 5</th><th>Canal 6</th><th>O₂ %Vol</th><th>CO₂ %Vol</th>
+            <th>CO ppmvd</th><th>NO ppmvd</th><th>SO₂ ppmvd</th><th>T.Gases °C</th>
+            <th>P.Horno "WG</th><th>P.Windbox "WG</th><th>P.Stack "WG</th><th>N.Humo</th><th>Comentarios</th>
+          </tr>
+        </thead>
+        <tbody id="combustion-body"></tbody>
+      </table>
+    </div>
+    <div class="section-title">Configuración Adicional</div>
+    <div class="info-grid">
+      <div class="info-item"><span class="label">Inicio FGR:</span><span class="value" id="r-fgr"></span></div>
+      <div class="info-item"><span class="label">Golden Start:</span><span class="value" id="r-golden"></span></div>
+    </div>
+    <div class="section-title">Comentarios Generales</div>
+    <div class="comments-box" id="r-comments"></div>
+    <div class="signatures">
+      <div class="signature-block">
+        <div class="signature-line"></div>
+        <div class="signature-name" id="r-tech-name"></div>
+        <div class="signature-role">Técnico / Ingeniero REVRAM</div>
+      </div>
+      <div class="signature-block">
+        <div class="signature-line"></div>
+        <div class="signature-name" id="r-manager-name"></div>
+        <div class="signature-role">V.B. Encargado de Planta</div>
+      </div>
+    </div>
+    <div class="folio" id="r-folio-footer"></div>
+  </div>
+  <script>
+    (async function() {
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get('id');
+      if (!id) { document.body.innerHTML = '<p>ID de reporte no proporcionado.</p>'; return; }
+      try {
+        const res = await fetch('/api/reports/' + id);
+        if (!res.ok) throw new Error('No encontrado');
+        const report = await res.json();
+        const data = report.report_data ? JSON.parse(report.report_data) : {};
+        document.getElementById('r-folio').textContent = report.report_folio || '';
+        document.getElementById('r-date').textContent = report.report_date || '';
+        document.getElementById('r-client').textContent = report.client_name || '';
+        document.getElementById('r-site').textContent = data.site_name || '';
+        document.getElementById('r-technician').textContent = report.assigned_technicians || '';
+        document.getElementById('r-site-name').textContent = data.site_name || '';
+        document.getElementById('r-burner').textContent = data.burner_equipment || '';
+        document.getElementById('r-fuel').textContent = data.fuel_type || '';
+        document.getElementById('r-supply-pressure').textContent = (data.supply_pressure || '') + ' ' + (data.supply_pressure_unit || '');
+        document.getElementById('r-return-pressure').textContent = (data.return_pressure || '') + ' ' + (data.return_pressure_unit || '');
+        document.getElementById('r-general-comments-data').textContent = data.general_data_comments || '';
+        document.getElementById('r-fgr').textContent = data.fgr_start || '';
+        document.getElementById('r-golden').textContent = data.golden_start || '';
+        document.getElementById('r-comments').textContent = data.general_comments || report.comments || '';
+        document.getElementById('r-tech-name').textContent = report.technician_name || report.assigned_technicians || '';
+        document.getElementById('r-manager-name').textContent = report.plant_manager_name || '';
+        document.getElementById('r-folio-footer').textContent = 'Folio: ' + (report.report_folio || '');
+
+        const tbody = document.getElementById('combustion-body');
+        const points = data.combustion_points || [];
+        for (let i = 0; i < 15; i++) {
+          const p = points[i] || {};
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${i+1}</td><td>${p.high||''}</td><td>${p.low||''}</td>` +
+            `<td>${p.ch1||''}</td><td>${p.ch2||''}</td><td>${p.ch3||''}</td>` +
+            `<td>${p.ch4||''}</td><td>${p.ch5||''}</td><td>${p.ch6||''}</td>` +
+            `<td>${p.o2||''}</td><td>${p.co2||''}</td><td>${p.co||''}</td>` +
+            `<td>${p.no||''}</td><td>${p.so2||''}</td><td>${p.tgas||''}</td>` +
+            `<td>${p.p_horno||''}</td><td>${p.p_windbox||''}</td><td>${p.p_stack||''}</td>` +
+            `<td>${p.smoke_number||''}</td><td>${p.comments||''}</td>`;
+          tbody.appendChild(tr);
+        }
+      } catch (e) {
+        document.body.innerHTML = '<p>Error al cargar el reporte: ' + e.message + '</p>';
+      }
+    })();
+  </script>
+</body>
+</html>

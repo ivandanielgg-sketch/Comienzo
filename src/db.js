@@ -268,6 +268,11 @@ function migrate(database) {
   ensureColumn(database, 'vacation_requests', 'negative_days_generated', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'vacation_requests', 'admin_override_reason', 'TEXT');
   ensureColumn(database, 'vacation_requests', 'balance_after_request', 'INTEGER');
+  ensureColumn(database, 'project_reports', 'report_type', "TEXT NOT NULL DEFAULT 'boiler_startup'");
+  ensureColumn(database, 'project_reports', 'report_data', 'TEXT');
+  ensureColumn(database, 'project_reports', 'deleted_at', 'TEXT');
+  ensureColumn(database, 'project_reports', 'deleted_by', 'TEXT');
+  ensureColumn(database, 'project_reports', 'delete_reason', 'TEXT');
   migrateCostCategories(database);
   seedExchangeRates(database);
 }
