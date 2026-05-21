@@ -118,9 +118,10 @@ table {
 th,
 td {
   border-bottom: 1px solid var(--border);
-  padding: 12px;
+  padding: 10px 8px;
   text-align: left;
   overflow-wrap: break-word;
+  font-size: 0.88rem;
 }
 
 th {
@@ -346,8 +347,7 @@ button.active {
 
 td.col-text {
   white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
   min-width: 90px;
 }
 
@@ -386,17 +386,23 @@ th.col-number {
 
 .row-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   white-space: nowrap;
+}
+
+.row-actions button {
+  padding: 7px 10px;
+  font-size: 0.82rem;
 }
 
 .badge {
   border-radius: 999px;
   display: inline-flex;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 800;
-  padding: 4px 9px;
+  padding: 3px 8px;
+  white-space: nowrap;
 }
 
 .badge.status {
@@ -531,8 +537,8 @@ th.col-number {
   }
 
   th, td {
-    padding: 10px 8px;
-    font-size: 0.88rem;
+    padding: 8px 6px;
+    font-size: 0.84rem;
   }
 }
 
