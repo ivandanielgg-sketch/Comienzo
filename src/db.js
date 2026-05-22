@@ -332,6 +332,15 @@ function migrate(database) {
   ensureColumn(database, 'users', 'updated_by_user_id', 'INTEGER');
   ensureColumn(database, 'users', 'updated_by_name', 'TEXT');
 
+  // Security columns for users
+  ensureColumn(database, 'users', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(database, 'users', 'locked_until', 'TEXT');
+  ensureColumn(database, 'users', 'failed_login_attempts', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'users', 'last_failed_login_at', 'TEXT');
+  ensureColumn(database, 'users', 'mfa_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'users', 'mfa_secret', 'TEXT');
+  ensureColumn(database, 'users', 'mfa_verified_at', 'TEXT');
+
   // Create audit_logs table
   database.exec(`
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -356,6 +365,23 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs (entity_type, entity_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs (timestamp_utc);
+
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_identifier TEXT NOT NULL,
+      user_id INTEGER,
+      ip_address TEXT,
+      user_agent TEXT,
+      success INTEGER NOT NULL DEFAULT 0,
+      failure_reason TEXT,
+      attempted_at TEXT NOT NULL,
+      locked_until TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts (user_identifier);
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts (ip_address);
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts (attempted_at);
   `);
 
   migrateCostCategories(database);
