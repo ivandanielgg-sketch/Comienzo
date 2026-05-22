@@ -154,6 +154,8 @@ test('backup module', async (t) => {
     const afterCounts = { ...afterRes.body.backupMetadata.recordCounts };
     delete beforeCounts.auditLogs;
     delete afterCounts.auditLogs;
+    delete beforeCounts.loginAttempts;
+    delete afterCounts.loginAttempts;
     assert.deepEqual(beforeCounts, afterCounts);
   });
 
@@ -285,5 +287,6 @@ test('backup module', async (t) => {
     assert.ok(plannedKeys.includes('roles'), 'Should include planned roles entity');
     const includedKeys = res.body.coverageManifest.entitiesIncluded;
     assert.ok(includedKeys.includes('auditLogs'), 'Should include auditLogs in included entities');
+    assert.ok(includedKeys.includes('loginAttempts'), 'Should include loginAttempts in included entities');
   });
 });

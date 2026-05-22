@@ -124,10 +124,19 @@ const BACKUP_ENTITIES = [
   {
     key: 'usersSafe',
     table: 'users',
-    query: 'SELECT id, username, role, created_at FROM users ORDER BY id',
+    query: 'SELECT id, username, role, is_active, created_at FROM users ORDER BY id',
     stableKeys: ['username'],
     status: ENTITY_STATUS.INCLUDED,
     module: 'users',
+  },
+  {
+    key: 'loginAttempts',
+    table: 'login_attempts',
+    query: 'SELECT id, user_identifier, user_id, ip_address, success, failure_reason, attempted_at, locked_until, created_at FROM login_attempts ORDER BY id',
+    stableKeys: ['user_identifier', 'attempted_at'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'auth',
+    note: 'user_agent excluded from backup to reduce size',
   },
   {
     key: 'auditLogs',
@@ -154,6 +163,12 @@ const EXCLUDED_ENTITIES = [
     status: ENTITY_STATUS.EXCLUDED,
   },
   {
+    key: 'mfaSecrets',
+    table: 'users',
+    reason: 'Secretos MFA no se respaldan por seguridad',
+    status: ENTITY_STATUS.EXCLUDED,
+  },
+  {
     key: 'environmentVariables',
     table: null,
     reason: 'Variables de entorno, secretos y credenciales del servidor',
@@ -166,7 +181,6 @@ const PLANNED_ENTITIES = [
   { key: 'permissions', table: 'permissions', reason: 'Pendiente implementacion de permisos', status: ENTITY_STATUS.PLANNED },
   { key: 'userPermissions', table: 'user_permissions', reason: 'Pendiente relacion usuario-permisos', status: ENTITY_STATUS.PLANNED },
   { key: 'securitySettings', table: 'security_settings', reason: 'Pendiente configuracion de seguridad', status: ENTITY_STATUS.PLANNED },
-  { key: 'loginAttempts', table: 'login_attempts', reason: 'Pendiente registro de intentos de login', status: ENTITY_STATUS.PLANNED },
   { key: 'backupImportLogs', table: 'backup_import_logs', reason: 'Pendiente registro persistente de importaciones', status: ENTITY_STATUS.PLANNED },
 ];
 
@@ -193,6 +207,7 @@ const DETECTED_MODULES = [
   'ecovis',
   'settings',
   'users',
+  'auth',
   'backup',
   'audit',
 ];

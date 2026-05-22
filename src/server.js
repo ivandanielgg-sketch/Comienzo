@@ -47,6 +47,8 @@ const REPORT_TYPE_LABELS = {
   autoflame_system_startup: 'ARRANQUE DE SISTEMA AUTOFLAME',
 };
 const SESSION_TTL_MS = 1000 * 60 * 60;
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const isProduction = process.env.NODE_ENV === 'production';
 const trustProxy = isProduction || process.env.TRUST_PROXY === 'true';
 
@@ -77,6 +79,13 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 function requireAuth(req, res, next) {
   if (!req.session.userId) {
     return res.status(401).json({ message: 'Necesitas iniciar sesion.' });
+  }
+
+  const user = db.prepare('SELECT is_active FROM users WHERE id = ?').get(req.session.userId);
+  if (!user || !user.is_active) {
+    logAuditEvent(db, { req, action: 'access_denied_inactive', module: 'auth', entityType: 'user', entityId: req.session.userId, entityLabel: req.session.username });
+    req.session.destroy(() => {});
+    return res.status(401).json({ message: 'Tu cuenta ha sido desactivada. Contacta al administrador.' });
   }
 
   return next();
@@ -286,6 +295,7 @@ function mapUser(row) {
     id: row.id,
     username: row.username,
     role: row.role || 'user',
+    is_active: row.is_active !== undefined ? row.is_active : 1,
     created_at: row.created_at,
     created_at_cdmx: formatDateTimeCDMX(row.created_at),
     updated_at: row.updated_at,
@@ -599,12 +609,49 @@ app.post('/api/login', (req, res, next) => {
   try {
     const username = requiredText(req.body, 'username', 'Usuario');
     const password = requiredText(req.body, 'password', 'Contrasena');
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
+    const userAgent = req.get('user-agent') || null;
+    const now = nowUtc();
+
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
 
+    if (user && user.locked_until) {
+      const lockExpiry = new Date(user.locked_until).getTime();
+      if (lockExpiry > Date.now()) {
+        recordLoginAttempt(username, user.id, ipAddress, userAgent, false, 'account_locked', user.locked_until);
+        logAuditEvent(db, { req, action: 'login_blocked_locked', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: username, metadata: { locked_until: user.locked_until } });
+        throw badRequest('Usuario o contrasena incorrectos.');
+      }
+      db.prepare('UPDATE users SET locked_until = NULL, failed_login_attempts = 0 WHERE id = ?').run(user.id);
+    }
+
     if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+      if (user) {
+        const attempts = (user.failed_login_attempts || 0) + 1;
+        let lockedUntil = null;
+        if (attempts >= MAX_LOGIN_ATTEMPTS) {
+          lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
+          db.prepare('UPDATE users SET failed_login_attempts = ?, last_failed_login_at = ?, locked_until = ? WHERE id = ?').run(attempts, now, lockedUntil, user.id);
+          logAuditEvent(db, { req, action: 'user_locked', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: username, metadata: { attempts, locked_until: lockedUntil } });
+        } else {
+          db.prepare('UPDATE users SET failed_login_attempts = ?, last_failed_login_at = ? WHERE id = ?').run(attempts, now, user.id);
+        }
+        recordLoginAttempt(username, user.id, ipAddress, userAgent, false, 'invalid_credentials', lockedUntil);
+      } else {
+        recordLoginAttempt(username, null, ipAddress, userAgent, false, 'user_not_found', null);
+      }
       logAuditEvent(db, { req, action: 'login_failed', module: 'auth', entityType: 'user', entityLabel: username, metadata: { attempted_username: username } });
       throw badRequest('Usuario o contrasena incorrectos.');
     }
+
+    if (!user.is_active) {
+      recordLoginAttempt(username, user.id, ipAddress, userAgent, false, 'user_inactive', null);
+      logAuditEvent(db, { req, action: 'login_failed_inactive', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: username });
+      throw badRequest('Usuario o contrasena incorrectos.');
+    }
+
+    db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL, last_failed_login_at = NULL WHERE id = ?').run(user.id);
+    recordLoginAttempt(username, user.id, ipAddress, userAgent, true, null, null);
 
     req.session.userId = user.id;
     req.session.username = user.username;
@@ -615,6 +662,17 @@ app.post('/api/login', (req, res, next) => {
     return next(error);
   }
 });
+
+function recordLoginAttempt(userIdentifier, userId, ipAddress, userAgent, success, failureReason, lockedUntil) {
+  try {
+    db.prepare(
+      `INSERT INTO login_attempts (user_identifier, user_id, ip_address, user_agent, success, failure_reason, attempted_at, locked_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(userIdentifier, userId, ipAddress, userAgent, success ? 1 : 0, failureReason, nowUtc(), lockedUntil);
+  } catch (err) {
+    console.error('Failed to record login attempt:', err.message);
+  }
+}
 
 app.post('/api/logout', requireAuth, (req, res) => {
   logAuditEvent(db, { req, action: 'logout', module: 'auth', entityType: 'user', entityId: req.session.userId, entityLabel: req.session.username });
@@ -650,7 +708,7 @@ app.get('/api/users', requireAuth, requireAdminVerified, (req, res) => {
     },
   });
   const result = paginateSqlList({
-    tableSql: 'SELECT id, username, role, created_at, updated_at FROM users',
+    tableSql: 'SELECT id, username, role, is_active, created_at, updated_at FROM users',
     countSql: 'SELECT COUNT(*) as count FROM users',
     whereClause,
     params,
@@ -685,6 +743,7 @@ app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) =>
     const before = getUserOrFail(req.params.id);
     const user = normalizeUser(req.body);
     const role = ['admin', 'user', 'tecnico'].includes(trim(req.body.role)) ? trim(req.body.role) : undefined;
+    const isActive = req.body.is_active !== undefined ? (req.body.is_active ? 1 : 0) : undefined;
     const audit = updatedByFields(req);
 
     if (user.password) {
@@ -705,12 +764,16 @@ app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) =>
       db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
     }
 
+    if (isActive !== undefined) {
+      db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(isActive, req.params.id);
+    }
+
     if (Number(req.session.userId) === Number(req.params.id)) {
       req.session.username = user.username;
       if (role) req.session.role = role;
     }
 
-    logAuditEvent(db, { req, action: 'update', module: 'users', entityType: 'user', entityId: Number(req.params.id), entityLabel: user.username, before: { username: before.username, role: before.role }, after: { username: user.username, role: role || before.role } });
+    logAuditEvent(db, { req, action: 'update', module: 'users', entityType: 'user', entityId: Number(req.params.id), entityLabel: user.username, before: { username: before.username, role: before.role, is_active: before.is_active }, after: { username: user.username, role: role || before.role, is_active: isActive !== undefined ? isActive : before.is_active } });
     res.json(mapUser(getUserOrFail(req.params.id)));
   } catch (error) {
     next(error);
@@ -2925,7 +2988,7 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
       'settings', 'usersSafe', 'projects', 'closedProjects',
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
       'projectReports', 'reportsArchive', 'ecovisProjects', 'ecovisPayments',
-      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'auditLogs',
+      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs',
     ];
 
     for (const entityKey of orderedEntities) {
@@ -2957,7 +3020,7 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
           continue;
         }
 
-        if (entityKey === 'usersSafe' || entityKey === 'settings' || entityKey === 'auditLogs') { skipped++; continue; }
+        if (entityKey === 'usersSafe' || entityKey === 'settings' || entityKey === 'auditLogs' || entityKey === 'loginAttempts') { skipped++; continue; }
 
         try {
           if (entityKey === 'projects' || entityKey === 'closedProjects') {
