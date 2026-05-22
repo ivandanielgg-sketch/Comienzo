@@ -86,7 +86,7 @@ test('backup module', async (t) => {
     assert.ok(res.body.backupMetadata);
     assert.ok(res.body.coverageManifest);
     assert.ok(res.body.data);
-    assert.equal(res.body.backupMetadata.schemaVersion, '2.0.0');
+    assert.equal(res.body.backupMetadata.schemaVersion, '3.0.0');
     assert.equal(res.body.backupMetadata.appName, 'REVRAM Dashboard');
     assert.ok(res.body.backupMetadata.exportedAt);
     assert.ok(res.body.backupMetadata.recordCounts);
@@ -150,7 +150,15 @@ test('backup module', async (t) => {
     const beforeRes = await request('GET', '/api/admin/backup');
     await request('POST', '/api/admin/backup/preview', beforeRes.body);
     const afterRes = await request('GET', '/api/admin/backup');
-    assert.deepEqual(beforeRes.body.backupMetadata.recordCounts, afterRes.body.backupMetadata.recordCounts);
+    const beforeCounts = { ...beforeRes.body.backupMetadata.recordCounts };
+    const afterCounts = { ...afterRes.body.backupMetadata.recordCounts };
+    delete beforeCounts.auditLogs;
+    delete afterCounts.auditLogs;
+    delete beforeCounts.loginAttempts;
+    delete afterCounts.loginAttempts;
+    delete beforeCounts.backupImportLogs;
+    delete afterCounts.backupImportLogs;
+    assert.deepEqual(beforeCounts, afterCounts);
   });
 
   await t.test('POST /api/admin/backup/import adds missing records', async () => {
@@ -279,6 +287,10 @@ test('backup module', async (t) => {
     assert.ok(res.body.coverageManifest.entitiesPlanned.length > 0);
     const plannedKeys = res.body.coverageManifest.entitiesPlanned.map(e => e.entity);
     assert.ok(plannedKeys.includes('roles'), 'Should include planned roles entity');
-    assert.ok(plannedKeys.includes('auditLogs'), 'Should include planned auditLogs entity');
+    const includedKeys = res.body.coverageManifest.entitiesIncluded;
+    assert.ok(includedKeys.includes('auditLogs'), 'Should include auditLogs in included entities');
+    assert.ok(includedKeys.includes('loginAttempts'), 'Should include loginAttempts in included entities');
+    assert.ok(includedKeys.includes('backupImportLogs'), 'Should include backupImportLogs in included entities');
+    assert.ok(includedKeys.includes('userPermissions'), 'Should include userPermissions in included entities');
   });
 });

@@ -1,6 +1,6 @@
 'use strict';
 
-const BACKUP_SCHEMA_VERSION = '2.0.0';
+const BACKUP_SCHEMA_VERSION = '3.0.0';
 
 const ENTITY_STATUS = {
   INCLUDED: 'included',
@@ -9,6 +9,7 @@ const ENTITY_STATUS = {
 };
 
 const BACKUP_ENTITIES = [
+  // --- Operational data ---
   {
     key: 'projects',
     table: 'projects',
@@ -90,6 +91,14 @@ const BACKUP_ENTITIES = [
     module: 'ecovis',
   },
   {
+    key: 'ecovisPurchaseOrders',
+    table: 'ecovis_purchase_orders',
+    query: 'SELECT * FROM ecovis_purchase_orders ORDER BY id',
+    stableKeys: ['purchase_order_number'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'ecovis',
+  },
+  {
     key: 'ecovisPaymentAllocations',
     table: 'ecovis_payment_allocations',
     query: 'SELECT * FROM ecovis_payment_allocations ORDER BY id',
@@ -121,13 +130,50 @@ const BACKUP_ENTITIES = [
     status: ENTITY_STATUS.INCLUDED,
     module: 'settings',
   },
+  // --- Users & Security ---
   {
     key: 'usersSafe',
     table: 'users',
-    query: 'SELECT id, username, role, created_at FROM users ORDER BY id',
+    query: 'SELECT id, username, role, is_active, created_at, updated_at, created_by_name, updated_by_name FROM users ORDER BY id',
     stableKeys: ['username'],
     status: ENTITY_STATUS.INCLUDED,
     module: 'users',
+    note: 'password_hash, mfa_secret, locked_until, failed_login_attempts excluded',
+  },
+  {
+    key: 'userPermissions',
+    table: 'user_permissions',
+    query: 'SELECT id, user_id, permissions_json, created_at, updated_at FROM user_permissions ORDER BY id',
+    stableKeys: ['user_id'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'users',
+  },
+  // --- Audit & Auth ---
+  {
+    key: 'loginAttempts',
+    table: 'login_attempts',
+    query: 'SELECT id, user_identifier, user_id, ip_address, success, failure_reason, attempted_at, locked_until, created_at FROM login_attempts ORDER BY id DESC LIMIT 10000',
+    stableKeys: ['user_identifier', 'attempted_at'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'auth',
+    note: 'Limited to last 10000 entries. user_agent excluded to reduce size.',
+  },
+  {
+    key: 'auditLogs',
+    table: 'audit_logs',
+    query: 'SELECT id, user_id, user_name, action, module, entity_type, entity_id, entity_label, timestamp_utc, ip_address, user_agent, metadata_json, created_at FROM audit_logs ORDER BY id DESC LIMIT 50000',
+    stableKeys: ['timestamp_utc', 'user_id', 'action', 'entity_type', 'entity_id'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'audit',
+    note: 'Limited to last 50000 entries. before_json and after_json excluded to reduce size.',
+  },
+  {
+    key: 'backupImportLogs',
+    table: 'backup_import_logs',
+    query: 'SELECT * FROM backup_import_logs ORDER BY id',
+    stableKeys: ['imported_at', 'imported_by'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'backup',
   },
 ];
 
@@ -145,6 +191,18 @@ const EXCLUDED_ENTITIES = [
     status: ENTITY_STATUS.EXCLUDED,
   },
   {
+    key: 'mfaSecrets',
+    table: 'users',
+    reason: 'Secretos MFA no se respaldan por seguridad',
+    status: ENTITY_STATUS.EXCLUDED,
+  },
+  {
+    key: 'lockedUntilData',
+    table: 'users',
+    reason: 'Estado temporal de bloqueo - se regenera automaticamente',
+    status: ENTITY_STATUS.EXCLUDED,
+  },
+  {
     key: 'environmentVariables',
     table: null,
     reason: 'Variables de entorno, secretos y credenciales del servidor',
@@ -153,13 +211,8 @@ const EXCLUDED_ENTITIES = [
 ];
 
 const PLANNED_ENTITIES = [
-  { key: 'roles', table: 'roles', reason: 'Pendiente implementacion de sistema de roles granular', status: ENTITY_STATUS.PLANNED },
-  { key: 'permissions', table: 'permissions', reason: 'Pendiente implementacion de permisos', status: ENTITY_STATUS.PLANNED },
-  { key: 'userPermissions', table: 'user_permissions', reason: 'Pendiente relacion usuario-permisos', status: ENTITY_STATUS.PLANNED },
-  { key: 'auditLogs', table: 'audit_logs', reason: 'Pendiente implementacion de auditoria', status: ENTITY_STATUS.PLANNED },
-  { key: 'securitySettings', table: 'security_settings', reason: 'Pendiente configuracion de seguridad', status: ENTITY_STATUS.PLANNED },
-  { key: 'loginAttempts', table: 'login_attempts', reason: 'Pendiente registro de intentos de login', status: ENTITY_STATUS.PLANNED },
-  { key: 'backupImportLogs', table: 'backup_import_logs', reason: 'Pendiente registro persistente de importaciones', status: ENTITY_STATUS.PLANNED },
+  { key: 'roles', table: 'roles', reason: 'Pendiente implementacion de sistema de roles como tabla independiente', status: ENTITY_STATUS.PLANNED },
+  { key: 'securitySettings', table: 'security_settings', reason: 'Pendiente configuracion de seguridad avanzada', status: ENTITY_STATUS.PLANNED },
 ];
 
 const DETECTED_ROUTES = [
@@ -185,7 +238,9 @@ const DETECTED_MODULES = [
   'ecovis',
   'settings',
   'users',
+  'auth',
   'backup',
+  'audit',
 ];
 
 function getIncludedEntities() {

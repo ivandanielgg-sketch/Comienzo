@@ -126,10 +126,38 @@ function calculateEcovisAccountSummary(projects, payments, allocations, movement
   };
 }
 
+function calculatePurchaseOrderBalance(purchaseOrder, allocations) {
+  const totalAmount = Number(purchaseOrder.total_amount || 0);
+  const totalApplied = roundMoney(
+    allocations
+      .filter((a) => a.allocation_type === 'orden_compra' && a.ecovis_purchase_order_id === purchaseOrder.id && !a.is_cancelled)
+      .reduce((sum, a) => sum + Number(a.amount || 0), 0),
+  );
+  const pendingBalance = roundMoney(totalAmount - totalApplied);
+
+  let status = purchaseOrder.status;
+  if (!purchaseOrder.is_cancelled) {
+    if (totalApplied <= 0) status = 'pendiente';
+    else if (pendingBalance <= 0) status = 'pagada';
+    else status = 'parcialmente_pagada';
+  } else {
+    status = 'cancelada';
+  }
+
+  return {
+    purchase_order_number: purchaseOrder.purchase_order_number,
+    total_amount: totalAmount,
+    total_applied_payments: totalApplied,
+    pending_balance: pendingBalance,
+    status,
+  };
+}
+
 module.exports = {
   calculateEcovisAccountSummary,
   calculateProjectPaidAmount,
   calculateProjectStatus,
   calculatePaymentUnallocated,
+  calculatePurchaseOrderBalance,
   roundMoney,
 };
