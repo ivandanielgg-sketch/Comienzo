@@ -375,6 +375,20 @@ function migrate(database) {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS backup_import_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      imported_at TEXT NOT NULL,
+      imported_by TEXT NOT NULL,
+      schema_version TEXT,
+      backup_exported_at TEXT,
+      status TEXT NOT NULL DEFAULT 'completed',
+      summary_json TEXT,
+      conflicts_json TEXT,
+      errors_json TEXT,
+      validation_json TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS login_attempts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_identifier TEXT NOT NULL,

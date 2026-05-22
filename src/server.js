@@ -3045,7 +3045,7 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
       'settings', 'usersSafe', 'userPermissions', 'projects', 'closedProjects',
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
       'projectReports', 'reportsArchive', 'ecovisProjects', 'ecovisPayments',
-      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs',
+      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs', 'backupImportLogs',
     ];
 
     for (const entityKey of orderedEntities) {
@@ -3077,7 +3077,7 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
           continue;
         }
 
-        if (entityKey === 'usersSafe' || entityKey === 'settings' || entityKey === 'auditLogs' || entityKey === 'loginAttempts' || entityKey === 'userPermissions') { skipped++; continue; }
+        if (entityKey === 'usersSafe' || entityKey === 'settings' || entityKey === 'auditLogs' || entityKey === 'loginAttempts' || entityKey === 'userPermissions' || entityKey === 'backupImportLogs') { skipped++; continue; }
 
         try {
           if (entityKey === 'projects' || entityKey === 'closedProjects') {
@@ -3150,6 +3150,7 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
     importLog.status = 'failed';
     importLog.errors.push({ critical: true, error: err.message });
     logAuditEvent(db, { req, action: 'backup_import', module: 'backup', entityType: 'backup', entityLabel: 'Import failed', metadata: { status: 'failed', error: err.message } });
+    persistImportLog(importLog, null);
     return res.status(500).json({ message: 'Error critico durante importacion. Se realizo rollback.', importLog });
   }
 
@@ -3157,8 +3158,73 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
     importLog.status = 'completed_with_warnings';
   }
 
+  const validation = validatePostImport();
+  importLog.validation = validation;
+  if (validation.errors.length > 0) {
+    importLog.status = 'completed_with_warnings';
+  }
+
+  persistImportLog(importLog, validation);
   logAuditEvent(db, { req, action: 'backup_import', module: 'backup', entityType: 'backup', entityLabel: `Import ${importLog.status}`, metadata: { status: importLog.status, summary: importLog.summary } });
   res.json({ message: 'Importacion completada.', importLog });
+});
+
+function validatePostImport() {
+  const errors = [];
+  const warnings = [];
+
+  const activeAdmin = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1").get();
+  if (!activeAdmin || activeAdmin.count === 0) {
+    errors.push('No existe un administrador activo en el sistema despues de la importacion.');
+  }
+
+  const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get();
+  if (!totalUsers || totalUsers.count === 0) {
+    errors.push('No existen usuarios en el sistema despues de la importacion.');
+  }
+
+  const orphanPayments = db.prepare('SELECT COUNT(*) as count FROM project_payments WHERE project_id NOT IN (SELECT id FROM projects)').get();
+  if (orphanPayments && orphanPayments.count > 0) {
+    warnings.push(`${orphanPayments.count} pagos sin proyecto padre valido.`);
+  }
+
+  const orphanCosts = db.prepare('SELECT COUNT(*) as count FROM project_costs WHERE project_id NOT IN (SELECT id FROM projects)').get();
+  if (orphanCosts && orphanCosts.count > 0) {
+    warnings.push(`${orphanCosts.count} costos sin proyecto padre valido.`);
+  }
+
+  const orphanPerms = db.prepare('SELECT COUNT(*) as count FROM user_permissions WHERE user_id NOT IN (SELECT id FROM users)').get();
+  if (orphanPerms && orphanPerms.count > 0) {
+    warnings.push(`${orphanPerms.count} permisos referenciando usuarios inexistentes.`);
+  }
+
+  return { valid: errors.length === 0, errors, warnings };
+}
+
+function persistImportLog(importLog, validation) {
+  try {
+    db.prepare(
+      `INSERT INTO backup_import_logs (imported_at, imported_by, schema_version, backup_exported_at, status, summary_json, conflicts_json, errors_json, validation_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      importLog.importedAt,
+      importLog.importedBy,
+      importLog.schemaVersion || null,
+      importLog.backupExportedAt || null,
+      importLog.status,
+      JSON.stringify(importLog.summary),
+      JSON.stringify(importLog.conflicts),
+      JSON.stringify(importLog.errors),
+      validation ? JSON.stringify(validation) : null,
+    );
+  } catch (err) {
+    console.error('Failed to persist import log:', err.message);
+  }
+}
+
+app.get('/api/admin/backup/logs', requireAuth, requirePermission('backups', 'view'), (req, res) => {
+  const logs = db.prepare('SELECT * FROM backup_import_logs ORDER BY id DESC LIMIT 50').all();
+  res.json({ data: logs.map((l) => ({ ...l, imported_at_cdmx: formatDateTimeCDMX(l.imported_at) })) });
 });
 
 // ===================== AUDIT LOGS =====================
