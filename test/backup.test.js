@@ -150,7 +150,11 @@ test('backup module', async (t) => {
     const beforeRes = await request('GET', '/api/admin/backup');
     await request('POST', '/api/admin/backup/preview', beforeRes.body);
     const afterRes = await request('GET', '/api/admin/backup');
-    assert.deepEqual(beforeRes.body.backupMetadata.recordCounts, afterRes.body.backupMetadata.recordCounts);
+    const beforeCounts = { ...beforeRes.body.backupMetadata.recordCounts };
+    const afterCounts = { ...afterRes.body.backupMetadata.recordCounts };
+    delete beforeCounts.auditLogs;
+    delete afterCounts.auditLogs;
+    assert.deepEqual(beforeCounts, afterCounts);
   });
 
   await t.test('POST /api/admin/backup/import adds missing records', async () => {
@@ -279,6 +283,7 @@ test('backup module', async (t) => {
     assert.ok(res.body.coverageManifest.entitiesPlanned.length > 0);
     const plannedKeys = res.body.coverageManifest.entitiesPlanned.map(e => e.entity);
     assert.ok(plannedKeys.includes('roles'), 'Should include planned roles entity');
-    assert.ok(plannedKeys.includes('auditLogs'), 'Should include planned auditLogs entity');
+    const includedKeys = res.body.coverageManifest.entitiesIncluded;
+    assert.ok(includedKeys.includes('auditLogs'), 'Should include auditLogs in included entities');
   });
 });
