@@ -689,8 +689,54 @@ function switchView(viewName) {
   if (archiveTab) archiveTab.classList.toggle('active', showingArchive);
 }
 
-async function requestAdminAuthorization(message = 'Ingresa la contrasena del admin:') {
-  const password = window.prompt(message);
+function showPasswordModal(message = 'Ingresa la contraseña del admin:') {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('password-modal');
+    const form = document.getElementById('password-modal-form');
+    const input = document.getElementById('password-modal-input');
+    const msgEl = document.getElementById('password-modal-message');
+    const errorEl = document.getElementById('password-modal-error');
+    const cancelBtn = document.getElementById('password-modal-cancel');
+
+    msgEl.textContent = message;
+    input.value = '';
+    errorEl.textContent = '';
+    errorEl.classList.add('hidden');
+    overlay.classList.remove('hidden');
+    input.focus();
+
+    function cleanup() {
+      input.value = '';
+      overlay.classList.add('hidden');
+      form.removeEventListener('submit', onSubmit);
+      cancelBtn.removeEventListener('click', onCancel);
+      document.removeEventListener('keydown', onEscape);
+    }
+
+    function onSubmit(e) {
+      e.preventDefault();
+      const value = input.value;
+      cleanup();
+      resolve(value || null);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(null);
+    }
+
+    function onEscape(e) {
+      if (e.key === 'Escape') onCancel();
+    }
+
+    form.addEventListener('submit', onSubmit);
+    cancelBtn.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onEscape);
+  });
+}
+
+async function requestAdminAuthorization(message = 'Ingresa la contraseña del admin:') {
+  const password = await showPasswordModal(message);
   if (!password) {
     return false;
   }
@@ -701,6 +747,10 @@ async function requestAdminAuthorization(message = 'Ingresa la contrasena del ad
   });
   state.adminVerified = true;
   return true;
+}
+
+async function promptAdminPassword(message = 'Ingresa la contraseña del admin:') {
+  return showPasswordModal(message);
 }
 
 async function loadExchangeRates() {
@@ -960,7 +1010,7 @@ async function deleteProject(projectId) {
     return;
   }
 
-  const password = window.prompt('Ingresa la contrasena del admin para cerrar el proyecto:');
+  const password = await promptAdminPassword('Ingresa la contraseña del admin para cerrar el proyecto:');
   if (!password) {
     return;
   }
@@ -995,7 +1045,7 @@ async function deleteClosedProject(projectId) {
     return;
   }
 
-  const password = window.prompt('Ingresa la contrasena del admin para borrar definitivamente:');
+  const password = await promptAdminPassword('Ingresa la contraseña del admin para borrar definitivamente:');
   if (!password) {
     return;
   }
@@ -1343,7 +1393,7 @@ paymentsList.addEventListener('click', async (event) => {
     return;
   }
 
-  const password = window.prompt('Ingresa la contrasena del admin para eliminar el pago:');
+  const password = await promptAdminPassword('Ingresa la contraseña del admin para eliminar el pago:');
   if (!password) {
     return;
   }
@@ -1365,7 +1415,7 @@ costsList.addEventListener('click', async (event) => {
     return;
   }
 
-  const password = window.prompt('Ingresa la contrasena del admin para eliminar el costo:');
+  const password = await promptAdminPassword('Ingresa la contraseña del admin para eliminar el costo:');
   if (!password) {
     return;
   }
