@@ -40,6 +40,36 @@ function renderAuditBlock(record) {
   return `<div class="audit-block">${parts.join('')}</div>`;
 }
 
+let userPermissions = {};
+
+function canAccess(module, action) {
+  if (state.userRole === 'admin') return true;
+  if (!userPermissions || !userPermissions[module]) return false;
+  return userPermissions[module].includes(action);
+}
+
+function applyPermissionVisibility() {
+  const tabs = {
+    'projects-tab': canAccess('projects', 'view'),
+    'closed-projects-tab': canAccess('closedProjects', 'view'),
+    'reports-tab': canAccess('reports', 'view'),
+    'report-archive-tab': canAccess('reportsArchive', 'view'),
+    'vacations-tab': canAccess('vacations', 'view'),
+    'ecovis-tab': canAccess('ecovisAccount', 'view'),
+    'users-tab': canAccess('users', 'view'),
+  };
+
+  for (const [tabId, allowed] of Object.entries(tabs)) {
+    const el = document.getElementById(tabId);
+    if (el) el.style.display = allowed ? '' : 'none';
+  }
+
+  const backupBtn = document.getElementById('backup-btn');
+  if (backupBtn) backupBtn.style.display = canAccess('backups', 'backup') ? '' : 'none';
+  const importBtn = document.getElementById('import-btn');
+  if (importBtn) importBtn.style.display = canAccess('backups', 'import') ? '' : 'none';
+}
+
 const state = {
   projects: [],
   closedProjects: [],
@@ -537,13 +567,15 @@ async function showApp() {
   resetUserForm();
   state.adminVerified = false;
   applyRoleVisibility();
-  if (state.userRole === 'tecnico') {
-    switchView('reports');
-    await loadReportsProjects();
-  } else {
+  if (canAccess('projects', 'view')) {
     switchView('projects');
     await loadExchangeRates();
     await loadProjects();
+  } else if (canAccess('reports', 'view')) {
+    switchView('reports');
+    await loadReportsProjects();
+  } else {
+    switchView('reports');
   }
 }
 
@@ -618,8 +650,19 @@ function exchangeRatePayload() {
 }
 
 function switchView(viewName) {
-  if (state.userRole === 'tecnico' && viewName !== 'reports' && viewName !== 'report-archive') {
-    viewName = 'reports';
+  const viewPermMap = {
+    projects: ['projects', 'view'],
+    'closed-projects': ['closedProjects', 'view'],
+    reports: ['reports', 'view'],
+    'report-archive': ['reportsArchive', 'view'],
+    vacations: ['vacations', 'view'],
+    ecovis: ['ecovisAccount', 'view'],
+    users: ['users', 'view'],
+  };
+  const perm = viewPermMap[viewName];
+  if (perm && !canAccess(perm[0], perm[1])) {
+    const firstAllowed = Object.entries(viewPermMap).find(([, p]) => canAccess(p[0], p[1]));
+    viewName = firstAllowed ? firstAllowed[0] : 'reports';
   }
   const showingProjects = viewName === 'projects';
   const showingClosedProjects = viewName === 'closed-projects';
@@ -1120,6 +1163,10 @@ loginForm.addEventListener('submit', async (event) => {
       body: JSON.stringify(simpleFormPayload(loginForm)),
     });
     state.userRole = result.role || 'user';
+    try {
+      const sessionData = await api('/api/session');
+      userPermissions = sessionData.permissions || {};
+    } catch { userPermissions = {}; }
     showVacationsTab();
     showEcovisTab();
     loginForm.reset();
@@ -1388,7 +1435,7 @@ const vacationRequestMessage = document.querySelector('#vacation-request-message
 const saveAndPrintVacation = document.querySelector('#save-and-print-vacation');
 
 function showVacationsTab() {
-  if (state.userRole === 'admin') {
+  if (canAccess('vacations', 'view')) {
     vacationsTab.classList.remove('hidden');
   } else {
     vacationsTab.classList.add('hidden');
@@ -1760,8 +1807,8 @@ vacationRequestsTable.addEventListener('click', async (event) => {
 });
 
 vacationsTab.addEventListener('click', async () => {
-  if (state.userRole !== 'admin') {
-    window.alert('Acceso restringido. Solo el administrador puede consultar y programar vacaciones.');
+  if (!canAccess('vacations', 'view')) {
+    window.alert('Acceso restringido. No tienes permisos para consultar o modificar este apartado.');
     return;
   }
   switchView('vacations');
@@ -2287,15 +2334,15 @@ const ECOVIS_DIRECTION_LABELS = {
 };
 
 function showEcovisTab() {
-  if (state.userRole === 'admin') {
+  if (canAccess('ecovisAccount', 'view')) {
     ecovisTab.classList.remove('hidden');
-    document.getElementById('backup-create-btn').classList.remove('hidden');
-    document.getElementById('backup-import-btn').classList.remove('hidden');
   } else {
     ecovisTab.classList.add('hidden');
-    document.getElementById('backup-create-btn').classList.add('hidden');
-    document.getElementById('backup-import-btn').classList.add('hidden');
   }
+  const createBtn = document.getElementById('backup-create-btn');
+  const importBtn = document.getElementById('backup-import-btn');
+  if (createBtn) createBtn.classList.toggle('hidden', !canAccess('backups', 'backup'));
+  if (importBtn) importBtn.classList.toggle('hidden', !canAccess('backups', 'import'));
 }
 
 function switchEcovisSubtab(name) {
@@ -2462,8 +2509,8 @@ function renderEcovisMovements(movements, pagination) {
 }
 
 ecovisTab.addEventListener('click', async () => {
-  if (state.userRole !== 'admin') {
-    window.alert('Acceso restringido. Solo el administrador puede consultar la cuenta ECOVIS.');
+  if (!canAccess('ecovisAccount', 'view')) {
+    window.alert('Acceso restringido. No tienes permisos para consultar o modificar este apartado.');
     return;
   }
   switchView('ecovis');
@@ -2950,23 +2997,21 @@ document.getElementById('backup-confirm-import').addEventListener('click', async
 // ===================== ROLE VISIBILITY & REPORT TYPE SELECTOR =====================
 
 function applyRoleVisibility() {
-  const isTecnico = state.userRole === 'tecnico';
-  const isAdmin = state.userRole === 'admin';
-  projectsTab.classList.toggle('hidden', isTecnico);
-  closedProjectsTab.classList.toggle('hidden', isTecnico);
-  usersTab.classList.toggle('hidden', isTecnico);
-  if (vacationsTab) vacationsTab.classList.toggle('hidden', isTecnico || !isAdmin);
-  if (ecovisTab) ecovisTab.classList.toggle('hidden', isTecnico || !isAdmin);
+  projectsTab.classList.toggle('hidden', !canAccess('projects', 'view'));
+  closedProjectsTab.classList.toggle('hidden', !canAccess('closedProjects', 'view'));
+  usersTab.classList.toggle('hidden', !canAccess('users', 'view'));
+  if (vacationsTab) vacationsTab.classList.toggle('hidden', !canAccess('vacations', 'view'));
+  if (ecovisTab) ecovisTab.classList.toggle('hidden', !canAccess('ecovisAccount', 'view'));
   const archiveTab = document.getElementById('report-archive-tab');
-  if (archiveTab) archiveTab.classList.toggle('hidden', false);
+  if (archiveTab) archiveTab.classList.toggle('hidden', !canAccess('reportsArchive', 'view'));
+  const reportsTab = document.getElementById('reports-tab');
+  if (reportsTab) reportsTab.classList.toggle('hidden', !canAccess('reports', 'view'));
   const backupCreateBtn = document.getElementById('backup-create-btn');
   const backupImportBtn = document.getElementById('backup-import-btn');
-  if (backupCreateBtn) backupCreateBtn.classList.toggle('hidden', isTecnico || !isAdmin);
-  if (backupImportBtn) backupImportBtn.classList.toggle('hidden', isTecnico || !isAdmin);
-  if (isTecnico) {
-    const exchangePanel = document.querySelector('.exchange-panel');
-    if (exchangePanel) exchangePanel.classList.add('hidden');
-  }
+  if (backupCreateBtn) backupCreateBtn.classList.toggle('hidden', !canAccess('backups', 'backup'));
+  if (backupImportBtn) backupImportBtn.classList.toggle('hidden', !canAccess('backups', 'import'));
+  const exchangePanel = document.querySelector('.exchange-panel');
+  if (exchangePanel) exchangePanel.classList.toggle('hidden', !canAccess('settings', 'view'));
 }
 
 function openReportPrintView(reportId, reportType) {
@@ -3295,7 +3340,7 @@ openReportForm = function(projectId, reportData) {
 const archiveTab = document.getElementById('report-archive-tab');
 if (archiveTab) {
   archiveTab.addEventListener('click', async () => {
-    if (state.userRole === 'tecnico') {
+    if (canAccess('reportsArchive', 'view')) {
       switchView('report-archive');
     } else {
       switchView('report-archive');
@@ -3390,7 +3435,7 @@ async function loadArchiveClientReports(clientName) {
         <td>
           <div class="row-actions">
             <button class="secondary" data-action="archive-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>
-            ${state.userRole === 'admin' ? `<button class="danger" data-action="archive-delete" data-id="${r.id}" data-client="${escapeHtml(clientName)}" type="button">Eliminar</button>` : ''}
+            ${canAccess('reportsArchive', 'delete') ? `<button class="danger" data-action="archive-delete" data-id="${r.id}" data-client="${escapeHtml(clientName)}" type="button">Eliminar</button>` : ''}
           </div>
         </td>
       </tr>
@@ -3539,6 +3584,7 @@ api('/api/session')
   .then((session) => {
     if (session.authenticated) {
       state.userRole = session.user.role || 'user';
+      userPermissions = session.permissions || {};
       showVacationsTab();
       showEcovisTab();
       showApp();
