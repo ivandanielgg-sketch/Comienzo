@@ -1215,6 +1215,22 @@
       </section>
     </main>
 
+    <div id="password-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
+      <div class="modal-content modal-sm">
+        <h3 id="password-modal-title">Autenticación requerida</h3>
+        <p id="password-modal-message">Ingresa la contraseña del admin:</p>
+        <form id="password-modal-form" autocomplete="off">
+          <label for="password-modal-input">Contraseña</label>
+          <input id="password-modal-input" name="admin_password" type="password" autocomplete="current-password" required aria-label="Contraseña del administrador" />
+          <div class="row-actions" style="margin-top:0.75rem">
+            <button type="submit" class="primary">Confirmar</button>
+            <button type="button" class="secondary" id="password-modal-cancel">Cancelar</button>
+          </div>
+          <p id="password-modal-error" class="error-msg hidden"></p>
+        </form>
+      </div>
+    </div>
+
     <script src="/app.js"></script>
   </body>
 </html>
