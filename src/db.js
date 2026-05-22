@@ -273,6 +273,91 @@ function migrate(database) {
   ensureColumn(database, 'project_reports', 'deleted_at', 'TEXT');
   ensureColumn(database, 'project_reports', 'deleted_by', 'TEXT');
   ensureColumn(database, 'project_reports', 'delete_reason', 'TEXT');
+
+  // Audit columns for projects
+  ensureColumn(database, 'projects', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'projects', 'created_by_name', 'TEXT');
+  ensureColumn(database, 'projects', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'projects', 'updated_by_name', 'TEXT');
+  ensureColumn(database, 'projects', 'deleted_at', 'TEXT');
+  ensureColumn(database, 'projects', 'deleted_by_user_id', 'INTEGER');
+  ensureColumn(database, 'projects', 'deleted_by_name', 'TEXT');
+  ensureColumn(database, 'projects', 'delete_reason', 'TEXT');
+
+  // Audit columns for project_payments
+  ensureColumn(database, 'project_payments', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'project_payments', 'created_by_name', 'TEXT');
+
+  // Audit columns for project_costs
+  ensureColumn(database, 'project_costs', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'project_costs', 'created_by_name', 'TEXT');
+
+  // Audit columns for project_reports (created_by/updated_by already exist as TEXT username)
+  ensureColumn(database, 'project_reports', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'project_reports', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'project_reports', 'deleted_by_user_id', 'INTEGER');
+
+  // Audit columns for employees
+  ensureColumn(database, 'employees', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'employees', 'created_by_name', 'TEXT');
+  ensureColumn(database, 'employees', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'employees', 'updated_by_name', 'TEXT');
+
+  // Audit columns for vacation_requests (created_by already exists as TEXT username)
+  ensureColumn(database, 'vacation_requests', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'vacation_requests', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'vacation_requests', 'updated_by_name', 'TEXT');
+
+  // Audit columns for ecovis_projects (created_by/updated_by already exist)
+  ensureColumn(database, 'ecovis_projects', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_projects', 'updated_by_user_id', 'INTEGER');
+
+  // Audit columns for ecovis_payments (created_by/updated_by already exist)
+  ensureColumn(database, 'ecovis_payments', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_payments', 'updated_by_user_id', 'INTEGER');
+
+  // Audit columns for ecovis_payment_allocations (created_by already exists)
+  ensureColumn(database, 'ecovis_payment_allocations', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_payment_allocations', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_payment_allocations', 'updated_by', 'TEXT');
+
+  // Audit columns for ecovis_movements (created_by/updated_by already exist)
+  ensureColumn(database, 'ecovis_movements', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_movements', 'updated_by_user_id', 'INTEGER');
+
+  // Audit columns for users
+  ensureColumn(database, 'users', 'updated_at', 'TEXT');
+  ensureColumn(database, 'users', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'users', 'created_by_name', 'TEXT');
+  ensureColumn(database, 'users', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'users', 'updated_by_name', 'TEXT');
+
+  // Create audit_logs table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      user_name TEXT,
+      action TEXT NOT NULL,
+      module TEXT,
+      entity_type TEXT,
+      entity_id INTEGER,
+      entity_label TEXT,
+      timestamp_utc TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      before_json TEXT,
+      after_json TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs (user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs (entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs (timestamp_utc);
+  `);
+
   migrateCostCategories(database);
   seedExchangeRates(database);
 }

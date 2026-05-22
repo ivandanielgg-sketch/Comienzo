@@ -1,3 +1,45 @@
+function formatDateTimeCDMX(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleString('es-MX', {
+    timeZone: 'America/Mexico_City',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function formatDateCDMX(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('es-MX', {
+    timeZone: 'America/Mexico_City',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
+function renderAuditBlock(record) {
+  const parts = [];
+  if (record.created_by_name || record.created_by) {
+    parts.push(`<small class="audit-info">Creado por: ${record.created_by_name || record.created_by || 'N/A'} el ${formatDateTimeCDMX(record.created_at)}</small>`);
+  }
+  if (record.updated_by_name || record.updated_by) {
+    parts.push(`<small class="audit-info">Modificado por: ${record.updated_by_name || record.updated_by || 'N/A'} el ${formatDateTimeCDMX(record.updated_at)}</small>`);
+  }
+  if (record.deleted_by_name || record.deleted_by) {
+    parts.push(`<small class="audit-info audit-deleted">Eliminado por: ${record.deleted_by_name || record.deleted_by || 'N/A'} el ${formatDateTimeCDMX(record.deleted_at)}${record.delete_reason ? ' — Motivo: ' + record.delete_reason : ''}</small>`);
+  }
+  if (parts.length === 0) return '';
+  return `<div class="audit-block">${parts.join('')}</div>`;
+}
+
 const state = {
   projects: [],
   closedProjects: [],

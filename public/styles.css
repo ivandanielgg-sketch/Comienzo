@@ -996,3 +996,24 @@ th.col-number {
     max-width: 100%;
   }
 }
+
+.audit-block {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: #f8f9fa;
+  border-left: 3px solid #6c757d;
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.audit-info {
+  color: #6c757d;
+  font-size: 0.78rem;
+  display: block;
+}
+
+.audit-info.audit-deleted {
+  color: #dc3545;
+}

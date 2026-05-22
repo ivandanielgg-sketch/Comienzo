@@ -129,6 +129,15 @@ const BACKUP_ENTITIES = [
     status: ENTITY_STATUS.INCLUDED,
     module: 'users',
   },
+  {
+    key: 'auditLogs',
+    table: 'audit_logs',
+    query: 'SELECT id, user_id, user_name, action, module, entity_type, entity_id, entity_label, timestamp_utc, ip_address, user_agent, metadata_json, created_at FROM audit_logs ORDER BY id',
+    stableKeys: ['timestamp_utc', 'user_id', 'action', 'entity_type', 'entity_id'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'audit',
+    note: 'before_json and after_json excluded from backup to reduce size',
+  },
 ];
 
 const EXCLUDED_ENTITIES = [
@@ -156,7 +165,6 @@ const PLANNED_ENTITIES = [
   { key: 'roles', table: 'roles', reason: 'Pendiente implementacion de sistema de roles granular', status: ENTITY_STATUS.PLANNED },
   { key: 'permissions', table: 'permissions', reason: 'Pendiente implementacion de permisos', status: ENTITY_STATUS.PLANNED },
   { key: 'userPermissions', table: 'user_permissions', reason: 'Pendiente relacion usuario-permisos', status: ENTITY_STATUS.PLANNED },
-  { key: 'auditLogs', table: 'audit_logs', reason: 'Pendiente implementacion de auditoria', status: ENTITY_STATUS.PLANNED },
   { key: 'securitySettings', table: 'security_settings', reason: 'Pendiente configuracion de seguridad', status: ENTITY_STATUS.PLANNED },
   { key: 'loginAttempts', table: 'login_attempts', reason: 'Pendiente registro de intentos de login', status: ENTITY_STATUS.PLANNED },
   { key: 'backupImportLogs', table: 'backup_import_logs', reason: 'Pendiente registro persistente de importaciones', status: ENTITY_STATUS.PLANNED },
@@ -186,6 +194,7 @@ const DETECTED_MODULES = [
   'settings',
   'users',
   'backup',
+  'audit',
 ];
 
 function getIncludedEntities() {
