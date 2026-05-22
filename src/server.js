@@ -18,6 +18,7 @@ const {
 const { calculateEcovisAccountSummary, calculateProjectPaidAmount, calculateProjectStatus, calculatePaymentUnallocated } = require('./ecovis');
 const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { formatDateTimeCDMX } = require('./dateHelper');
+const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES } = require('./permissions');
 
 const app = express();
 const db = getDb();
@@ -117,6 +118,30 @@ function requireNotTecnico(req, res, next) {
   }
 
   return next();
+}
+
+function requirePermission(module, action) {
+  return (req, res, next) => {
+    const role = req.session.role;
+    if (role === 'admin') return next();
+
+    const perms = loadUserPermissions(db, req.session.userId, role);
+    if (hasPermission(perms, module, action)) {
+      return next();
+    }
+
+    logAuditEvent(db, {
+      req,
+      action: 'access_denied',
+      module,
+      entityType: 'permission',
+      entityLabel: `${module}.${action}`,
+      metadata: { required_permission: `${module}.${action}`, endpoint: req.originalUrl, method: req.method },
+    });
+    return res.status(403).json({
+      message: 'Acceso restringido. No tienes permisos para consultar o modificar este apartado.',
+    });
+  };
 }
 
 function trim(value) {
@@ -599,9 +624,11 @@ app.get('/api/session', (req, res) => {
     return res.json({ authenticated: false });
   }
 
+  const perms = loadUserPermissions(db, req.session.userId, req.session.role);
   return res.json({
     authenticated: true,
     user: { id: req.session.userId, username: req.session.username, role: req.session.role || 'user' },
+    permissions: perms,
   });
 });
 
@@ -692,7 +719,7 @@ app.post('/api/admin/verify', requireAuth, (req, res, next) => {
   }
 });
 
-app.get('/api/users', requireAuth, requireAdminVerified, (req, res) => {
+app.get('/api/users', requireAuth, requirePermission('users', 'view'), (req, res) => {
   const { page, limit } = parsePaginationParams(req.query);
   const sorting = normalizeSort(
     req.query,
@@ -721,7 +748,7 @@ app.get('/api/users', requireAuth, requireAdminVerified, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.post('/api/users', requireAuth, requireAdminVerified, (req, res, next) => {
+app.post('/api/users', requireAuth, requirePermission('users', 'create'), (req, res, next) => {
   try {
     const user = normalizeUser(req.body, { requirePassword: true });
     const passwordHash = bcrypt.hashSync(user.password, 12);
@@ -738,7 +765,7 @@ app.post('/api/users', requireAuth, requireAdminVerified, (req, res, next) => {
   }
 });
 
-app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) => {
+app.put('/api/users/:id', requireAuth, requirePermission('users', 'edit'), (req, res, next) => {
   try {
     const before = getUserOrFail(req.params.id);
     const user = normalizeUser(req.body);
@@ -780,11 +807,41 @@ app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) =>
   }
 });
 
-app.get('/api/exchange-rates', requireAuth, (req, res) => {
+app.get('/api/users/:id/permissions', requireAuth, requirePermission('users', 'managePermissions'), (req, res, next) => {
+  try {
+    const user = getUserOrFail(req.params.id);
+    const perms = loadUserPermissions(db, user.id, user.role);
+    res.json({ userId: user.id, username: user.username, role: user.role, permissions: perms });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/users/:id/permissions', requireAuth, requirePermission('users', 'managePermissions'), (req, res, next) => {
+  try {
+    const user = getUserOrFail(req.params.id);
+    const permissions = req.body.permissions;
+    if (!permissions || typeof permissions !== 'object') {
+      throw badRequest('Permisos invalidos.');
+    }
+    saveUserPermissions(db, user.id, permissions);
+    logAuditEvent(db, { req, action: 'update_permissions', module: 'users', entityType: 'user', entityId: user.id, entityLabel: user.username, after: permissions });
+    res.json({ userId: user.id, username: user.username, permissions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/session/permissions', requireAuth, (req, res) => {
+  const perms = loadUserPermissions(db, req.session.userId, req.session.role);
+  res.json({ permissions: perms, modules: MODULES });
+});
+
+app.get('/api/exchange-rates', requireAuth, requirePermission('settings', 'view'), (req, res) => {
   res.json(mapExchangeRateState());
 });
 
-app.put('/api/exchange-rates', requireAuth, (req, res, next) => {
+app.put('/api/exchange-rates', requireAuth, requirePermission('settings', 'edit'), (req, res, next) => {
   try {
     const payload = req.body.rates || req.body;
     const usdRate = numberValue(payload, 'USD', 'Tipo de cambio USD', {
@@ -824,7 +881,7 @@ app.put('/api/exchange-rates', requireAuth, (req, res, next) => {
   }
 });
 
-app.get('/api/projects', requireAuth, requireNotTecnico, (req, res) => {
+app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.promised_delivery_date ASC, p.id DESC');
@@ -892,7 +949,7 @@ app.get('/api/projects', requireAuth, requireNotTecnico, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters, { summary }));
 });
 
-app.get('/api/closed-projects', requireAuth, requireNotTecnico, (req, res) => {
+app.get('/api/closed-projects', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.closed_at DESC, p.id DESC');
@@ -927,7 +984,7 @@ app.get('/api/closed-projects', requireAuth, requireNotTecnico, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.get('/api/projects/:id', requireAuth, (req, res, next) => {
+app.get('/api/projects/:id', requireAuth, requirePermission('projects', 'view'), (req, res, next) => {
   try {
     const project = getProjectOrFail(req.params.id);
     res.json(mapProject(project, getExchangeRateMap()));
@@ -936,7 +993,7 @@ app.get('/api/projects/:id', requireAuth, (req, res, next) => {
   }
 });
 
-app.post('/api/projects', requireAuth, requireNotTecnico, (req, res, next) => {
+app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), (req, res, next) => {
   try {
     const project = normalizeProject(req.body);
     const audit = createdByFields(req);
@@ -995,7 +1052,7 @@ app.post('/api/projects', requireAuth, requireNotTecnico, (req, res, next) => {
   }
 });
 
-app.put('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next) => {
+app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     const before = getProjectOrFail(req.params.id);
     const project = normalizeProject(req.body);
@@ -1031,7 +1088,7 @@ app.put('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next) =>
   }
 });
 
-app.delete('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next) => {
+app.delete('/api/projects/:id', requireAuth, requirePermission('projects', 'close'), (req, res, next) => {
   try {
     const before = getProjectOrFail(req.params.id);
     verifyAdminPassword(req.body);
@@ -1048,7 +1105,7 @@ app.delete('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next)
   }
 });
 
-app.delete('/api/closed-projects/:id', requireAuth, (req, res, next) => {
+app.delete('/api/closed-projects/:id', requireAuth, requirePermission('closedProjects', 'delete'), (req, res, next) => {
   try {
     const project = getProjectOrFail(req.params.id);
     if (!project.closed_at) {
@@ -1064,7 +1121,7 @@ app.delete('/api/closed-projects/:id', requireAuth, (req, res, next) => {
   }
 });
 
-app.post('/api/projects/:id/payments', requireAuth, (req, res, next) => {
+app.post('/api/projects/:id/payments', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
     const payment = normalizePayment(req.body);
@@ -1081,7 +1138,7 @@ app.post('/api/projects/:id/payments', requireAuth, (req, res, next) => {
   }
 });
 
-app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, (req, res, next) => {
+app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.projectId);
     verifyAdminPassword(req.body);
@@ -1097,7 +1154,7 @@ app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, (req, re
   }
 });
 
-app.post('/api/projects/:id/costs', requireAuth, (req, res, next) => {
+app.post('/api/projects/:id/costs', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
     const cost = normalizeCost(req.body);
@@ -1114,7 +1171,7 @@ app.post('/api/projects/:id/costs', requireAuth, (req, res, next) => {
   }
 });
 
-app.delete('/api/projects/:projectId/costs/:costId', requireAuth, (req, res, next) => {
+app.delete('/api/projects/:projectId/costs/:costId', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.projectId);
     verifyAdminPassword(req.body);
@@ -1141,7 +1198,7 @@ function generateReportFolio(projectId) {
   return `REP-${projectId}-${dateStr}-${String(counter).padStart(3, '0')}`;
 }
 
-app.get('/api/reports/projects', requireAuth, (req, res) => {
+app.get('/api/reports/projects', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
   const reportCountSql = '(SELECT COUNT(*) FROM project_reports WHERE project_id = p.id AND deleted_at IS NULL)';
@@ -1187,7 +1244,7 @@ app.get('/api/reports/projects', requireAuth, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, filters));
 });
 
-app.get('/api/reports', requireAuth, (req, res) => {
+app.get('/api/reports', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   const reports = db.prepare(
     `SELECT r.*, p.quote_number, p.order_number, p.client_name AS project_client,
             p.project_description, p.status AS project_status, p.closed_at
@@ -1198,7 +1255,7 @@ app.get('/api/reports', requireAuth, (req, res) => {
   res.json(reports);
 });
 
-app.get('/api/projects/:id/reports', requireAuth, (req, res, next) => {
+app.get('/api/projects/:id/reports', requireAuth, requirePermission('reports', 'view'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
     const { page, limit, search } = parsePaginationParams(req.query);
@@ -1243,7 +1300,7 @@ app.get('/api/projects/:id/reports', requireAuth, (req, res, next) => {
   }
 });
 
-app.get('/api/reports/:id', requireAuth, (req, res, next) => {
+app.get('/api/reports/:id', requireAuth, requirePermission('reports', 'view'), (req, res, next) => {
   try {
     const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
     if (!report) {
@@ -1258,7 +1315,7 @@ app.get('/api/reports/:id', requireAuth, (req, res, next) => {
   }
 });
 
-app.post('/api/reports', requireAuth, (req, res, next) => {
+app.post('/api/reports', requireAuth, requirePermission('reports', 'create'), (req, res, next) => {
   try {
     const projectId = req.body.project_id;
     if (!projectId) {
@@ -1369,7 +1426,7 @@ app.post('/api/reports', requireAuth, (req, res, next) => {
   }
 });
 
-app.put('/api/reports/:id', requireAuth, (req, res, next) => {
+app.put('/api/reports/:id', requireAuth, requirePermission('reports', 'edit'), (req, res, next) => {
   try {
     const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
     if (!report) {
@@ -1451,11 +1508,11 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
 
 // ===================== REPORT ARCHIVE & NEW ENDPOINTS =====================
 
-app.get('/api/report-types', requireAuth, (req, res) => {
+app.get('/api/report-types', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   res.json(Object.entries(REPORT_TYPE_LABELS).map(([value, label]) => ({ value, label })));
 });
 
-app.get('/api/reports/active', requireAuth, (req, res) => {
+app.get('/api/reports/active', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const sorting = normalizeSort(req.query, {
     id: 'r.id',
@@ -1490,7 +1547,7 @@ app.get('/api/reports/active', requireAuth, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.get('/api/reports/archive/clients', requireAuth, (req, res) => {
+app.get('/api/reports/archive/clients', requireAuth, requirePermission('reportsArchive', 'view'), (req, res) => {
   const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
   let sql = `
     SELECT p.client_name,
@@ -1511,7 +1568,7 @@ app.get('/api/reports/archive/clients', requireAuth, (req, res) => {
   res.json({ data: clients });
 });
 
-app.get('/api/reports/archive/client/:clientName', requireAuth, (req, res) => {
+app.get('/api/reports/archive/client/:clientName', requireAuth, requirePermission('reportsArchive', 'view'), (req, res) => {
   const clientName = decodeURIComponent(req.params.clientName);
   const { page, limit, search } = parsePaginationParams(req.query);
   const sorting = normalizeSort(req.query, {
@@ -1545,7 +1602,7 @@ app.get('/api/reports/archive/client/:clientName', requireAuth, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.delete('/api/reports/:id', requireAuth, (req, res, next) => {
+app.delete('/api/reports/:id', requireAuth, requirePermission('reports', 'delete'), (req, res, next) => {
   try {
     if (req.session.role !== 'admin') {
       return res.status(403).json({
@@ -1570,7 +1627,7 @@ app.delete('/api/reports/:id', requireAuth, (req, res, next) => {
   }
 });
 
-app.get('/api/closed-projects/by-client', requireAuth, (req, res) => {
+app.get('/api/closed-projects/by-client', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
   const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
   const exchangeRates = getExchangeRateMap();
   let sql = `
@@ -1591,7 +1648,7 @@ app.get('/api/closed-projects/by-client', requireAuth, (req, res) => {
   res.json({ data: clients });
 });
 
-app.get('/api/closed-projects/client/:clientName', requireAuth, (req, res) => {
+app.get('/api/closed-projects/client/:clientName', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
   const clientName = decodeURIComponent(req.params.clientName);
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
@@ -1622,7 +1679,7 @@ app.get('/api/closed-projects/client/:clientName', requireAuth, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.get('/api/closed-projects/date-range', requireAuth, (req, res) => {
+app.get('/api/closed-projects/date-range', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.closed_at DESC, p.id DESC');
@@ -1712,7 +1769,7 @@ function checkOverlap(employeeId, startDate, endDate, excludeRequestId) {
   return db.prepare(query).get(...params);
 }
 
-app.get('/api/employees', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/employees', requireAuth, requirePermission('vacations', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const activeFilter = typeof req.query.activeFilter === 'string' ? req.query.activeFilter.trim() : 'all';
   const safeActiveFilter = VALID_EMPLOYEE_FILTERS.includes(activeFilter) ? activeFilter : 'all';
@@ -1772,7 +1829,7 @@ app.get('/api/employees', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, { ...filters, ...collectActiveFilters(req.query, employeeFilters), activeFilter: safeActiveFilter }));
 });
 
-app.get('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.get('/api/employees/:id', requireAuth, requirePermission('vacations', 'view'), (req, res, next) => {
   try {
     const employee = getEmployeeOrFail(req.params.id);
     res.json(mapEmployee(employee));
@@ -1781,7 +1838,7 @@ app.get('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
   }
 });
 
-app.post('/api/employees', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/employees', requireAuth, requirePermission('vacations', 'create'), (req, res, next) => {
   try {
     const employeeNumber = requiredText(req.body, 'employee_number', 'Numero de empleado');
     const fullName = requiredText(req.body, 'full_name', 'Nombre completo');
@@ -1817,7 +1874,7 @@ app.post('/api/employees', requireAuth, requireAdmin, (req, res, next) => {
   }
 });
 
-app.put('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.put('/api/employees/:id', requireAuth, requirePermission('vacations', 'edit'), (req, res, next) => {
   try {
     const before = getEmployeeOrFail(req.params.id);
     const employeeNumber = requiredText(req.body, 'employee_number', 'Numero de empleado');
@@ -1857,7 +1914,7 @@ app.put('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
   }
 });
 
-app.get('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req, res, next) => {
+app.get('/api/employees/:id/vacation-requests', requireAuth, requirePermission('vacations', 'view'), (req, res, next) => {
   try {
     getEmployeeOrFail(req.params.id);
     const { page, limit, search } = parsePaginationParams(req.query);
@@ -1906,7 +1963,7 @@ app.get('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req,
   }
 });
 
-app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/employees/:id/vacation-requests', requireAuth, requirePermission('vacations', 'create'), (req, res, next) => {
   try {
     const employee = getEmployeeOrFail(req.params.id);
     if (!employee.active) {
@@ -2009,7 +2066,7 @@ app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req
   }
 });
 
-app.put('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.put('/api/vacation-requests/:id', requireAuth, requirePermission('vacations', 'edit'), (req, res, next) => {
   try {
     const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
     if (!request) {
@@ -2093,7 +2150,7 @@ app.put('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next
   }
 });
 
-app.patch('/api/vacation-requests/:id/cancel', requireAuth, requireAdmin, (req, res, next) => {
+app.patch('/api/vacation-requests/:id/cancel', requireAuth, requirePermission('vacations', 'edit'), (req, res, next) => {
   try {
     const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
     if (!request) {
@@ -2112,7 +2169,7 @@ app.patch('/api/vacation-requests/:id/cancel', requireAuth, requireAdmin, (req, 
   }
 });
 
-app.get('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.get('/api/vacation-requests/:id', requireAuth, requirePermission('vacations', 'view'), (req, res, next) => {
   try {
     const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
     if (!request) {
@@ -2200,7 +2257,7 @@ function recalculatePaymentUnallocated(paymentId) {
     .run(unallocated, paymentId);
 }
 
-app.get('/api/ecovis/summary', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/summary', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const projects = db.prepare('SELECT * FROM ecovis_projects').all();
   const payments = db.prepare('SELECT * FROM ecovis_payments').all();
   const allocations = db.prepare('SELECT * FROM ecovis_payment_allocations').all();
@@ -2209,7 +2266,7 @@ app.get('/api/ecovis/summary', requireAuth, requireAdmin, (req, res) => {
   res.json(summary);
 });
 
-app.get('/api/ecovis/projects', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const paidSql = `(SELECT COALESCE(SUM(a.amount), 0) FROM ecovis_payment_allocations a WHERE a.ecovis_project_id = ep.id AND a.is_cancelled = 0)`;
   const pendingSql = `(ep.total_amount - ${paidSql})`;
@@ -2266,7 +2323,7 @@ app.get('/api/ecovis/projects', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, filters));
 });
 
-app.post('/api/ecovis/projects', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const projectName = requiredText(req.body, 'project_name', 'Nombre del proyecto');
     const projectDate = requiredText(req.body, 'project_date', 'Fecha del proyecto');
@@ -2310,7 +2367,7 @@ app.post('/api/ecovis/projects', requireAuth, requireAdmin, (req, res, next) => 
   }
 });
 
-app.put('/api/ecovis/projects/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.put('/api/ecovis/projects/:id', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
   try {
     const project = getEcovisProjectOrFail(req.params.id);
     if (project.is_cancelled) {
@@ -2348,7 +2405,7 @@ app.put('/api/ecovis/projects/:id', requireAuth, requireAdmin, (req, res, next) 
   }
 });
 
-app.post('/api/ecovis/projects/:id/cancel', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/projects/:id/cancel', requireAuth, requirePermission('ecovisAccount', 'cancel'), (req, res, next) => {
   try {
     const project = getEcovisProjectOrFail(req.params.id);
     if (project.is_cancelled) {
@@ -2389,7 +2446,7 @@ app.post('/api/ecovis/projects/:id/cancel', requireAuth, requireAdmin, (req, res
   }
 });
 
-app.get('/api/ecovis/payments', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const allocatedSql = '(ep.amount - ep.unallocated_amount)';
   const statusSql = "(CASE WHEN ep.is_cancelled = 1 THEN 'cancelado' WHEN ep.unallocated_amount > 0 THEN 'parcial' ELSE 'asignado' END)";
@@ -2446,7 +2503,7 @@ app.get('/api/ecovis/payments', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, filters));
 });
 
-app.post('/api/ecovis/payments', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const paymentDate = requiredText(req.body, 'payment_date', 'Fecha de pago');
     const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
@@ -2484,7 +2541,7 @@ app.post('/api/ecovis/payments', requireAuth, requireAdmin, (req, res, next) => 
   }
 });
 
-app.post('/api/ecovis/payments/:id/allocations', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
   try {
     const payment = getEcovisPaymentOrFail(req.params.id);
     if (payment.is_cancelled) {
@@ -2570,7 +2627,7 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requireAdmin, (req
   }
 });
 
-app.get('/api/ecovis/loans', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/loans', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const repaidSql = `(SELECT COALESCE(SUM(r.amount), 0) FROM ecovis_movements r WHERE r.movement_type = 'devolucion' AND r.reference = CAST(em.id AS TEXT))`;
   const outstandingSql = `(em.amount - ${repaidSql})`;
@@ -2624,7 +2681,7 @@ app.get('/api/ecovis/loans', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, filters));
 });
 
-app.post('/api/ecovis/loans', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/loans', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
     const movementDate = requiredText(req.body, 'movement_date', 'Fecha del movimiento');
@@ -2647,7 +2704,7 @@ app.post('/api/ecovis/loans', requireAuth, requireAdmin, (req, res, next) => {
   }
 });
 
-app.post('/api/ecovis/loans/:id/repayment', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/loans/:id/repayment', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
   try {
     const loan = db.prepare(
       "SELECT * FROM ecovis_movements WHERE id = ? AND movement_type = 'prestamo_ecovis_a_revram'",
@@ -2677,7 +2734,7 @@ app.post('/api/ecovis/loans/:id/repayment', requireAuth, requireAdmin, (req, res
   }
 });
 
-app.get('/api/ecovis/movements', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/movements', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const movementType = typeof req.query.movement_type === 'string'
     ? req.query.movement_type.trim()
@@ -2733,7 +2790,7 @@ app.get('/api/ecovis/movements', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(movements, pag, sorting, filters));
 });
 
-app.post('/api/ecovis/adjustments', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/adjustments', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const movementDate = requiredText(req.body, 'movement_date', 'Fecha del movimiento');
     const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
@@ -2759,7 +2816,7 @@ app.post('/api/ecovis/adjustments', requireAuth, requireAdmin, (req, res, next) 
   }
 });
 
-app.post('/api/ecovis/apply-credit', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/apply-credit', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
   try {
     const ecovisProjectId = req.body.ecovis_project_id;
     if (!ecovisProjectId) {
@@ -2816,7 +2873,7 @@ const {
   buildCoverageManifest,
 } = require('./backupRegistry');
 
-app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/backup', requireAuth, requirePermission('backups', 'backup'), (req, res) => {
   const entities = getIncludedEntities();
   const data = {};
   const recordCounts = {};
@@ -2870,7 +2927,7 @@ app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
   res.json(backup);
 });
 
-app.post('/api/admin/backup/preview', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/admin/backup/preview', requireAuth, requirePermission('backups', 'import'), (req, res) => {
   const backup = req.body;
   if (!backup || !backup.backupMetadata || !backup.data) {
     return res.status(400).json({ message: 'Archivo de respaldo invalido. Faltan backupMetadata o data.' });
@@ -2963,7 +3020,7 @@ app.post('/api/admin/backup/preview', requireAuth, requireAdmin, (req, res) => {
   res.json({ preview, conflicts, schemaVersion: backup.backupMetadata.schemaVersion });
 });
 
-app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', 'import'), (req, res) => {
   const backup = req.body;
   if (!backup || !backup.backupMetadata || !backup.data) {
     return res.status(400).json({ message: 'Archivo de respaldo invalido.' });
@@ -2985,7 +3042,7 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
 
   const importInTransaction = db.transaction(() => {
     const orderedEntities = [
-      'settings', 'usersSafe', 'projects', 'closedProjects',
+      'settings', 'usersSafe', 'userPermissions', 'projects', 'closedProjects',
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
       'projectReports', 'reportsArchive', 'ecovisProjects', 'ecovisPayments',
       'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs',
@@ -3020,7 +3077,7 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
           continue;
         }
 
-        if (entityKey === 'usersSafe' || entityKey === 'settings' || entityKey === 'auditLogs' || entityKey === 'loginAttempts') { skipped++; continue; }
+        if (entityKey === 'usersSafe' || entityKey === 'settings' || entityKey === 'auditLogs' || entityKey === 'loginAttempts' || entityKey === 'userPermissions') { skipped++; continue; }
 
         try {
           if (entityKey === 'projects' || entityKey === 'closedProjects') {
@@ -3106,7 +3163,7 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
 
 // ===================== AUDIT LOGS =====================
 
-app.get('/api/admin/audit-logs', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/audit-logs', requireAuth, requirePermission('backups', 'view'), (req, res) => {
   const { page, limit } = parsePaginationParams(req.query);
   const sorting = normalizeSort(req.query, {
     id: 'id',

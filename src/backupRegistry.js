@@ -130,6 +130,14 @@ const BACKUP_ENTITIES = [
     module: 'users',
   },
   {
+    key: 'userPermissions',
+    table: 'user_permissions',
+    query: 'SELECT id, user_id, permissions_json, created_at, updated_at FROM user_permissions ORDER BY id',
+    stableKeys: ['user_id'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'users',
+  },
+  {
     key: 'loginAttempts',
     table: 'login_attempts',
     query: 'SELECT id, user_identifier, user_id, ip_address, success, failure_reason, attempted_at, locked_until, created_at FROM login_attempts ORDER BY id',
@@ -178,8 +186,7 @@ const EXCLUDED_ENTITIES = [
 
 const PLANNED_ENTITIES = [
   { key: 'roles', table: 'roles', reason: 'Pendiente implementacion de sistema de roles granular', status: ENTITY_STATUS.PLANNED },
-  { key: 'permissions', table: 'permissions', reason: 'Pendiente implementacion de permisos', status: ENTITY_STATUS.PLANNED },
-  { key: 'userPermissions', table: 'user_permissions', reason: 'Pendiente relacion usuario-permisos', status: ENTITY_STATUS.PLANNED },
+  { key: 'permissions', table: 'permissions', reason: 'Pendiente implementacion de permisos definidos como tabla', status: ENTITY_STATUS.PLANNED },
   { key: 'securitySettings', table: 'security_settings', reason: 'Pendiente configuracion de seguridad', status: ENTITY_STATUS.PLANNED },
   { key: 'backupImportLogs', table: 'backup_import_logs', reason: 'Pendiente registro persistente de importaciones', status: ENTITY_STATUS.PLANNED },
 ];
