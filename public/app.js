@@ -56,8 +56,6 @@ const projectForm = document.querySelector('#project-form');
 const projectMessage = document.querySelector('#project-message');
 const projectFormTitle = document.querySelector('#project-form-title');
 const newProjectButton = document.querySelector('#new-project-button');
-const exportProjectsButton = document.querySelector('#export-projects-button');
-const exportClosedProjectsButton = document.querySelector('#export-closed-projects-button');
 const projectsTable = document.querySelector('#projects-table');
 const closedProjectsTable = document.querySelector('#closed-projects-table');
 const detailPanel = document.querySelector('#detail-panel');
@@ -751,123 +749,6 @@ function renderUsers() {
   });
 }
 
-function exportProjectsToExcel(projects, filenamePrefix) {
-  const generalColumns = [
-    ['ID', (project) => project.id],
-    ['Numero de cotizacion', (project) => project.quote_number],
-    ['Numero de Pedido', (project) => project.order_number],
-    ['Numero de Orden de Compra', (project) => project.purchase_order_display],
-    ['Vendedor', (project) => project.seller],
-    ['Cliente', (project) => project.client_name],
-    ['Descripcion del proyecto', (project) => project.project_description || ''],
-    ['Margen esperado de utilidad (%)', (project) => project.expected_margin],
-    ['Total Cobrado MXN', (project) => project.total_charged],
-    ['Gastado MXN', (project) => project.spent],
-    ['Total Facturado Capturado', (project) =>
-      formatCurrency(project.total_invoiced, project.total_invoiced_currency)],
-    ['Total Facturado MXN', (project) => project.total_invoiced_mxn],
-    ['Pendiente de cobro MXN', (project) => project.pending_collection],
-    ['Porcentaje de Avance (%)', (project) => project.progress_percent],
-    ['Tecnico Responsable', (project) => project.technician_name],
-    ['Fecha Prometida de entrega', (project) => project.promised_delivery_date],
-    ['Fecha de cierre', (project) => project.closed_at || ''],
-    ['Estado', (project) => project.status],
-    ['Riesgo', (project) => project.risk],
-    ['Margen Final (%)', (project) =>
-      project.final_margin === null ? '' : (Number(project.final_margin) * 100).toFixed(2)],
-    ['Observaciones', (project) => project.observations || ''],
-  ];
-  const worksheets = [
-    worksheetXml(
-      'Listado',
-      [
-        generalColumns.map(([label]) => label),
-        ...projects.map((project) => generalColumns.map(([, valueGetter]) => valueGetter(project))),
-      ],
-    ),
-    ...projects.map(projectWorksheetXml),
-  ];
-  const workbookXml = `<?xml version="1.0"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
-  xmlns:o="urn:schemas-microsoft-com:office:office"
-  xmlns:x="urn:schemas-microsoft-com:office:excel"
-  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-  ${worksheets.join('')}
-</Workbook>`;
-  const blob = new Blob([workbookXml], {
-    type: 'application/vnd.ms-excel;charset=utf-8;',
-  });
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = `${filenamePrefix}-${today()}.xls`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(link.href);
-}
-
-function projectWorksheetXml(project) {
-  return worksheetXml(`ID ${project.id}`, [
-    [`Proyecto #${project.id}`],
-    ['Cotizacion', project.quote_number],
-    ['Cliente', project.client_name],
-    ['Fecha de cierre', project.closed_at || ''],
-    ['Descripcion', project.project_description || ''],
-    ['Total facturado MXN', project.total_invoiced_mxn],
-    ['Total cobrado MXN', project.total_charged],
-    ['Gastado MXN', project.spent],
-    ['Pendiente MXN', project.pending_collection],
-    [],
-    ['Pagos realizados'],
-    ['Fecha', 'Importe capturado', 'Moneda', 'Importe MXN', 'Notas'],
-    ...project.payments.map((payment) => [
-      payment.payment_date,
-      payment.amount,
-      payment.currency,
-      payment.amount_mxn,
-      payment.notes || '',
-    ]),
-    [],
-    ['Gastos registrados'],
-    ['Fecha', 'Tipo', 'Descripcion', 'Importe capturado', 'Moneda', 'Importe MXN', 'Porcentaje vs facturado'],
-    ...project.costs.map((cost) => [
-      cost.cost_date,
-      cost.category,
-      cost.description,
-      cost.amount,
-      cost.currency,
-      cost.amount_mxn,
-      formatPercentDecimal(cost.invoice_cost_percentage),
-    ]),
-  ]);
-}
-
-function worksheetXml(name, rows) {
-  return `<Worksheet ss:Name="${xmlEscape(worksheetName(name))}"><Table>${rows
-    .map(
-      (row) =>
-        `<Row>${row.map((value) => `<Cell><Data ss:Type="${cellType(value)}">${xmlEscape(value)}</Data></Cell>`).join('')}</Row>`,
-    )
-    .join('')}</Table></Worksheet>`;
-}
-
-function worksheetName(name) {
-  return String(name).replace(/[\\/?*[\]:]/g, '-').slice(0, 31) || 'Hoja';
-}
-
-function cellType(value) {
-  return typeof value === 'number' && Number.isFinite(value) ? 'Number' : 'String';
-}
-
-function xmlEscape(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
-}
-
 function sum(items, field) {
   return items.reduce((total, item) => total + Number(item[field] || 0), 0);
 }
@@ -1238,15 +1119,7 @@ usersTab.addEventListener('click', async () => {
   }
 });
 
-exportProjectsButton.addEventListener('click', async () => {
-  const all = await api('/api/projects?limit=9999');
-  exportProjectsToExcel(all.data, 'proyectos');
-});
 
-exportClosedProjectsButton.addEventListener('click', async () => {
-  const all = await api('/api/closed-projects?limit=9999');
-  exportProjectsToExcel(all.data, 'proyectos-cerrados');
-});
 
 exchangeRateForm.addEventListener('submit', async (event) => {
   event.preventDefault();

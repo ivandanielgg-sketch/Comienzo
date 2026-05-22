@@ -86,7 +86,7 @@ test('backup module', async (t) => {
     assert.ok(res.body.backupMetadata);
     assert.ok(res.body.coverageManifest);
     assert.ok(res.body.data);
-    assert.equal(res.body.backupMetadata.schemaVersion, '1.0.0');
+    assert.equal(res.body.backupMetadata.schemaVersion, '2.0.0');
     assert.equal(res.body.backupMetadata.appName, 'REVRAM Dashboard');
     assert.ok(res.body.backupMetadata.exportedAt);
     assert.ok(res.body.backupMetadata.recordCounts);
@@ -108,9 +108,9 @@ test('backup module', async (t) => {
     const res = await request('GET', '/api/admin/backup');
     const expectedEntities = [
       'projects', 'closedProjects', 'projectPayments', 'projectCosts',
-      'projectReports', 'employees', 'vacationRequests', 'exchangeRates',
-      'ecovisProjects', 'ecovisPayments', 'ecovisPaymentAllocations',
-      'ecovisMovements', 'usersSafe',
+      'projectReports', 'reportsArchive', 'employees', 'vacationRequests',
+      'settings', 'ecovisProjects', 'ecovisPayments',
+      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'usersSafe',
     ];
     for (const entity of expectedEntities) {
       assert.ok(entity in res.body.data, `Missing entity: ${entity}`);
@@ -219,5 +219,66 @@ test('backup module', async (t) => {
     await request('POST', '/api/login', { username: 'admin', password: 'admin123' });
     const res = await request('GET', '/api/admin/export-general-excel');
     assert.ok(res.status === 404 || res.status >= 400);
+  });
+
+  await t.test('backup includes all records not just paginated page', async () => {
+    await request('POST', '/api/logout');
+    await request('POST', '/api/login', { username: 'admin', password: 'admin123' });
+    const projData = {
+      quote_number: 'COT-BACKUP-ALL-1',
+      order_number: 'PED-BACKUP-1',
+      purchase_order_not_applicable: true,
+      seller: 'Test',
+      client_name: 'Test Client',
+      project_description: 'Test project for backup',
+      expected_margin: 10,
+      total_invoiced: 5000,
+      total_invoiced_currency: 'MXN',
+      progress_percent: 0,
+      technician_name: 'Tech',
+      promised_delivery_date: '2026-12-01',
+      status: 'Pendiente',
+      risk: 'Bajo',
+    };
+    await request('POST', '/api/projects', projData);
+    projData.quote_number = 'COT-BACKUP-ALL-2';
+    projData.order_number = 'PED-BACKUP-2';
+    await request('POST', '/api/projects', projData);
+
+    const backupRes = await request('GET', '/api/admin/backup');
+    assert.equal(backupRes.status, 200);
+    assert.ok(backupRes.body.data.projects.length >= 2, 'Backup should include all projects');
+    assert.equal(
+      backupRes.body.backupMetadata.recordCounts.projects,
+      backupRes.body.data.projects.length,
+    );
+  });
+
+  await t.test('import detects data-differs conflicts', async () => {
+    await request('POST', '/api/logout');
+    await request('POST', '/api/login', { username: 'admin', password: 'admin123' });
+    const backupRes = await request('GET', '/api/admin/backup');
+    const backup = backupRes.body;
+    const existingProject = backup.data.projects[0];
+    if (existingProject) {
+      existingProject.seller = 'MODIFIED_SELLER_FOR_CONFLICT_TEST';
+    }
+    const previewRes = await request('POST', '/api/admin/backup/preview', backup);
+    assert.equal(previewRes.status, 200);
+    if (existingProject) {
+      const hasConflict = previewRes.body.conflicts.some(c => c.entity === 'projects');
+      assert.ok(hasConflict, 'Should detect data-differs conflict');
+    }
+  });
+
+  await t.test('backup coverageManifest includes planned entities', async () => {
+    await request('POST', '/api/logout');
+    await request('POST', '/api/login', { username: 'admin', password: 'admin123' });
+    const res = await request('GET', '/api/admin/backup');
+    assert.ok(Array.isArray(res.body.coverageManifest.entitiesPlanned));
+    assert.ok(res.body.coverageManifest.entitiesPlanned.length > 0);
+    const plannedKeys = res.body.coverageManifest.entitiesPlanned.map(e => e.entity);
+    assert.ok(plannedKeys.includes('roles'), 'Should include planned roles entity');
+    assert.ok(plannedKeys.includes('auditLogs'), 'Should include planned auditLogs entity');
   });
 });
