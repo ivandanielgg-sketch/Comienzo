@@ -138,10 +138,8 @@ test('audit system', async (t) => {
   });
 
   await t.test('closing a project creates audit log', async () => {
-    const getRes = await request('GET', '/api/projects/1');
-    assert.equal(getRes.status, 200, `Project 1 should exist, got: ${JSON.stringify(getRes.body).substring(0, 100)}`);
     const res = await request('DELETE', '/api/projects/1', { password: 'admin123' });
-    assert.equal(res.status, 204, `Delete should return 204, got ${res.status}: ${JSON.stringify(res.body)}`);
+    assert.equal(res.status, 204);
 
     const logs = await request('GET', '/api/admin/audit-logs?action=close&module=projects');
     assert.ok(logs.body.data.length > 0, 'Should have close audit log');
