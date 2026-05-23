@@ -176,6 +176,12 @@ function formatCurrencyDisplay(value, currency) {
   return fmt.format(num);
 }
 
+function formatMoney(value) {
+  const num = typeof value === 'number' ? value : Number(value);
+  if (isNaN(num)) return '$0.00';
+  return money.format(num);
+}
+
 function initCurrencyInput(input, getCurrency) {
   let rawValue = parseCurrencyInput(input.value) || 0;
   function formatDisplay() {
