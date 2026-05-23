@@ -3878,7 +3878,7 @@ function renderAttendanceTable(week, editable) {
       : `<td>${escapeHtml(emp.notes || '')}</td>`;
 
     return `<tr>
-      <td>${idx + 1}</td>
+      <td>${escapeHtml(emp.employee_number_snapshot)}</td>
       <td style="white-space:nowrap;">${escapeHtml(emp.full_name_snapshot)}</td>
       <td>${escapeHtml(emp.position_snapshot || '')}</td>
       ${dayCells}
