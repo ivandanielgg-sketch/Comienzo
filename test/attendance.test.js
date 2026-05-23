@@ -221,6 +221,25 @@ describe('Attendance API integration', () => {
     assert.strictEqual(res.body.length, 9);
   });
 
+  it('GET /api/attendance/years returns distinct years from existing weeks', async () => {
+    const res = await request('GET', '/api/attendance/years');
+    assert.strictEqual(res.status, 200);
+    assert.ok(Array.isArray(res.body.years));
+    assert.ok(res.body.years.includes(2026), 'Should include year 2026');
+    assert.ok(!res.body.years.includes(2025), 'Should not include year 2025 (no nóminas)');
+    for (let i = 1; i < res.body.years.length; i++) {
+      assert.ok(res.body.years[i] <= res.body.years[i - 1], 'Years should be ordered DESC');
+    }
+  });
+
+  it('GET /api/attendance/years updates after creating new year', async () => {
+    await request('POST', '/api/attendance/weeks', { year: 2030, week_number: 1 });
+    const res = await request('GET', '/api/attendance/years');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.years.includes(2030), 'Should include newly created year 2030');
+    assert.strictEqual(res.body.years[0], 2030, 'Most recent year should be first');
+  });
+
   it('POST /api/attendance/weeks creates new payroll week with only active employees', async () => {
     const checkRes = await request('GET', '/api/attendance/weeks?year=2026&week_number=2');
     if (checkRes.body.data && checkRes.body.data.length > 0) {

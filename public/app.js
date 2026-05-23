@@ -3646,7 +3646,7 @@ function showAttendanceTab() {
 }
 
 let attendanceCurrentWeek = null;
-let attendanceSelectedYear = new Date().getFullYear();
+let attendanceSelectedYear = null;
 
 const ATTENDANCE_STATUS_OPTIONS = [
   { code: 'A', label: 'Asistencia' },
@@ -3662,26 +3662,43 @@ const ATTENDANCE_STATUS_OPTIONS = [
 
 const STATUS_COLORS = { A: '#ffffff', 'A*': '#b3e5fc', F: '#fff9c4', B: '#e0e0e0', PC: '#ffcdd2', PS: '#ef9a9a', D: '#bbdefb', I: '#c8e6c9', V: '#b2dfdb' };
 
-function initAttendanceYearSelector() {
+async function initAttendanceYearSelector() {
   const sel = document.getElementById('attendance-filter-year');
   if (!sel) return;
-  const currentYear = new Date().getFullYear();
-  sel.innerHTML = '';
-  for (let y = currentYear + 1; y >= currentYear - 5; y--) {
-    const opt = document.createElement('option');
-    opt.value = y;
-    opt.textContent = y;
-    if (y === currentYear) opt.selected = true;
-    sel.appendChild(opt);
+  try {
+    const result = await api('/api/attendance/years');
+    const years = result.years || [];
+    sel.innerHTML = '';
+    if (years.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '— Sin nóminas —';
+      sel.appendChild(opt);
+      attendanceSelectedYear = null;
+      return;
+    }
+    for (const y of years) {
+      const opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = y;
+      sel.appendChild(opt);
+    }
+    attendanceSelectedYear = years[0];
+    sel.value = String(years[0]);
+  } catch (e) {
+    sel.innerHTML = '<option value="">Error</option>';
+    const msg = document.getElementById('attendance-search-message');
+    if (msg) { msg.textContent = 'No se pudieron cargar los años disponibles.'; msg.style.color = 'red'; }
   }
-  attendanceSelectedYear = currentYear;
 }
 
 if (attendanceTab) {
-  attendanceTab.addEventListener('click', () => {
+  attendanceTab.addEventListener('click', async () => {
     switchView('attendance');
-    initAttendanceYearSelector();
-    loadAttendanceWeeks(1);
+    await initAttendanceYearSelector();
+    if (attendanceSelectedYear) {
+      loadAttendanceWeeks(1);
+    }
   });
 }
 
@@ -3695,7 +3712,7 @@ async function loadAttendanceWeeks(page = 1) {
     if (msg) { msg.textContent = 'Selecciona un año para consultar las nóminas.'; msg.style.color = 'red'; }
     if (summaryDiv) summaryDiv.classList.add('hidden');
     const tbody = document.getElementById('attendance-weeks-table');
-    if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">Selecciona un año y presiona Buscar.</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No hay nóminas generadas.</td></tr>';
     const pag = document.getElementById('attendance-weeks-pagination');
     if (pag) pag.innerHTML = '';
     return;
@@ -4047,6 +4064,7 @@ if (attendanceNewForm) {
       attendanceNewForm.reset();
       if (msg) msg.textContent = '';
       if (preview) preview.textContent = '';
+      await initAttendanceYearSelector();
       const yearSel = document.getElementById('attendance-filter-year');
       if (yearSel) yearSel.value = String(year);
       attendanceSelectedYear = year;

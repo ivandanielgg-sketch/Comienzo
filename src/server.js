@@ -2332,6 +2332,13 @@ app.get('/api/attendance/statuses', requireAuth, requirePermission('attendance',
   res.json(ATTENDANCE_STATUSES);
 });
 
+// GET /api/attendance/years - Get distinct years that have payroll weeks
+app.get('/api/attendance/years', requireAuth, requirePermission('attendance', 'view'), (req, res) => {
+  const rows = db.prepare('SELECT DISTINCT year FROM payroll_attendance_weeks ORDER BY year DESC').all();
+  const years = rows.map((r) => r.year);
+  res.json({ years });
+});
+
 // POST /api/attendance/weeks - Create new payroll week
 app.post('/api/attendance/weeks', requireAuth, requirePermission('attendance', 'create'), (req, res) => {
   const { year, week_number } = req.body;
