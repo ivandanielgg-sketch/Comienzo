@@ -212,11 +212,36 @@ function migrate(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS ecovis_purchase_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      purchase_order_number TEXT NOT NULL,
+      project_name TEXT,
+      client_name TEXT NOT NULL DEFAULT 'ECOVIS',
+      order_date TEXT NOT NULL,
+      total_amount REAL NOT NULL CHECK (total_amount > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'parcialmente_pagada', 'pagada', 'cancelada')),
+      notes TEXT,
+      is_cancelled INTEGER NOT NULL DEFAULT 0,
+      cancelled_at TEXT,
+      cancelled_by TEXT,
+      cancellation_reason TEXT,
+      created_by TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      updated_by TEXT,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS ecovis_payment_allocations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       payment_id INTEGER NOT NULL,
       ecovis_project_id INTEGER,
-      allocation_type TEXT NOT NULL CHECK (allocation_type IN ('proyecto', 'saldo_a_favor', 'prestamo', 'ajuste')),
+      ecovis_purchase_order_id INTEGER,
+      allocation_type TEXT NOT NULL CHECK (allocation_type IN ('proyecto', 'orden_compra', 'saldo_a_favor', 'prestamo', 'ajuste')),
       amount REAL NOT NULL CHECK (amount > 0),
       notes TEXT,
       is_cancelled INTEGER NOT NULL DEFAULT 0,
@@ -227,7 +252,8 @@ function migrate(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (payment_id) REFERENCES ecovis_payments(id),
-      FOREIGN KEY (ecovis_project_id) REFERENCES ecovis_projects(id)
+      FOREIGN KEY (ecovis_project_id) REFERENCES ecovis_projects(id),
+      FOREIGN KEY (ecovis_purchase_order_id) REFERENCES ecovis_purchase_orders(id)
     );
 
     CREATE TABLE IF NOT EXISTS ecovis_movements (
@@ -273,7 +299,146 @@ function migrate(database) {
   ensureColumn(database, 'project_reports', 'deleted_at', 'TEXT');
   ensureColumn(database, 'project_reports', 'deleted_by', 'TEXT');
   ensureColumn(database, 'project_reports', 'delete_reason', 'TEXT');
+
+  // Audit columns for projects
+  ensureColumn(database, 'projects', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'projects', 'created_by_name', 'TEXT');
+  ensureColumn(database, 'projects', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'projects', 'updated_by_name', 'TEXT');
+  ensureColumn(database, 'projects', 'deleted_at', 'TEXT');
+  ensureColumn(database, 'projects', 'deleted_by_user_id', 'INTEGER');
+  ensureColumn(database, 'projects', 'deleted_by_name', 'TEXT');
+  ensureColumn(database, 'projects', 'delete_reason', 'TEXT');
+
+  // Audit columns for project_payments
+  ensureColumn(database, 'project_payments', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'project_payments', 'created_by_name', 'TEXT');
+
+  // Audit columns for project_costs
+  ensureColumn(database, 'project_costs', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'project_costs', 'created_by_name', 'TEXT');
+
+  // Audit columns for project_reports (created_by/updated_by already exist as TEXT username)
+  ensureColumn(database, 'project_reports', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'project_reports', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'project_reports', 'deleted_by_user_id', 'INTEGER');
+
+  // Audit columns for employees
+  ensureColumn(database, 'employees', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'employees', 'created_by_name', 'TEXT');
+  ensureColumn(database, 'employees', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'employees', 'updated_by_name', 'TEXT');
+
+  // Audit columns for vacation_requests (created_by already exists as TEXT username)
+  ensureColumn(database, 'vacation_requests', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'vacation_requests', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'vacation_requests', 'updated_by_name', 'TEXT');
+
+  // Audit columns for ecovis_projects (created_by/updated_by already exist)
+  ensureColumn(database, 'ecovis_projects', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_projects', 'updated_by_user_id', 'INTEGER');
+
+  // Audit columns for ecovis_payments (created_by/updated_by already exist)
+  ensureColumn(database, 'ecovis_payments', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_payments', 'updated_by_user_id', 'INTEGER');
+
+  // Audit columns for ecovis_payment_allocations (created_by already exists)
+  ensureColumn(database, 'ecovis_payment_allocations', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_payment_allocations', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_payment_allocations', 'updated_by', 'TEXT');
+  ensureColumn(database, 'ecovis_payment_allocations', 'ecovis_purchase_order_id', 'INTEGER');
+
+  // Link ecovis_projects to purchase orders
+  ensureColumn(database, 'ecovis_projects', 'ecovis_purchase_order_id', 'INTEGER');
+
+  // Audit columns for ecovis_movements (created_by/updated_by already exist)
+  ensureColumn(database, 'ecovis_movements', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'ecovis_movements', 'updated_by_user_id', 'INTEGER');
+
+  // Audit columns for users
+  ensureColumn(database, 'users', 'updated_at', 'TEXT');
+  ensureColumn(database, 'users', 'created_by_user_id', 'INTEGER');
+  ensureColumn(database, 'users', 'created_by_name', 'TEXT');
+  ensureColumn(database, 'users', 'updated_by_user_id', 'INTEGER');
+  ensureColumn(database, 'users', 'updated_by_name', 'TEXT');
+
+  // Security columns for users
+  ensureColumn(database, 'users', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(database, 'users', 'locked_until', 'TEXT');
+  ensureColumn(database, 'users', 'failed_login_attempts', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'users', 'last_failed_login_at', 'TEXT');
+  ensureColumn(database, 'users', 'mfa_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'users', 'mfa_secret', 'TEXT');
+  ensureColumn(database, 'users', 'mfa_verified_at', 'TEXT');
+
+  // Create audit_logs table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      user_name TEXT,
+      action TEXT NOT NULL,
+      module TEXT,
+      entity_type TEXT,
+      entity_id INTEGER,
+      entity_label TEXT,
+      timestamp_utc TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      before_json TEXT,
+      after_json TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs (user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs (entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs (timestamp_utc);
+
+    CREATE TABLE IF NOT EXISTS user_permissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL UNIQUE,
+      permissions_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS backup_import_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      imported_at TEXT NOT NULL,
+      imported_by TEXT NOT NULL,
+      schema_version TEXT,
+      backup_exported_at TEXT,
+      status TEXT NOT NULL DEFAULT 'completed',
+      summary_json TEXT,
+      conflicts_json TEXT,
+      errors_json TEXT,
+      validation_json TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_identifier TEXT NOT NULL,
+      user_id INTEGER,
+      ip_address TEXT,
+      user_agent TEXT,
+      success INTEGER NOT NULL DEFAULT 0,
+      failure_reason TEXT,
+      attempted_at TEXT NOT NULL,
+      locked_until TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts (user_identifier);
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts (ip_address);
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts (attempted_at);
+  `);
+
   migrateCostCategories(database);
+  migrateAllocationTypes(database);
   seedExchangeRates(database);
 }
 
@@ -349,6 +514,57 @@ function migrateCostCategories(database) {
     FROM project_costs_old;
 
     DROP TABLE project_costs_old;
+
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+function migrateAllocationTypes(database) {
+  const table = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ecovis_payment_allocations'")
+    .get();
+
+  if (!table || table.sql.includes("'orden_compra'")) {
+    return;
+  }
+
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    ALTER TABLE ecovis_payment_allocations RENAME TO ecovis_payment_allocations_old;
+
+    CREATE TABLE ecovis_payment_allocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_id INTEGER NOT NULL,
+      ecovis_project_id INTEGER,
+      ecovis_purchase_order_id INTEGER,
+      allocation_type TEXT NOT NULL CHECK (allocation_type IN ('proyecto', 'orden_compra', 'saldo_a_favor', 'prestamo', 'ajuste')),
+      amount REAL NOT NULL CHECK (amount > 0),
+      notes TEXT,
+      is_cancelled INTEGER NOT NULL DEFAULT 0,
+      cancelled_at TEXT,
+      cancelled_by TEXT,
+      cancellation_reason TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (payment_id) REFERENCES ecovis_payments(id),
+      FOREIGN KEY (ecovis_project_id) REFERENCES ecovis_projects(id),
+      FOREIGN KEY (ecovis_purchase_order_id) REFERENCES ecovis_purchase_orders(id)
+    );
+
+    INSERT INTO ecovis_payment_allocations (
+      id, payment_id, ecovis_project_id, allocation_type, amount, notes,
+      is_cancelled, cancelled_at, cancelled_by, cancellation_reason,
+      created_by, created_at, updated_at
+    )
+    SELECT
+      id, payment_id, ecovis_project_id, allocation_type, amount, notes,
+      is_cancelled, cancelled_at, cancelled_by, cancellation_reason,
+      created_by, created_at, updated_at
+    FROM ecovis_payment_allocations_old;
+
+    DROP TABLE ecovis_payment_allocations_old;
 
     PRAGMA foreign_keys = ON;
   `);

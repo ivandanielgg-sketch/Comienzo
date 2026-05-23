@@ -15,7 +15,10 @@ const {
   addSqlFilters,
   buildListResponse,
 } = require('./pagination');
-const { calculateEcovisAccountSummary, calculateProjectPaidAmount, calculateProjectStatus, calculatePaymentUnallocated } = require('./ecovis');
+const { calculateEcovisAccountSummary, calculateProjectPaidAmount, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance } = require('./ecovis');
+const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
+const { formatDateTimeCDMX } = require('./dateHelper');
+const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES } = require('./permissions');
 
 const app = express();
 const db = getDb();
@@ -45,12 +48,25 @@ const REPORT_TYPE_LABELS = {
   autoflame_system_startup: 'ARRANQUE DE SISTEMA AUTOFLAME',
 };
 const SESSION_TTL_MS = 1000 * 60 * 60;
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const isProduction = process.env.NODE_ENV === 'production';
 const trustProxy = isProduction || process.env.TRUST_PROXY === 'true';
 
 if (trustProxy) {
   app.set('trust proxy', 1);
 }
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-XSS-Protection', '0');
+  if (isProduction) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 
 app.use(express.json());
 app.use(
@@ -75,6 +91,13 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 function requireAuth(req, res, next) {
   if (!req.session.userId) {
     return res.status(401).json({ message: 'Necesitas iniciar sesion.' });
+  }
+
+  const user = db.prepare('SELECT is_active FROM users WHERE id = ?').get(req.session.userId);
+  if (!user || !user.is_active) {
+    logAuditEvent(db, { req, action: 'access_denied_inactive', module: 'auth', entityType: 'user', entityId: req.session.userId, entityLabel: req.session.username });
+    req.session.destroy(() => {});
+    return res.status(401).json({ message: 'Tu cuenta ha sido desactivada. Contacta al administrador.' });
   }
 
   return next();
@@ -106,6 +129,30 @@ function requireNotTecnico(req, res, next) {
   }
 
   return next();
+}
+
+function requirePermission(module, action) {
+  return (req, res, next) => {
+    const role = req.session.role;
+    if (role === 'admin') return next();
+
+    const perms = loadUserPermissions(db, req.session.userId, role);
+    if (hasPermission(perms, module, action)) {
+      return next();
+    }
+
+    logAuditEvent(db, {
+      req,
+      action: 'access_denied',
+      module,
+      entityType: 'permission',
+      entityLabel: `${module}.${action}`,
+      metadata: { required_permission: `${module}.${action}`, endpoint: req.originalUrl, method: req.method },
+    });
+    return res.status(403).json({
+      message: 'Acceso restringido. No tienes permisos para consultar o modificar este apartado.',
+    });
+  };
 }
 
 function trim(value) {
@@ -284,7 +331,11 @@ function mapUser(row) {
     id: row.id,
     username: row.username,
     role: row.role || 'user',
+    is_active: row.is_active !== undefined ? row.is_active : 1,
     created_at: row.created_at,
+    created_at_cdmx: formatDateTimeCDMX(row.created_at),
+    updated_at: row.updated_at,
+    updated_at_cdmx: formatDateTimeCDMX(row.updated_at),
   };
 }
 
@@ -361,6 +412,9 @@ function mapProject(row, exchangeRates = getExchangeRateMap()) {
     payments,
     costs: costsWithInvoicePercentage,
     ...totals,
+    created_at_cdmx: formatDateTimeCDMX(row.created_at),
+    updated_at_cdmx: formatDateTimeCDMX(row.updated_at),
+    closed_at_cdmx: formatDateTimeCDMX(row.closed_at),
   };
 }
 
@@ -581,9 +635,11 @@ app.get('/api/session', (req, res) => {
     return res.json({ authenticated: false });
   }
 
+  const perms = loadUserPermissions(db, req.session.userId, req.session.role);
   return res.json({
     authenticated: true,
     user: { id: req.session.userId, username: req.session.username, role: req.session.role || 'user' },
+    permissions: perms,
   });
 });
 
@@ -591,22 +647,73 @@ app.post('/api/login', (req, res, next) => {
   try {
     const username = requiredText(req.body, 'username', 'Usuario');
     const password = requiredText(req.body, 'password', 'Contrasena');
+    const ipAddress = req.ip || req.connection?.remoteAddress || null;
+    const userAgent = req.get('user-agent') || null;
+    const now = nowUtc();
+
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
 
+    if (user && user.locked_until) {
+      const lockExpiry = new Date(user.locked_until).getTime();
+      if (lockExpiry > Date.now()) {
+        recordLoginAttempt(username, user.id, ipAddress, userAgent, false, 'account_locked', user.locked_until);
+        logAuditEvent(db, { req, action: 'login_blocked_locked', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: username, metadata: { locked_until: user.locked_until } });
+        throw badRequest('Usuario o contrasena incorrectos.');
+      }
+      db.prepare('UPDATE users SET locked_until = NULL, failed_login_attempts = 0 WHERE id = ?').run(user.id);
+    }
+
     if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+      if (user) {
+        const attempts = (user.failed_login_attempts || 0) + 1;
+        let lockedUntil = null;
+        if (attempts >= MAX_LOGIN_ATTEMPTS) {
+          lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
+          db.prepare('UPDATE users SET failed_login_attempts = ?, last_failed_login_at = ?, locked_until = ? WHERE id = ?').run(attempts, now, lockedUntil, user.id);
+          logAuditEvent(db, { req, action: 'user_locked', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: username, metadata: { attempts, locked_until: lockedUntil } });
+        } else {
+          db.prepare('UPDATE users SET failed_login_attempts = ?, last_failed_login_at = ? WHERE id = ?').run(attempts, now, user.id);
+        }
+        recordLoginAttempt(username, user.id, ipAddress, userAgent, false, 'invalid_credentials', lockedUntil);
+      } else {
+        recordLoginAttempt(username, null, ipAddress, userAgent, false, 'user_not_found', null);
+      }
+      logAuditEvent(db, { req, action: 'login_failed', module: 'auth', entityType: 'user', entityLabel: username, metadata: { attempted_username: username } });
       throw badRequest('Usuario o contrasena incorrectos.');
     }
+
+    if (!user.is_active) {
+      recordLoginAttempt(username, user.id, ipAddress, userAgent, false, 'user_inactive', null);
+      logAuditEvent(db, { req, action: 'login_failed_inactive', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: username });
+      throw badRequest('Usuario o contrasena incorrectos.');
+    }
+
+    db.prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL, last_failed_login_at = NULL WHERE id = ?').run(user.id);
+    recordLoginAttempt(username, user.id, ipAddress, userAgent, true, null, null);
 
     req.session.userId = user.id;
     req.session.username = user.username;
     req.session.role = user.role || 'user';
+    logAuditEvent(db, { req, action: 'login_success', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: user.username });
     return res.json({ username: user.username, role: user.role || 'user' });
   } catch (error) {
     return next(error);
   }
 });
 
+function recordLoginAttempt(userIdentifier, userId, ipAddress, userAgent, success, failureReason, lockedUntil) {
+  try {
+    db.prepare(
+      `INSERT INTO login_attempts (user_identifier, user_id, ip_address, user_agent, success, failure_reason, attempted_at, locked_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(userIdentifier, userId, ipAddress, userAgent, success ? 1 : 0, failureReason, nowUtc(), lockedUntil);
+  } catch (err) {
+    console.error('Failed to record login attempt:', err.message);
+  }
+}
+
 app.post('/api/logout', requireAuth, (req, res) => {
+  logAuditEvent(db, { req, action: 'logout', module: 'auth', entityType: 'user', entityId: req.session.userId, entityLabel: req.session.username });
   req.session.destroy(() => {
     res.clearCookie('proyectos.sid');
     res.status(204).end();
@@ -623,7 +730,7 @@ app.post('/api/admin/verify', requireAuth, (req, res, next) => {
   }
 });
 
-app.get('/api/users', requireAuth, requireAdminVerified, (req, res) => {
+app.get('/api/users', requireAuth, requirePermission('users', 'view'), (req, res) => {
   const { page, limit } = parsePaginationParams(req.query);
   const sorting = normalizeSort(
     req.query,
@@ -639,7 +746,7 @@ app.get('/api/users', requireAuth, requireAdminVerified, (req, res) => {
     },
   });
   const result = paginateSqlList({
-    tableSql: 'SELECT id, username, created_at FROM users',
+    tableSql: 'SELECT id, username, role, is_active, created_at, updated_at FROM users',
     countSql: 'SELECT COUNT(*) as count FROM users',
     whereClause,
     params,
@@ -652,39 +759,51 @@ app.get('/api/users', requireAuth, requireAdminVerified, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.post('/api/users', requireAuth, requireAdminVerified, (req, res, next) => {
+app.post('/api/users', requireAuth, requirePermission('users', 'create'), (req, res, next) => {
   try {
     const user = normalizeUser(req.body, { requirePassword: true });
     const passwordHash = bcrypt.hashSync(user.password, 12);
     const role = ['admin', 'user', 'tecnico'].includes(trim(req.body.role)) ? trim(req.body.role) : 'user';
+    const audit = createdByFields(req);
     const result = db
-      .prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
-      .run(user.username, passwordHash, role);
+      .prepare('INSERT INTO users (username, password_hash, role, created_by_user_id, created_by_name, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(user.username, passwordHash, role, audit.created_by_user_id, audit.created_by_name, audit.created_at);
 
+    logAuditEvent(db, { req, action: 'create', module: 'users', entityType: 'user', entityId: result.lastInsertRowid, entityLabel: user.username, after: { username: user.username, role } });
     res.status(201).json(mapUser(getUserOrFail(result.lastInsertRowid)));
   } catch (error) {
     next(error);
   }
 });
 
-app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) => {
+app.put('/api/users/:id', requireAuth, requirePermission('users', 'edit'), (req, res, next) => {
   try {
-    getUserOrFail(req.params.id);
+    const before = getUserOrFail(req.params.id);
     const user = normalizeUser(req.body);
     const role = ['admin', 'user', 'tecnico'].includes(trim(req.body.role)) ? trim(req.body.role) : undefined;
+    const isActive = req.body.is_active !== undefined ? (req.body.is_active ? 1 : 0) : undefined;
+    const audit = updatedByFields(req);
 
     if (user.password) {
-      db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?').run(
+      db.prepare('UPDATE users SET username = ?, password_hash = ?, updated_at = ?, updated_by_user_id = ?, updated_by_name = ? WHERE id = ?').run(
         user.username,
         bcrypt.hashSync(user.password, 12),
+        audit.updated_at,
+        audit.updated_by_user_id,
+        audit.updated_by_name,
         req.params.id,
       );
     } else {
-      db.prepare('UPDATE users SET username = ? WHERE id = ?').run(user.username, req.params.id);
+      db.prepare('UPDATE users SET username = ?, updated_at = ?, updated_by_user_id = ?, updated_by_name = ? WHERE id = ?').run(
+        user.username, audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, req.params.id);
     }
 
     if (role) {
       db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+    }
+
+    if (isActive !== undefined) {
+      db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(isActive, req.params.id);
     }
 
     if (Number(req.session.userId) === Number(req.params.id)) {
@@ -692,17 +811,48 @@ app.put('/api/users/:id', requireAuth, requireAdminVerified, (req, res, next) =>
       if (role) req.session.role = role;
     }
 
+    logAuditEvent(db, { req, action: 'update', module: 'users', entityType: 'user', entityId: Number(req.params.id), entityLabel: user.username, before: { username: before.username, role: before.role, is_active: before.is_active }, after: { username: user.username, role: role || before.role, is_active: isActive !== undefined ? isActive : before.is_active } });
     res.json(mapUser(getUserOrFail(req.params.id)));
   } catch (error) {
     next(error);
   }
 });
 
-app.get('/api/exchange-rates', requireAuth, (req, res) => {
+app.get('/api/users/:id/permissions', requireAuth, requirePermission('users', 'managePermissions'), (req, res, next) => {
+  try {
+    const user = getUserOrFail(req.params.id);
+    const perms = loadUserPermissions(db, user.id, user.role);
+    res.json({ userId: user.id, username: user.username, role: user.role, permissions: perms });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/users/:id/permissions', requireAuth, requirePermission('users', 'managePermissions'), (req, res, next) => {
+  try {
+    const user = getUserOrFail(req.params.id);
+    const permissions = req.body.permissions;
+    if (!permissions || typeof permissions !== 'object') {
+      throw badRequest('Permisos invalidos.');
+    }
+    saveUserPermissions(db, user.id, permissions);
+    logAuditEvent(db, { req, action: 'update_permissions', module: 'users', entityType: 'user', entityId: user.id, entityLabel: user.username, after: permissions });
+    res.json({ userId: user.id, username: user.username, permissions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/session/permissions', requireAuth, (req, res) => {
+  const perms = loadUserPermissions(db, req.session.userId, req.session.role);
+  res.json({ permissions: perms, modules: MODULES });
+});
+
+app.get('/api/exchange-rates', requireAuth, requirePermission('settings', 'view'), (req, res) => {
   res.json(mapExchangeRateState());
 });
 
-app.put('/api/exchange-rates', requireAuth, (req, res, next) => {
+app.put('/api/exchange-rates', requireAuth, requirePermission('settings', 'edit'), (req, res, next) => {
   try {
     const payload = req.body.rates || req.body;
     const usdRate = numberValue(payload, 'USD', 'Tipo de cambio USD', {
@@ -742,7 +892,7 @@ app.put('/api/exchange-rates', requireAuth, (req, res, next) => {
   }
 });
 
-app.get('/api/projects', requireAuth, requireNotTecnico, (req, res) => {
+app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.promised_delivery_date ASC, p.id DESC');
@@ -810,7 +960,7 @@ app.get('/api/projects', requireAuth, requireNotTecnico, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters, { summary }));
 });
 
-app.get('/api/closed-projects', requireAuth, requireNotTecnico, (req, res) => {
+app.get('/api/closed-projects', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.closed_at DESC, p.id DESC');
@@ -845,7 +995,7 @@ app.get('/api/closed-projects', requireAuth, requireNotTecnico, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.get('/api/projects/:id', requireAuth, (req, res, next) => {
+app.get('/api/projects/:id', requireAuth, requirePermission('projects', 'view'), (req, res, next) => {
   try {
     const project = getProjectOrFail(req.params.id);
     res.json(mapProject(project, getExchangeRateMap()));
@@ -854,9 +1004,10 @@ app.get('/api/projects/:id', requireAuth, (req, res, next) => {
   }
 });
 
-app.post('/api/projects', requireAuth, requireNotTecnico, (req, res, next) => {
+app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), (req, res, next) => {
   try {
     const project = normalizeProject(req.body);
+    const audit = createdByFields(req);
     const result = db
       .prepare(
         `INSERT INTO projects (
@@ -875,7 +1026,11 @@ app.post('/api/projects', requireAuth, requireNotTecnico, (req, res, next) => {
           promised_delivery_date,
           status,
           risk,
-          observations
+          observations,
+          created_at,
+          updated_at,
+          created_by_user_id,
+          created_by_name
         ) VALUES (
           @quote_number,
           @order_number,
@@ -892,21 +1047,27 @@ app.post('/api/projects', requireAuth, requireNotTecnico, (req, res, next) => {
           @promised_delivery_date,
           @status,
           @risk,
-          @observations
+          @observations,
+          @created_at,
+          @updated_at,
+          @created_by_user_id,
+          @created_by_name
         )`,
       )
-      .run(project);
+      .run({ ...project, created_at: audit.created_at, updated_at: audit.created_at, created_by_user_id: audit.created_by_user_id, created_by_name: audit.created_by_name });
 
+    logAuditEvent(db, { req, action: 'create', module: 'projects', entityType: 'project', entityId: result.lastInsertRowid, entityLabel: project.quote_number, after: project });
     res.status(201).json(mapProject(getProjectOrFail(result.lastInsertRowid), getExchangeRateMap()));
   } catch (error) {
     next(error);
   }
 });
 
-app.put('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next) => {
+app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
-    getProjectOrFail(req.params.id);
+    const before = getProjectOrFail(req.params.id);
     const project = normalizeProject(req.body);
+    const audit = updatedByFields(req);
     db.prepare(
       `UPDATE projects SET
         quote_number = @quote_number,
@@ -925,32 +1086,37 @@ app.put('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next) =>
         status = @status,
         risk = @risk,
         observations = @observations,
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = @updated_at,
+        updated_by_user_id = @updated_by_user_id,
+        updated_by_name = @updated_by_name
       WHERE id = @id`,
-    ).run({ ...project, id: req.params.id });
+    ).run({ ...project, id: req.params.id, ...audit });
 
+    logAuditEvent(db, { req, action: 'update', module: 'projects', entityType: 'project', entityId: Number(req.params.id), entityLabel: project.quote_number, before, after: project });
     res.json(mapProject(getProjectOrFail(req.params.id), getExchangeRateMap()));
   } catch (error) {
     next(error);
   }
 });
 
-app.delete('/api/projects/:id', requireAuth, requireNotTecnico, (req, res, next) => {
+app.delete('/api/projects/:id', requireAuth, requirePermission('projects', 'close'), (req, res, next) => {
   try {
-    getProjectOrFail(req.params.id);
+    const before = getProjectOrFail(req.params.id);
     verifyAdminPassword(req.body);
+    const audit = updatedByFields(req);
     db.prepare(
       `UPDATE projects
-       SET closed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       SET closed_at = ?, updated_at = ?, updated_by_user_id = ?, updated_by_name = ?
        WHERE id = ? AND closed_at IS NULL`,
-    ).run(req.params.id);
+    ).run(audit.updated_at, audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, Number(req.params.id));
+    logAuditEvent(db, { req, action: 'close', module: 'projects', entityType: 'project', entityId: Number(req.params.id), entityLabel: before.quote_number, before: { closed_at: null }, after: { closed_at: audit.updated_at } });
     res.status(204).end();
   } catch (error) {
     next(error);
   }
 });
 
-app.delete('/api/closed-projects/:id', requireAuth, (req, res, next) => {
+app.delete('/api/closed-projects/:id', requireAuth, requirePermission('closedProjects', 'delete'), (req, res, next) => {
   try {
     const project = getProjectOrFail(req.params.id);
     if (!project.closed_at) {
@@ -959,64 +1125,73 @@ app.delete('/api/closed-projects/:id', requireAuth, (req, res, next) => {
 
     verifyAdminPassword(req.body);
     db.prepare('DELETE FROM projects WHERE id = ? AND closed_at IS NOT NULL').run(req.params.id);
+    logAuditEvent(db, { req, action: 'delete', module: 'projects', entityType: 'project', entityId: Number(req.params.id), entityLabel: project.quote_number, before: project });
     res.status(204).end();
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/projects/:id/payments', requireAuth, (req, res, next) => {
+app.post('/api/projects/:id/payments', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
     const payment = normalizePayment(req.body);
-    db.prepare(
-      `INSERT INTO project_payments (project_id, amount, currency, payment_date, notes)
-       VALUES (@project_id, @amount, @currency, @payment_date, @notes)`,
-    ).run({ ...payment, project_id: req.params.id });
+    const audit = createdByFields(req);
+    const result = db.prepare(
+      `INSERT INTO project_payments (project_id, amount, currency, payment_date, notes, created_at, created_by_user_id, created_by_name)
+       VALUES (@project_id, @amount, @currency, @payment_date, @notes, @created_at, @created_by_user_id, @created_by_name)`,
+    ).run({ ...payment, project_id: req.params.id, ...audit });
 
+    logAuditEvent(db, { req, action: 'create', module: 'payments', entityType: 'project_payment', entityId: result.lastInsertRowid, entityLabel: `Pago ${payment.amount} ${payment.currency}`, after: payment });
     res.status(201).json(mapProject(getProjectOrFail(req.params.id), getExchangeRateMap()));
   } catch (error) {
     next(error);
   }
 });
 
-app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, (req, res, next) => {
+app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.projectId);
     verifyAdminPassword(req.body);
+    const before = db.prepare('SELECT * FROM project_payments WHERE id = ? AND project_id = ?').get(req.params.paymentId, req.params.projectId);
     db.prepare('DELETE FROM project_payments WHERE id = ? AND project_id = ?').run(
       req.params.paymentId,
       req.params.projectId,
     );
+    logAuditEvent(db, { req, action: 'delete', module: 'payments', entityType: 'project_payment', entityId: Number(req.params.paymentId), entityLabel: before ? `Pago ${before.amount}` : null, before });
     res.json(mapProject(getProjectOrFail(req.params.projectId), getExchangeRateMap()));
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/projects/:id/costs', requireAuth, (req, res, next) => {
+app.post('/api/projects/:id/costs', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
     const cost = normalizeCost(req.body);
-    db.prepare(
-      `INSERT INTO project_costs (project_id, category, description, amount, currency, cost_date)
-       VALUES (@project_id, @category, @description, @amount, @currency, @cost_date)`,
-    ).run({ ...cost, project_id: req.params.id });
+    const audit = createdByFields(req);
+    const result = db.prepare(
+      `INSERT INTO project_costs (project_id, category, description, amount, currency, cost_date, created_at, created_by_user_id, created_by_name)
+       VALUES (@project_id, @category, @description, @amount, @currency, @cost_date, @created_at, @created_by_user_id, @created_by_name)`,
+    ).run({ ...cost, project_id: req.params.id, ...audit });
 
+    logAuditEvent(db, { req, action: 'create', module: 'costs', entityType: 'project_cost', entityId: result.lastInsertRowid, entityLabel: `${cost.category} ${cost.amount}`, after: cost });
     res.status(201).json(mapProject(getProjectOrFail(req.params.id), getExchangeRateMap()));
   } catch (error) {
     next(error);
   }
 });
 
-app.delete('/api/projects/:projectId/costs/:costId', requireAuth, (req, res, next) => {
+app.delete('/api/projects/:projectId/costs/:costId', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.projectId);
     verifyAdminPassword(req.body);
+    const before = db.prepare('SELECT * FROM project_costs WHERE id = ? AND project_id = ?').get(req.params.costId, req.params.projectId);
     db.prepare('DELETE FROM project_costs WHERE id = ? AND project_id = ?').run(
       req.params.costId,
       req.params.projectId,
     );
+    logAuditEvent(db, { req, action: 'delete', module: 'costs', entityType: 'project_cost', entityId: Number(req.params.costId), entityLabel: before ? `${before.category} ${before.amount}` : null, before });
     res.json(mapProject(getProjectOrFail(req.params.projectId), getExchangeRateMap()));
   } catch (error) {
     next(error);
@@ -1034,7 +1209,7 @@ function generateReportFolio(projectId) {
   return `REP-${projectId}-${dateStr}-${String(counter).padStart(3, '0')}`;
 }
 
-app.get('/api/reports/projects', requireAuth, (req, res) => {
+app.get('/api/reports/projects', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
   const reportCountSql = '(SELECT COUNT(*) FROM project_reports WHERE project_id = p.id AND deleted_at IS NULL)';
@@ -1080,7 +1255,7 @@ app.get('/api/reports/projects', requireAuth, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, filters));
 });
 
-app.get('/api/reports', requireAuth, (req, res) => {
+app.get('/api/reports', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   const reports = db.prepare(
     `SELECT r.*, p.quote_number, p.order_number, p.client_name AS project_client,
             p.project_description, p.status AS project_status, p.closed_at
@@ -1091,7 +1266,7 @@ app.get('/api/reports', requireAuth, (req, res) => {
   res.json(reports);
 });
 
-app.get('/api/projects/:id/reports', requireAuth, (req, res, next) => {
+app.get('/api/projects/:id/reports', requireAuth, requirePermission('reports', 'view'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
     const { page, limit, search } = parsePaginationParams(req.query);
@@ -1136,7 +1311,7 @@ app.get('/api/projects/:id/reports', requireAuth, (req, res, next) => {
   }
 });
 
-app.get('/api/reports/:id', requireAuth, (req, res, next) => {
+app.get('/api/reports/:id', requireAuth, requirePermission('reports', 'view'), (req, res, next) => {
   try {
     const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
     if (!report) {
@@ -1151,7 +1326,7 @@ app.get('/api/reports/:id', requireAuth, (req, res, next) => {
   }
 });
 
-app.post('/api/reports', requireAuth, (req, res, next) => {
+app.post('/api/reports', requireAuth, requirePermission('reports', 'create'), (req, res, next) => {
   try {
     const projectId = req.body.project_id;
     if (!projectId) {
@@ -1207,7 +1382,7 @@ app.post('/api/reports', requireAuth, (req, res, next) => {
         working_pressure, pump_amperage, fan_amperage, condensate_tank_temp_c,
         operating_output_temp_c, flue_gas_temp_c, safety_tests, comments,
         emissions_low_fire, emissions_high_fire, technician_name, plant_manager_name,
-        report_data, created_by, updated_by
+        report_data, created_by, updated_by, created_by_user_id, updated_by_user_id, created_at, updated_at
       ) VALUES (
         @project_id, @report_folio, @report_type, @client_name, @client_address, @service_name,
         @report_date, @assigned_technicians, @burner_model, @equipment_model_serial,
@@ -1215,7 +1390,7 @@ app.post('/api/reports', requireAuth, (req, res, next) => {
         @working_pressure, @pump_amperage, @fan_amperage, @condensate_tank_temp_c,
         @operating_output_temp_c, @flue_gas_temp_c, @safety_tests, @comments,
         @emissions_low_fire, @emissions_high_fire, @technician_name, @plant_manager_name,
-        @report_data, @created_by, @updated_by
+        @report_data, @created_by, @updated_by, @created_by_user_id, @updated_by_user_id, @created_at, @updated_at
       )`,
     ).run({
       project_id: projectId,
@@ -1248,16 +1423,21 @@ app.post('/api/reports', requireAuth, (req, res, next) => {
       report_data: reportData,
       created_by: req.session.username,
       updated_by: req.session.username,
+      created_by_user_id: req.session.userId,
+      updated_by_user_id: req.session.userId,
+      created_at: nowUtc(),
+      updated_at: nowUtc(),
     });
 
     const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(result.lastInsertRowid);
+    logAuditEvent(db, { req, action: 'create', module: 'reports', entityType: 'project_report', entityId: result.lastInsertRowid, entityLabel: reportFolio });
     res.status(201).json(report);
   } catch (error) {
     next(error);
   }
 });
 
-app.put('/api/reports/:id', requireAuth, (req, res, next) => {
+app.put('/api/reports/:id', requireAuth, requirePermission('reports', 'edit'), (req, res, next) => {
   try {
     const report = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
     if (!report) {
@@ -1281,6 +1461,7 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
     const emissionsHigh = req.body.emissions_high_fire ? JSON.stringify(req.body.emissions_high_fire) : null;
     const reportData = req.body.report_data ? JSON.stringify(req.body.report_data) : report.report_data;
 
+    const auditUpdate = updatedByFields(req);
     db.prepare(
       `UPDATE project_reports SET
         client_name = @client_name, client_address = @client_address,
@@ -1294,7 +1475,7 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
         flue_gas_temp_c = @flue_gas_temp_c, safety_tests = @safety_tests, comments = @comments,
         emissions_low_fire = @emissions_low_fire, emissions_high_fire = @emissions_high_fire,
         technician_name = @technician_name, plant_manager_name = @plant_manager_name,
-        report_data = @report_data, updated_by = @updated_by, updated_at = CURRENT_TIMESTAMP
+        report_data = @report_data, updated_by = @updated_by, updated_by_user_id = @updated_by_user_id, updated_at = @updated_at
       WHERE id = @id`,
     ).run({
       id: req.params.id,
@@ -1324,9 +1505,12 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
       plant_manager_name: optionalText(req.body, 'plant_manager_name'),
       report_data: reportData,
       updated_by: req.session.username,
+      updated_by_user_id: req.session.userId,
+      updated_at: auditUpdate.updated_at,
     });
 
     const updated = db.prepare('SELECT * FROM project_reports WHERE id = ?').get(req.params.id);
+    logAuditEvent(db, { req, action: 'update', module: 'reports', entityType: 'project_report', entityId: Number(req.params.id), entityLabel: report.report_folio, before: report });
     res.json(updated);
   } catch (error) {
     next(error);
@@ -1335,11 +1519,11 @@ app.put('/api/reports/:id', requireAuth, (req, res, next) => {
 
 // ===================== REPORT ARCHIVE & NEW ENDPOINTS =====================
 
-app.get('/api/report-types', requireAuth, (req, res) => {
+app.get('/api/report-types', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   res.json(Object.entries(REPORT_TYPE_LABELS).map(([value, label]) => ({ value, label })));
 });
 
-app.get('/api/reports/active', requireAuth, (req, res) => {
+app.get('/api/reports/active', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const sorting = normalizeSort(req.query, {
     id: 'r.id',
@@ -1374,7 +1558,7 @@ app.get('/api/reports/active', requireAuth, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.get('/api/reports/archive/clients', requireAuth, (req, res) => {
+app.get('/api/reports/archive/clients', requireAuth, requirePermission('reportsArchive', 'view'), (req, res) => {
   const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
   let sql = `
     SELECT p.client_name,
@@ -1395,7 +1579,7 @@ app.get('/api/reports/archive/clients', requireAuth, (req, res) => {
   res.json({ data: clients });
 });
 
-app.get('/api/reports/archive/client/:clientName', requireAuth, (req, res) => {
+app.get('/api/reports/archive/client/:clientName', requireAuth, requirePermission('reportsArchive', 'view'), (req, res) => {
   const clientName = decodeURIComponent(req.params.clientName);
   const { page, limit, search } = parsePaginationParams(req.query);
   const sorting = normalizeSort(req.query, {
@@ -1429,7 +1613,7 @@ app.get('/api/reports/archive/client/:clientName', requireAuth, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.delete('/api/reports/:id', requireAuth, (req, res, next) => {
+app.delete('/api/reports/:id', requireAuth, requirePermission('reports', 'delete'), (req, res, next) => {
   try {
     if (req.session.role !== 'admin') {
       return res.status(403).json({
@@ -1443,16 +1627,18 @@ app.delete('/api/reports/:id', requireAuth, (req, res, next) => {
       throw error;
     }
     const reason = requiredText(req.body, 'delete_reason', 'Motivo de eliminacion');
+    const auditDel = deletedByFields(req);
     db.prepare(
-      `UPDATE project_reports SET deleted_at = CURRENT_TIMESTAMP, deleted_by = ?, delete_reason = ? WHERE id = ?`,
-    ).run(req.session.username, reason, req.params.id);
+      `UPDATE project_reports SET deleted_at = ?, deleted_by = ?, deleted_by_user_id = ?, delete_reason = ? WHERE id = ?`,
+    ).run(auditDel.deleted_at, req.session.username, auditDel.deleted_by_user_id, reason, req.params.id);
+    logAuditEvent(db, { req, action: 'soft_delete', module: 'reports', entityType: 'project_report', entityId: Number(req.params.id), entityLabel: report.report_folio, metadata: { reason } });
     res.json({ message: 'Reporte eliminado logicamente.' });
   } catch (error) {
     next(error);
   }
 });
 
-app.get('/api/closed-projects/by-client', requireAuth, (req, res) => {
+app.get('/api/closed-projects/by-client', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
   const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
   const exchangeRates = getExchangeRateMap();
   let sql = `
@@ -1473,7 +1659,7 @@ app.get('/api/closed-projects/by-client', requireAuth, (req, res) => {
   res.json({ data: clients });
 });
 
-app.get('/api/closed-projects/client/:clientName', requireAuth, (req, res) => {
+app.get('/api/closed-projects/client/:clientName', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
   const clientName = decodeURIComponent(req.params.clientName);
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
@@ -1504,7 +1690,7 @@ app.get('/api/closed-projects/client/:clientName', requireAuth, (req, res) => {
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
-app.get('/api/closed-projects/date-range', requireAuth, (req, res) => {
+app.get('/api/closed-projects/date-range', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.closed_at DESC, p.id DESC');
@@ -1575,6 +1761,8 @@ function mapEmployee(row) {
     days_taken: daysTaken,
     days_scheduled: daysScheduled,
     days_pending: daysAvailable,
+    created_at_cdmx: formatDateTimeCDMX(row.created_at),
+    updated_at_cdmx: formatDateTimeCDMX(row.updated_at),
   };
 }
 
@@ -1592,7 +1780,7 @@ function checkOverlap(employeeId, startDate, endDate, excludeRequestId) {
   return db.prepare(query).get(...params);
 }
 
-app.get('/api/employees', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/employees', requireAuth, requirePermission('vacations', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const activeFilter = typeof req.query.activeFilter === 'string' ? req.query.activeFilter.trim() : 'all';
   const safeActiveFilter = VALID_EMPLOYEE_FILTERS.includes(activeFilter) ? activeFilter : 'all';
@@ -1652,7 +1840,7 @@ app.get('/api/employees', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, { ...filters, ...collectActiveFilters(req.query, employeeFilters), activeFilter: safeActiveFilter }));
 });
 
-app.get('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.get('/api/employees/:id', requireAuth, requirePermission('vacations', 'view'), (req, res, next) => {
   try {
     const employee = getEmployeeOrFail(req.params.id);
     res.json(mapEmployee(employee));
@@ -1661,7 +1849,7 @@ app.get('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
   }
 });
 
-app.post('/api/employees', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/employees', requireAuth, requirePermission('vacations', 'create'), (req, res, next) => {
   try {
     const employeeNumber = requiredText(req.body, 'employee_number', 'Numero de empleado');
     const fullName = requiredText(req.body, 'full_name', 'Nombre completo');
@@ -1684,20 +1872,22 @@ app.post('/api/employees', requireAuth, requireAdmin, (req, res, next) => {
       terminationDate = null;
     }
 
+    const audit = createdByFields(req);
     const result = db.prepare(
-      `INSERT INTO employees (employee_number, full_name, hire_date, department, position, immediate_boss, active, termination_date, inactive_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, terminationDate, inactiveReason);
+      `INSERT INTO employees (employee_number, full_name, hire_date, department, position, immediate_boss, active, termination_date, inactive_reason, created_at, updated_at, created_by_user_id, created_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, terminationDate, inactiveReason, audit.created_at, audit.created_at, audit.created_by_user_id, audit.created_by_name);
 
+    logAuditEvent(db, { req, action: 'create', module: 'employees', entityType: 'employee', entityId: result.lastInsertRowid, entityLabel: fullName });
     res.status(201).json(mapEmployee(getEmployeeOrFail(result.lastInsertRowid)));
   } catch (error) {
     next(error);
   }
 });
 
-app.put('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.put('/api/employees/:id', requireAuth, requirePermission('vacations', 'edit'), (req, res, next) => {
   try {
-    getEmployeeOrFail(req.params.id);
+    const before = getEmployeeOrFail(req.params.id);
     const employeeNumber = requiredText(req.body, 'employee_number', 'Numero de empleado');
     const fullName = requiredText(req.body, 'full_name', 'Nombre completo');
     const hireDate = requiredText(req.body, 'hire_date', 'Fecha de ingreso');
@@ -1719,21 +1909,23 @@ app.put('/api/employees/:id', requireAuth, requireAdmin, (req, res, next) => {
       terminationDate = null;
     }
 
+    const audit = updatedByFields(req);
     db.prepare(
       `UPDATE employees SET
         employee_number = ?, full_name = ?, hire_date = ?, department = ?,
         position = ?, immediate_boss = ?, active = ?,
-        termination_date = ?, inactive_reason = ?, updated_at = CURRENT_TIMESTAMP
+        termination_date = ?, inactive_reason = ?, updated_at = ?, updated_by_user_id = ?, updated_by_name = ?
        WHERE id = ?`,
-    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, terminationDate, inactiveReason, req.params.id);
+    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, terminationDate, inactiveReason, audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, req.params.id);
 
+    logAuditEvent(db, { req, action: 'update', module: 'employees', entityType: 'employee', entityId: Number(req.params.id), entityLabel: fullName, before });
     res.json(mapEmployee(getEmployeeOrFail(req.params.id)));
   } catch (error) {
     next(error);
   }
 });
 
-app.get('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req, res, next) => {
+app.get('/api/employees/:id/vacation-requests', requireAuth, requirePermission('vacations', 'view'), (req, res, next) => {
   try {
     getEmployeeOrFail(req.params.id);
     const { page, limit, search } = parsePaginationParams(req.query);
@@ -1782,7 +1974,7 @@ app.get('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req,
   }
 });
 
-app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/employees/:id/vacation-requests', requireAuth, requirePermission('vacations', 'create'), (req, res, next) => {
   try {
     const employee = getEmployeeOrFail(req.params.id);
     if (!employee.active) {
@@ -1850,19 +2042,22 @@ app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req
       (r) => r.vacation_exercise_year === exerciseYear,
     );
 
+    const audit = createdByFields(req);
     const result = db.prepare(
       `INSERT INTO vacation_requests
         (employee_id, start_date, end_date, requested_days, vacation_exercise_year,
          status, is_first_vacation_of_exercise, include_vacation_bonus,
-         created_by, authorized_by, hr_responsible, notes,
-         creates_negative_balance, negative_days_generated, admin_override_reason, balance_after_request)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         created_by, created_by_user_id, authorized_by, hr_responsible, notes,
+         creates_negative_balance, negative_days_generated, admin_override_reason, balance_after_request,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       employee.id, startDate, endDate, requestedDays, exerciseYear,
       status,
       existingActiveRequests.length === 0 ? 1 : 0,
       includeVacationBonus,
       req.session.username,
+      audit.created_by_user_id,
       'Ivan Garcia',
       'Alejandra Gonzalez',
       notes,
@@ -1870,16 +2065,19 @@ app.post('/api/employees/:id/vacation-requests', requireAuth, requireAdmin, (req
       negativeDaysGenerated,
       adminOverrideReason,
       balanceAfterRequest,
+      audit.created_at,
+      audit.created_at,
     );
 
     const newRequest = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(result.lastInsertRowid);
+    logAuditEvent(db, { req, action: 'create', module: 'vacations', entityType: 'vacation_request', entityId: result.lastInsertRowid, entityLabel: `${employee.full_name} ${startDate}-${endDate}` });
     res.status(201).json(newRequest);
   } catch (error) {
     next(error);
   }
 });
 
-app.put('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.put('/api/vacation-requests/:id', requireAuth, requirePermission('vacations', 'edit'), (req, res, next) => {
   try {
     const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
     if (!request) {
@@ -1941,44 +2139,48 @@ app.put('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next
       ? (trim(req.body.admin_override_reason) || 'Vacaciones anticipadas autorizadas por direccion.')
       : null;
 
+    const audit = updatedByFields(req);
     db.prepare(
       `UPDATE vacation_requests SET
         start_date = ?, end_date = ?, requested_days = ?, status = ?,
         include_vacation_bonus = ?, notes = ?,
         creates_negative_balance = ?, negative_days_generated = ?,
         admin_override_reason = ?, balance_after_request = ?,
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = ?, updated_by_user_id = ?, updated_by_name = ?
        WHERE id = ?`,
     ).run(
       startDate, endDate, requestedDays, status, includeVacationBonus, notes,
       willCreateNegativeBalance ? 1 : 0, negativeDaysGenerated,
-      adminOverrideReason, balanceAfterRequest, request.id,
+      adminOverrideReason, balanceAfterRequest, audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, request.id,
     );
 
+    logAuditEvent(db, { req, action: 'update', module: 'vacations', entityType: 'vacation_request', entityId: request.id, entityLabel: `${employee.full_name} ${startDate}-${endDate}`, before: request });
     res.json(db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(request.id));
   } catch (error) {
     next(error);
   }
 });
 
-app.patch('/api/vacation-requests/:id/cancel', requireAuth, requireAdmin, (req, res, next) => {
+app.patch('/api/vacation-requests/:id/cancel', requireAuth, requirePermission('vacations', 'edit'), (req, res, next) => {
   try {
     const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
     if (!request) {
       throw badRequest('Solicitud no encontrada.');
     }
 
+    const audit = updatedByFields(req);
     db.prepare(
-      "UPDATE vacation_requests SET status = 'cancelada', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ).run(request.id);
+      "UPDATE vacation_requests SET status = 'cancelada', updated_at = ?, updated_by_user_id = ?, updated_by_name = ? WHERE id = ?",
+    ).run(audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, request.id);
 
+    logAuditEvent(db, { req, action: 'cancel', module: 'vacations', entityType: 'vacation_request', entityId: request.id, entityLabel: `Cancelada`, before: request });
     res.json(db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(request.id));
   } catch (error) {
     next(error);
   }
 });
 
-app.get('/api/vacation-requests/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.get('/api/vacation-requests/:id', requireAuth, requirePermission('vacations', 'view'), (req, res, next) => {
   try {
     const request = db.prepare('SELECT * FROM vacation_requests WHERE id = ?').get(req.params.id);
     if (!request) {
@@ -2066,7 +2268,7 @@ function recalculatePaymentUnallocated(paymentId) {
     .run(unallocated, paymentId);
 }
 
-app.get('/api/ecovis/summary', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/summary', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const projects = db.prepare('SELECT * FROM ecovis_projects').all();
   const payments = db.prepare('SELECT * FROM ecovis_payments').all();
   const allocations = db.prepare('SELECT * FROM ecovis_payment_allocations').all();
@@ -2075,7 +2277,7 @@ app.get('/api/ecovis/summary', requireAuth, requireAdmin, (req, res) => {
   res.json(summary);
 });
 
-app.get('/api/ecovis/projects', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const paidSql = `(SELECT COALESCE(SUM(a.amount), 0) FROM ecovis_payment_allocations a WHERE a.ecovis_project_id = ep.id AND a.is_cancelled = 0)`;
   const pendingSql = `(ep.total_amount - ${paidSql})`;
@@ -2132,7 +2334,7 @@ app.get('/api/ecovis/projects', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, filters));
 });
 
-app.post('/api/ecovis/projects', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const projectName = requiredText(req.body, 'project_name', 'Nombre del proyecto');
     const projectDate = requiredText(req.body, 'project_date', 'Fecha del proyecto');
@@ -2144,37 +2346,41 @@ app.post('/api/ecovis/projects', requireAuth, requireAdmin, (req, res, next) => 
     const description = optionalText(req.body, 'description');
     const notes = optionalText(req.body, 'notes');
 
+    const ecovisPurchaseOrderId = req.body.ecovis_purchase_order_id || null;
+
+    const audit = createdByFields(req);
     const createProject = db.transaction(() => {
       const result = db.prepare(
         `INSERT INTO ecovis_projects (
           project_name, project_date, total_amount, currency,
           quote_number, purchase_order_number, invoice_number,
-          description, notes, status, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)`,
+          description, notes, status, created_by, created_by_user_id, created_at, updated_at, ecovis_purchase_order_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?)`,
       ).run(
         projectName, projectDate, totalAmount, currency,
         quoteNumber, purchaseOrderNumber, invoiceNumber,
-        description, notes, req.session.username,
+        description, notes, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at, ecovisPurchaseOrderId,
       );
 
       db.prepare(
         `INSERT INTO ecovis_movements (
           movement_type, movement_date, amount, currency, direction,
-          description, related_project_id, created_by
-        ) VALUES ('proyecto', ?, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?)`,
-      ).run(projectDate, totalAmount, currency, projectName, result.lastInsertRowid, req.session.username);
+          description, related_project_id, created_by, created_by_user_id, created_at, updated_at
+        ) VALUES ('proyecto', ?, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?, ?, ?)`,
+      ).run(projectDate, totalAmount, currency, projectName, result.lastInsertRowid, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
 
       return result.lastInsertRowid;
     });
 
     const projectId = createProject();
+    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_project', entityId: projectId, entityLabel: projectName });
     res.status(201).json(getEcovisProjectOrFail(projectId));
   } catch (error) {
     next(error);
   }
 });
 
-app.put('/api/ecovis/projects/:id', requireAuth, requireAdmin, (req, res, next) => {
+app.put('/api/ecovis/projects/:id', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
   try {
     const project = getEcovisProjectOrFail(req.params.id);
     if (project.is_cancelled) {
@@ -2191,26 +2397,28 @@ app.put('/api/ecovis/projects/:id', requireAuth, requireAdmin, (req, res, next) 
     const description = optionalText(req.body, 'description');
     const notes = optionalText(req.body, 'notes');
 
+    const audit = updatedByFields(req);
     db.prepare(
       `UPDATE ecovis_projects SET
         project_name = ?, project_date = ?, total_amount = ?, currency = ?,
         quote_number = ?, purchase_order_number = ?, invoice_number = ?,
-        description = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+        description = ?, notes = ?, updated_at = ?, updated_by = ?, updated_by_user_id = ?
       WHERE id = ?`,
     ).run(
       projectName, projectDate, totalAmount, currency,
       quoteNumber, purchaseOrderNumber, invoiceNumber,
-      description, notes, req.params.id,
+      description, notes, audit.updated_at, audit.updated_by_name, audit.updated_by_user_id, req.params.id,
     );
 
     recalculateProjectStatus(req.params.id);
+    logAuditEvent(db, { req, action: 'update', module: 'ecovis', entityType: 'ecovis_project', entityId: Number(req.params.id), entityLabel: projectName, before: project });
     res.json(getEcovisProjectOrFail(req.params.id));
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/ecovis/projects/:id/cancel', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/projects/:id/cancel', requireAuth, requirePermission('ecovisAccount', 'cancel'), (req, res, next) => {
   try {
     const project = getEcovisProjectOrFail(req.params.id);
     if (project.is_cancelled) {
@@ -2218,21 +2426,22 @@ app.post('/api/ecovis/projects/:id/cancel', requireAuth, requireAdmin, (req, res
     }
     const reason = requiredText(req.body, 'reason', 'Motivo de cancelacion');
 
+    const audit = updatedByFields(req);
     const cancelProject = db.transaction(() => {
       db.prepare(
         `UPDATE ecovis_projects SET
-          is_cancelled = 1, cancelled_at = CURRENT_TIMESTAMP,
+          is_cancelled = 1, cancelled_at = ?,
           cancelled_by = ?, cancellation_reason = ?,
-          status = 'cancelado', updated_at = CURRENT_TIMESTAMP
+          status = 'cancelado', updated_at = ?, updated_by = ?, updated_by_user_id = ?
         WHERE id = ?`,
-      ).run(req.session.username, reason, req.params.id);
+      ).run(audit.updated_at, req.session.username, reason, audit.updated_at, audit.updated_by_name, audit.updated_by_user_id, req.params.id);
 
       db.prepare(
         `INSERT INTO ecovis_movements (
           movement_type, movement_date, amount, currency, direction,
-          description, related_project_id, created_by
-        ) VALUES ('cancelacion', date('now'), ?, ?, 'ecovis_debe_a_revram', ?, ?, ?)`,
-      ).run(project.total_amount, project.currency, reason, req.params.id, req.session.username);
+          description, related_project_id, created_by, created_by_user_id, created_at, updated_at
+        ) VALUES ('cancelacion', date('now'), ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?, ?, ?)`,
+      ).run(project.total_amount, project.currency, reason, req.params.id, req.session.username, audit.updated_by_user_id, audit.updated_at, audit.updated_at);
 
       const affectedPayments = db.prepare(
         'SELECT DISTINCT payment_id FROM ecovis_payment_allocations WHERE ecovis_project_id = ?',
@@ -2243,13 +2452,14 @@ app.post('/api/ecovis/projects/:id/cancel', requireAuth, requireAdmin, (req, res
     });
 
     cancelProject();
+    logAuditEvent(db, { req, action: 'cancel', module: 'ecovis', entityType: 'ecovis_project', entityId: Number(req.params.id), entityLabel: project.project_name, metadata: { reason } });
     res.json(getEcovisProjectOrFail(req.params.id));
   } catch (error) {
     next(error);
   }
 });
 
-app.get('/api/ecovis/payments', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const allocatedSql = '(ep.amount - ep.unallocated_amount)';
   const statusSql = "(CASE WHEN ep.is_cancelled = 1 THEN 'cancelado' WHEN ep.unallocated_amount > 0 THEN 'parcial' ELSE 'asignado' END)";
@@ -2306,7 +2516,7 @@ app.get('/api/ecovis/payments', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, filters));
 });
 
-app.post('/api/ecovis/payments', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const paymentDate = requiredText(req.body, 'payment_date', 'Fecha de pago');
     const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
@@ -2316,33 +2526,35 @@ app.post('/api/ecovis/payments', requireAuth, requireAdmin, (req, res, next) => 
     const sourceDescription = optionalText(req.body, 'source_description');
     const notes = optionalText(req.body, 'notes');
 
+    const audit = createdByFields(req);
     const createPayment = db.transaction(() => {
       const result = db.prepare(
         `INSERT INTO ecovis_payments (
           payment_date, amount, currency, payment_method,
           bank_reference, source_description, notes,
-          unallocated_amount, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(paymentDate, amount, currency, paymentMethod, bankReference, sourceDescription, notes, amount, req.session.username);
+          unallocated_amount, created_by, created_by_user_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(paymentDate, amount, currency, paymentMethod, bankReference, sourceDescription, notes, amount, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
 
       db.prepare(
         `INSERT INTO ecovis_movements (
           movement_type, movement_date, amount, currency, direction,
-          description, related_payment_id, created_by
-        ) VALUES ('pago_recibido', ?, ?, ?, 'neutral', ?, ?, ?)`,
-      ).run(paymentDate, amount, currency, sourceDescription || 'Pago recibido', result.lastInsertRowid, req.session.username);
+          description, related_payment_id, created_by, created_by_user_id, created_at, updated_at
+        ) VALUES ('pago_recibido', ?, ?, ?, 'neutral', ?, ?, ?, ?, ?, ?)`,
+      ).run(paymentDate, amount, currency, sourceDescription || 'Pago recibido', result.lastInsertRowid, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
 
       return result.lastInsertRowid;
     });
 
     const paymentId = createPayment();
+    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_payment', entityId: paymentId, entityLabel: `Pago ${amount} ${currency}` });
     res.status(201).json(getEcovisPaymentOrFail(paymentId));
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/ecovis/payments/:id/allocations', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
   try {
     const payment = getEcovisPaymentOrFail(req.params.id);
     if (payment.is_cancelled) {
@@ -2428,7 +2640,7 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requireAdmin, (req
   }
 });
 
-app.get('/api/ecovis/loans', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/loans', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const repaidSql = `(SELECT COALESCE(SUM(r.amount), 0) FROM ecovis_movements r WHERE r.movement_type = 'devolucion' AND r.reference = CAST(em.id AS TEXT))`;
   const outstandingSql = `(em.amount - ${repaidSql})`;
@@ -2482,7 +2694,7 @@ app.get('/api/ecovis/loans', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(data, pag, sorting, filters));
 });
 
-app.post('/api/ecovis/loans', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/loans', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
     const movementDate = requiredText(req.body, 'movement_date', 'Fecha del movimiento');
@@ -2505,7 +2717,7 @@ app.post('/api/ecovis/loans', requireAuth, requireAdmin, (req, res, next) => {
   }
 });
 
-app.post('/api/ecovis/loans/:id/repayment', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/loans/:id/repayment', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
   try {
     const loan = db.prepare(
       "SELECT * FROM ecovis_movements WHERE id = ? AND movement_type = 'prestamo_ecovis_a_revram'",
@@ -2535,7 +2747,7 @@ app.post('/api/ecovis/loans/:id/repayment', requireAuth, requireAdmin, (req, res
   }
 });
 
-app.get('/api/ecovis/movements', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/ecovis/movements', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const movementType = typeof req.query.movement_type === 'string'
     ? req.query.movement_type.trim()
@@ -2591,7 +2803,7 @@ app.get('/api/ecovis/movements', requireAuth, requireAdmin, (req, res) => {
   res.json(buildListResponse(movements, pag, sorting, filters));
 });
 
-app.post('/api/ecovis/adjustments', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/adjustments', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const movementDate = requiredText(req.body, 'movement_date', 'Fecha del movimiento');
     const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
@@ -2617,7 +2829,7 @@ app.post('/api/ecovis/adjustments', requireAuth, requireAdmin, (req, res, next) 
   }
 });
 
-app.post('/api/ecovis/apply-credit', requireAuth, requireAdmin, (req, res, next) => {
+app.post('/api/ecovis/apply-credit', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
   try {
     const ecovisProjectId = req.body.ecovis_project_id;
     if (!ecovisProjectId) {
@@ -2662,6 +2874,185 @@ app.post('/api/ecovis/apply-credit', requireAuth, requireAdmin, (req, res, next)
   }
 });
 
+// ===================== ECOVIS PURCHASE ORDERS =====================
+
+app.get('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const sorting = normalizeSort(req.query, {
+    id: 'po.id',
+    purchase_order_number: 'po.purchase_order_number',
+    order_date: 'po.order_date',
+    total_amount: 'po.total_amount',
+    status: 'po.status',
+  }, 'po.order_date DESC');
+
+  const { whereClause, params, filters } = buildWhere({
+    query: req.query,
+    filters: {
+      status: { type: 'select', column: 'po.status', options: ['pendiente', 'parcialmente_pagada', 'pagada', 'cancelada'] },
+      purchase_order_number: { type: 'text', column: 'po.purchase_order_number' },
+    },
+    search: { value: search, columns: ['po.purchase_order_number', 'po.project_name', 'po.notes'] },
+  });
+
+  const allAllocations = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE is_cancelled = 0').all();
+  const result = paginateSqlList({
+    tableSql: 'SELECT po.* FROM ecovis_purchase_orders po',
+    countSql: 'SELECT COUNT(*) as count FROM ecovis_purchase_orders po',
+    whereClause,
+    params,
+    page,
+    limit,
+    orderBy: sorting.orderBy,
+    map: (po) => {
+      const balance = calculatePurchaseOrderBalance(po, allAllocations);
+      return { ...po, ...balance, created_at_cdmx: formatDateTimeCDMX(po.created_at), updated_at_cdmx: formatDateTimeCDMX(po.updated_at) };
+    },
+  });
+
+  res.json(buildListResponse(result.data, result.pagination, sorting, filters));
+});
+
+app.get('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res, next) => {
+  try {
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    if (!po) throw badRequest('Orden de compra no encontrada.');
+    const allAllocations = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE is_cancelled = 0').all();
+    const balance = calculatePurchaseOrderBalance(po, allAllocations);
+    const poAllocations = db.prepare(
+      `SELECT a.*, p.payment_date, p.bank_reference, p.amount as payment_amount
+       FROM ecovis_payment_allocations a
+       JOIN ecovis_payments p ON a.payment_id = p.id
+       WHERE a.ecovis_purchase_order_id = ? AND a.is_cancelled = 0
+       ORDER BY a.created_at DESC`,
+    ).all(po.id);
+    const relatedProjects = db.prepare('SELECT * FROM ecovis_projects WHERE ecovis_purchase_order_id = ? AND is_cancelled = 0').all(po.id);
+    res.json({ ...po, ...balance, allocations: poAllocations, related_projects: relatedProjects, created_at_cdmx: formatDateTimeCDMX(po.created_at) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
+  try {
+    const purchaseOrderNumber = requiredText(req.body, 'purchase_order_number', 'Numero de orden de compra');
+    const orderDate = requiredText(req.body, 'order_date', 'Fecha de orden');
+    const totalAmount = numberValue(req.body, 'total_amount', 'Monto total', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const projectName = optionalText(req.body, 'project_name');
+    const notes = optionalText(req.body, 'notes');
+    const audit = createdByFields(req);
+
+    const existing = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0').get(purchaseOrderNumber);
+    if (existing) throw badRequest('Ya existe una OC activa con ese numero.');
+
+    const result = db.prepare(
+      `INSERT INTO ecovis_purchase_orders (purchase_order_number, project_name, order_date, total_amount, currency, notes, created_by, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, notes, req.session.username, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+
+    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: result.lastInsertRowid, entityLabel: purchaseOrderNumber });
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(result.lastInsertRowid);
+    res.status(201).json(po);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
+  try {
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    if (!po) throw badRequest('Orden de compra no encontrada.');
+    if (po.is_cancelled) throw badRequest('No se puede editar una OC cancelada.');
+
+    const purchaseOrderNumber = requiredText(req.body, 'purchase_order_number', 'Numero de orden de compra');
+    const orderDate = requiredText(req.body, 'order_date', 'Fecha de orden');
+    const totalAmount = numberValue(req.body, 'total_amount', 'Monto total', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const projectName = optionalText(req.body, 'project_name');
+    const notes = optionalText(req.body, 'notes');
+    const audit = updatedByFields(req);
+
+    const dup = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0 AND id != ?').get(purchaseOrderNumber, req.params.id);
+    if (dup) throw badRequest('Ya existe otra OC activa con ese numero.');
+
+    db.prepare(
+      `UPDATE ecovis_purchase_orders SET purchase_order_number = ?, project_name = ?, order_date = ?, total_amount = ?, currency = ?, notes = ?, updated_by = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`,
+    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, notes, req.session.username, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
+
+    logAuditEvent(db, { req, action: 'update', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: Number(req.params.id), entityLabel: purchaseOrderNumber, before: po });
+    res.json(db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/ecovis/purchase-orders/:id/cancel', requireAuth, requirePermission('ecovisAccount', 'cancel'), (req, res, next) => {
+  try {
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    if (!po) throw badRequest('Orden de compra no encontrada.');
+    if (po.is_cancelled) throw badRequest('La OC ya esta cancelada.');
+    const reason = requiredText(req.body, 'reason', 'Motivo de cancelacion');
+    const audit = updatedByFields(req);
+
+    db.prepare(
+      `UPDATE ecovis_purchase_orders SET is_cancelled = 1, status = 'cancelada', cancelled_at = ?, cancelled_by = ?, cancellation_reason = ?, updated_at = ?, updated_by_user_id = ?, updated_by_name = ? WHERE id = ?`,
+    ).run(audit.updated_at, req.session.username, reason, audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, req.params.id);
+
+    logAuditEvent(db, { req, action: 'cancel', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: Number(req.params.id), entityLabel: po.purchase_order_number, metadata: { reason } });
+    res.json(db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/ecovis/purchase-orders/:id/allocate', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
+  try {
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    if (!po) throw badRequest('Orden de compra no encontrada.');
+    if (po.is_cancelled) throw badRequest('No se puede asignar a una OC cancelada.');
+
+    const paymentId = req.body.payment_id;
+    if (!paymentId) throw badRequest('payment_id es obligatorio.');
+    const payment = db.prepare('SELECT * FROM ecovis_payments WHERE id = ?').get(paymentId);
+    if (!payment) throw badRequest('Pago no encontrado.');
+    if (payment.is_cancelled) throw badRequest('No se puede asignar a un pago cancelado.');
+
+    const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
+    const notes = optionalText(req.body, 'notes');
+    const audit = createdByFields(req);
+
+    const existingAllocs = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE payment_id = ? AND is_cancelled = 0').all(paymentId);
+    const totalAllocated = existingAllocs.reduce((s, a) => s + Number(a.amount), 0);
+    const available = Number(payment.amount) - totalAllocated;
+    if (amount > available + 0.01) throw badRequest(`Monto excede el disponible del pago ($${available.toFixed(2)}).`);
+
+    const result = db.prepare(
+      `INSERT INTO ecovis_payment_allocations (payment_id, ecovis_purchase_order_id, allocation_type, amount, notes, created_by, created_by_user_id, created_at, updated_at)
+       VALUES (?, ?, 'orden_compra', ?, ?, ?, ?, ?, ?)`,
+    ).run(paymentId, po.id, amount, notes, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
+
+    recalculatePaymentUnallocated(paymentId);
+    recalculatePurchaseOrderStatus(po.id);
+
+    logAuditEvent(db, { req, action: 'allocate_to_po', module: 'ecovis', entityType: 'ecovis_payment_allocation', entityId: result.lastInsertRowid, entityLabel: `${po.purchase_order_number} $${amount}` });
+    res.status(201).json(db.prepare('SELECT * FROM ecovis_payment_allocations WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) {
+    next(error);
+  }
+});
+
+function recalculatePurchaseOrderStatus(poId) {
+  const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(poId);
+  if (!po || po.is_cancelled) return;
+  const allocs = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND is_cancelled = 0').all(poId);
+  const totalApplied = allocs.reduce((s, a) => s + Number(a.amount), 0);
+  let newStatus = 'pendiente';
+  if (totalApplied >= Number(po.total_amount)) newStatus = 'pagada';
+  else if (totalApplied > 0) newStatus = 'parcialmente_pagada';
+  db.prepare('UPDATE ecovis_purchase_orders SET status = ? WHERE id = ?').run(newStatus, poId);
+}
+
 // ===================== END ECOVIS MODULE =====================
 
 // ===================== BACKUP MODULE =====================
@@ -2674,7 +3065,7 @@ const {
   buildCoverageManifest,
 } = require('./backupRegistry');
 
-app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/backup', requireAuth, requirePermission('backups', 'backup'), (req, res) => {
   const entities = getIncludedEntities();
   const data = {};
   const recordCounts = {};
@@ -2719,6 +3110,8 @@ app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
     data,
   };
 
+  logAuditEvent(db, { req, action: 'backup_create', module: 'backup', entityType: 'backup', entityLabel: `Respaldo ${backup.backupMetadata.exportedAt}`, metadata: { recordCounts, warnings } });
+
   if (warnings.length > 0) {
     return res.status(207).json(backup);
   }
@@ -2726,7 +3119,7 @@ app.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
   res.json(backup);
 });
 
-app.post('/api/admin/backup/preview', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/admin/backup/preview', requireAuth, requirePermission('backups', 'import'), (req, res) => {
   const backup = req.body;
   if (!backup || !backup.backupMetadata || !backup.data) {
     return res.status(400).json({ message: 'Archivo de respaldo invalido. Faltan backupMetadata o data.' });
@@ -2819,7 +3212,7 @@ app.post('/api/admin/backup/preview', requireAuth, requireAdmin, (req, res) => {
   res.json({ preview, conflicts, schemaVersion: backup.backupMetadata.schemaVersion });
 });
 
-app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', 'import'), (req, res) => {
   const backup = req.body;
   if (!backup || !backup.backupMetadata || !backup.data) {
     return res.status(400).json({ message: 'Archivo de respaldo invalido.' });
@@ -2841,10 +3234,10 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
 
   const importInTransaction = db.transaction(() => {
     const orderedEntities = [
-      'settings', 'usersSafe', 'projects', 'closedProjects',
+      'settings', 'usersSafe', 'userPermissions', 'projects', 'closedProjects',
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
-      'projectReports', 'reportsArchive', 'ecovisProjects', 'ecovisPayments',
-      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements',
+      'projectReports', 'reportsArchive', 'ecovisPurchaseOrders', 'ecovisProjects', 'ecovisPayments',
+      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs', 'backupImportLogs',
     ];
 
     for (const entityKey of orderedEntities) {
@@ -2876,7 +3269,7 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
           continue;
         }
 
-        if (entityKey === 'usersSafe' || entityKey === 'settings') { skipped++; continue; }
+        if (entityKey === 'usersSafe' || entityKey === 'settings' || entityKey === 'auditLogs' || entityKey === 'loginAttempts' || entityKey === 'userPermissions' || entityKey === 'backupImportLogs') { skipped++; continue; }
 
         try {
           if (entityKey === 'projects' || entityKey === 'closedProjects') {
@@ -2913,6 +3306,11 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
             if (existing) { skipped++; continue; }
             db.prepare('INSERT INTO project_reports (project_id, report_folio, client_name, client_address, service_name, report_date, assigned_technicians, burner_model, equipment_model_serial, pumps_motors_model, fuel, voltage, gas_pressure_inh2o, liquid_fuel_pressure_psi, working_pressure, pump_amperage, fan_amperage, condensate_tank_temp_c, operating_output_temp_c, flue_gas_temp_c, safety_tests, comments, emissions_low_fire, emissions_high_fire, technician_name, plant_manager_name, created_by, updated_by, report_type, report_data, deleted_at, deleted_by, delete_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.project_id, row.report_folio, row.client_name, row.client_address || null, row.service_name, row.report_date, row.assigned_technicians || null, row.burner_model || null, row.equipment_model_serial || null, row.pumps_motors_model || null, row.fuel || null, row.voltage || null, row.gas_pressure_inh2o || null, row.liquid_fuel_pressure_psi || null, row.working_pressure || null, row.pump_amperage || null, row.fan_amperage || null, row.condensate_tank_temp_c || null, row.operating_output_temp_c || null, row.flue_gas_temp_c || null, row.safety_tests || null, row.comments || null, row.emissions_low_fire || null, row.emissions_high_fire || null, row.technician_name || null, row.plant_manager_name || null, row.created_by || null, row.updated_by || null, row.report_type || 'boiler_startup', row.report_data || null, row.deleted_at || null, row.deleted_by || null, row.delete_reason || null);
             added++;
+          } else if (entityKey === 'ecovisPurchaseOrders') {
+            const existingPo = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ?').get(row.purchase_order_number);
+            if (existingPo) { skipped++; continue; }
+            db.prepare('INSERT INTO ecovis_purchase_orders (purchase_order_number, project_name, client_name, order_date, total_amount, currency, status, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.purchase_order_number, row.project_name || null, row.client_name || 'ECOVIS', row.order_date, row.total_amount, row.currency || 'MXN', row.status || 'pendiente', row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null);
+            added++;
           } else if (entityKey === 'ecovisProjects') {
             db.prepare('INSERT INTO ecovis_projects (project_name, client_name, quote_number, purchase_order_number, invoice_number, project_date, description, total_amount, currency, status, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.project_name, row.client_name || 'ECOVIS', row.quote_number || null, row.purchase_order_number || null, row.invoice_number || null, row.project_date, row.description || null, row.total_amount, row.currency || 'MXN', row.status || 'pendiente', row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null, row.updated_by || null);
             added++;
@@ -2926,6 +3324,9 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
             added++;
           } else if (entityKey === 'ecovisLoans' || entityKey === 'ecovisMovements') {
             db.prepare('INSERT INTO ecovis_movements (movement_date, movement_type, description, amount, currency, direction, reference, related_project_id, related_payment_id, payment_method, bank_reference, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.movement_date, row.movement_type, row.description, row.amount, row.currency || 'MXN', row.direction || 'neutral', row.reference || null, row.related_project_id || null, row.related_payment_id || null, row.payment_method || null, row.bank_reference || null, row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null, row.updated_by || null);
+            added++;
+          } else if (entityKey === 'auditLogs') {
+            db.prepare('INSERT INTO audit_logs (user_id, user_name, action, module, entity_type, entity_id, entity_label, timestamp_utc, ip_address, user_agent, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.user_id || null, row.user_name || null, row.action, row.module || null, row.entity_type || null, row.entity_id || null, row.entity_label || null, row.timestamp_utc, row.ip_address || null, row.user_agent || null, row.metadata_json || null, row.created_at || row.timestamp_utc);
             added++;
           }
         } catch (err) {
@@ -2945,6 +3346,8 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
   } catch (err) {
     importLog.status = 'failed';
     importLog.errors.push({ critical: true, error: err.message });
+    logAuditEvent(db, { req, action: 'backup_import', module: 'backup', entityType: 'backup', entityLabel: 'Import failed', metadata: { status: 'failed', error: err.message } });
+    persistImportLog(importLog, null);
     return res.status(500).json({ message: 'Error critico durante importacion. Se realizo rollback.', importLog });
   }
 
@@ -2952,7 +3355,113 @@ app.post('/api/admin/backup/import', requireAuth, requireAdmin, (req, res) => {
     importLog.status = 'completed_with_warnings';
   }
 
+  const validation = validatePostImport();
+  importLog.validation = validation;
+  if (validation.errors.length > 0) {
+    importLog.status = 'completed_with_warnings';
+  }
+
+  persistImportLog(importLog, validation);
+  logAuditEvent(db, { req, action: 'backup_import', module: 'backup', entityType: 'backup', entityLabel: `Import ${importLog.status}`, metadata: { status: importLog.status, summary: importLog.summary } });
   res.json({ message: 'Importacion completada.', importLog });
+});
+
+function validatePostImport() {
+  const errors = [];
+  const warnings = [];
+
+  const activeAdmin = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1").get();
+  if (!activeAdmin || activeAdmin.count === 0) {
+    errors.push('No existe un administrador activo en el sistema despues de la importacion.');
+  }
+
+  const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get();
+  if (!totalUsers || totalUsers.count === 0) {
+    errors.push('No existen usuarios en el sistema despues de la importacion.');
+  }
+
+  const orphanPayments = db.prepare('SELECT COUNT(*) as count FROM project_payments WHERE project_id NOT IN (SELECT id FROM projects)').get();
+  if (orphanPayments && orphanPayments.count > 0) {
+    warnings.push(`${orphanPayments.count} pagos sin proyecto padre valido.`);
+  }
+
+  const orphanCosts = db.prepare('SELECT COUNT(*) as count FROM project_costs WHERE project_id NOT IN (SELECT id FROM projects)').get();
+  if (orphanCosts && orphanCosts.count > 0) {
+    warnings.push(`${orphanCosts.count} costos sin proyecto padre valido.`);
+  }
+
+  const orphanPerms = db.prepare('SELECT COUNT(*) as count FROM user_permissions WHERE user_id NOT IN (SELECT id FROM users)').get();
+  if (orphanPerms && orphanPerms.count > 0) {
+    warnings.push(`${orphanPerms.count} permisos referenciando usuarios inexistentes.`);
+  }
+
+  return { valid: errors.length === 0, errors, warnings };
+}
+
+function persistImportLog(importLog, validation) {
+  try {
+    db.prepare(
+      `INSERT INTO backup_import_logs (imported_at, imported_by, schema_version, backup_exported_at, status, summary_json, conflicts_json, errors_json, validation_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      importLog.importedAt,
+      importLog.importedBy,
+      importLog.schemaVersion || null,
+      importLog.backupExportedAt || null,
+      importLog.status,
+      JSON.stringify(importLog.summary),
+      JSON.stringify(importLog.conflicts),
+      JSON.stringify(importLog.errors),
+      validation ? JSON.stringify(validation) : null,
+    );
+  } catch (err) {
+    console.error('Failed to persist import log:', err.message);
+  }
+}
+
+app.get('/api/admin/backup/logs', requireAuth, requirePermission('backups', 'view'), (req, res) => {
+  const logs = db.prepare('SELECT * FROM backup_import_logs ORDER BY id DESC LIMIT 50').all();
+  res.json({ data: logs.map((l) => ({ ...l, imported_at_cdmx: formatDateTimeCDMX(l.imported_at) })) });
+});
+
+// ===================== AUDIT LOGS =====================
+
+app.get('/api/admin/audit-logs', requireAuth, requirePermission('backups', 'view'), (req, res) => {
+  const { page, limit } = parsePaginationParams(req.query);
+  const sorting = normalizeSort(req.query, {
+    id: 'id',
+    timestamp_utc: 'timestamp_utc',
+    action: 'action',
+    module: 'module',
+    user_name: 'user_name',
+  }, 'timestamp_utc DESC');
+
+  const { whereClause, params, filters } = buildWhere({
+    query: req.query,
+    filters: {
+      action: { type: 'text', column: 'action' },
+      module: { type: 'text', column: 'module' },
+      user_name: { type: 'text', column: 'user_name' },
+      entity_type: { type: 'text', column: 'entity_type' },
+    },
+  });
+
+  const result = paginateSqlList({
+    tableSql: 'SELECT * FROM audit_logs',
+    countSql: 'SELECT COUNT(*) as count FROM audit_logs',
+    whereClause,
+    params,
+    page,
+    limit,
+    orderBy: sorting.orderBy,
+    map: (row) => ({
+      ...row,
+      timestamp_cdmx: formatDateTimeCDMX(row.timestamp_utc),
+      created_at_cdmx: formatDateTimeCDMX(row.created_at),
+    }),
+  });
+
+  res.json(buildListResponse(result.data, result.pagination, sorting, filters));
 });
 
 // ===================== END BACKUP MODULE =====================
@@ -2975,6 +3484,9 @@ app.use((err, req, res, next) => {
   }
 
   const statusCode = err.statusCode || 500;
+  if (statusCode === 500) {
+    console.error('Unhandled error:', err.message, err.stack);
+  }
   const message = statusCode === 500 ? 'Ocurrio un error inesperado.' : err.message;
   return res.status(statusCode).json({ message });
 });
