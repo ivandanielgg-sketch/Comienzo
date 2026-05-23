@@ -86,7 +86,7 @@ test('backup module', async (t) => {
     assert.ok(res.body.backupMetadata);
     assert.ok(res.body.coverageManifest);
     assert.ok(res.body.data);
-    assert.equal(res.body.backupMetadata.schemaVersion, '2.0.0');
+    assert.equal(res.body.backupMetadata.schemaVersion, '3.0.0');
     assert.equal(res.body.backupMetadata.appName, 'REVRAM Dashboard');
     assert.ok(res.body.backupMetadata.exportedAt);
     assert.ok(res.body.backupMetadata.recordCounts);
@@ -156,6 +156,8 @@ test('backup module', async (t) => {
     delete afterCounts.auditLogs;
     delete beforeCounts.loginAttempts;
     delete afterCounts.loginAttempts;
+    delete beforeCounts.backupImportLogs;
+    delete afterCounts.backupImportLogs;
     assert.deepEqual(beforeCounts, afterCounts);
   });
 
@@ -288,5 +290,7 @@ test('backup module', async (t) => {
     const includedKeys = res.body.coverageManifest.entitiesIncluded;
     assert.ok(includedKeys.includes('auditLogs'), 'Should include auditLogs in included entities');
     assert.ok(includedKeys.includes('loginAttempts'), 'Should include loginAttempts in included entities');
+    assert.ok(includedKeys.includes('backupImportLogs'), 'Should include backupImportLogs in included entities');
+    assert.ok(includedKeys.includes('userPermissions'), 'Should include userPermissions in included entities');
   });
 });

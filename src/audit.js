@@ -6,10 +6,15 @@ const SENSITIVE_FIELDS = [
   'password',
   'password_hash',
   'passwordHash',
+  'adminPassword',
+  'currentPassword',
+  'newPassword',
+  'confirmPassword',
   'token',
   'cookie',
   'secret',
   'session_secret',
+  'mfa_secret',
   'sess',
 ];
 
