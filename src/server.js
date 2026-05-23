@@ -15,7 +15,7 @@ const {
   addSqlFilters,
   buildListResponse,
 } = require('./pagination');
-const { calculateEcovisAccountSummary, calculateProjectPaidAmount, calculateProjectStatus, calculatePaymentUnallocated } = require('./ecovis');
+const { calculateEcovisAccountSummary, calculateProjectPaidAmount, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance } = require('./ecovis');
 const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { formatDateTimeCDMX } = require('./dateHelper');
 const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES } = require('./permissions');
@@ -2346,18 +2346,20 @@ app.post('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount',
     const description = optionalText(req.body, 'description');
     const notes = optionalText(req.body, 'notes');
 
+    const ecovisPurchaseOrderId = req.body.ecovis_purchase_order_id || null;
+
     const audit = createdByFields(req);
     const createProject = db.transaction(() => {
       const result = db.prepare(
         `INSERT INTO ecovis_projects (
           project_name, project_date, total_amount, currency,
           quote_number, purchase_order_number, invoice_number,
-          description, notes, status, created_by, created_by_user_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?)`,
+          description, notes, status, created_by, created_by_user_id, created_at, updated_at, ecovis_purchase_order_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?)`,
       ).run(
         projectName, projectDate, totalAmount, currency,
         quoteNumber, purchaseOrderNumber, invoiceNumber,
-        description, notes, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at,
+        description, notes, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at, ecovisPurchaseOrderId,
       );
 
       db.prepare(
@@ -2872,6 +2874,185 @@ app.post('/api/ecovis/apply-credit', requireAuth, requirePermission('ecovisAccou
   }
 });
 
+// ===================== ECOVIS PURCHASE ORDERS =====================
+
+app.get('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const sorting = normalizeSort(req.query, {
+    id: 'po.id',
+    purchase_order_number: 'po.purchase_order_number',
+    order_date: 'po.order_date',
+    total_amount: 'po.total_amount',
+    status: 'po.status',
+  }, 'po.order_date DESC');
+
+  const { whereClause, params, filters } = buildWhere({
+    query: req.query,
+    filters: {
+      status: { type: 'select', column: 'po.status', options: ['pendiente', 'parcialmente_pagada', 'pagada', 'cancelada'] },
+      purchase_order_number: { type: 'text', column: 'po.purchase_order_number' },
+    },
+    search: { value: search, columns: ['po.purchase_order_number', 'po.project_name', 'po.notes'] },
+  });
+
+  const allAllocations = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE is_cancelled = 0').all();
+  const result = paginateSqlList({
+    tableSql: 'SELECT po.* FROM ecovis_purchase_orders po',
+    countSql: 'SELECT COUNT(*) as count FROM ecovis_purchase_orders po',
+    whereClause,
+    params,
+    page,
+    limit,
+    orderBy: sorting.orderBy,
+    map: (po) => {
+      const balance = calculatePurchaseOrderBalance(po, allAllocations);
+      return { ...po, ...balance, created_at_cdmx: formatDateTimeCDMX(po.created_at), updated_at_cdmx: formatDateTimeCDMX(po.updated_at) };
+    },
+  });
+
+  res.json(buildListResponse(result.data, result.pagination, sorting, filters));
+});
+
+app.get('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res, next) => {
+  try {
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    if (!po) throw badRequest('Orden de compra no encontrada.');
+    const allAllocations = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE is_cancelled = 0').all();
+    const balance = calculatePurchaseOrderBalance(po, allAllocations);
+    const poAllocations = db.prepare(
+      `SELECT a.*, p.payment_date, p.bank_reference, p.amount as payment_amount
+       FROM ecovis_payment_allocations a
+       JOIN ecovis_payments p ON a.payment_id = p.id
+       WHERE a.ecovis_purchase_order_id = ? AND a.is_cancelled = 0
+       ORDER BY a.created_at DESC`,
+    ).all(po.id);
+    const relatedProjects = db.prepare('SELECT * FROM ecovis_projects WHERE ecovis_purchase_order_id = ? AND is_cancelled = 0').all(po.id);
+    res.json({ ...po, ...balance, allocations: poAllocations, related_projects: relatedProjects, created_at_cdmx: formatDateTimeCDMX(po.created_at) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
+  try {
+    const purchaseOrderNumber = requiredText(req.body, 'purchase_order_number', 'Numero de orden de compra');
+    const orderDate = requiredText(req.body, 'order_date', 'Fecha de orden');
+    const totalAmount = numberValue(req.body, 'total_amount', 'Monto total', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const projectName = optionalText(req.body, 'project_name');
+    const notes = optionalText(req.body, 'notes');
+    const audit = createdByFields(req);
+
+    const existing = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0').get(purchaseOrderNumber);
+    if (existing) throw badRequest('Ya existe una OC activa con ese numero.');
+
+    const result = db.prepare(
+      `INSERT INTO ecovis_purchase_orders (purchase_order_number, project_name, order_date, total_amount, currency, notes, created_by, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, notes, req.session.username, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+
+    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: result.lastInsertRowid, entityLabel: purchaseOrderNumber });
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(result.lastInsertRowid);
+    res.status(201).json(po);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
+  try {
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    if (!po) throw badRequest('Orden de compra no encontrada.');
+    if (po.is_cancelled) throw badRequest('No se puede editar una OC cancelada.');
+
+    const purchaseOrderNumber = requiredText(req.body, 'purchase_order_number', 'Numero de orden de compra');
+    const orderDate = requiredText(req.body, 'order_date', 'Fecha de orden');
+    const totalAmount = numberValue(req.body, 'total_amount', 'Monto total', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const projectName = optionalText(req.body, 'project_name');
+    const notes = optionalText(req.body, 'notes');
+    const audit = updatedByFields(req);
+
+    const dup = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0 AND id != ?').get(purchaseOrderNumber, req.params.id);
+    if (dup) throw badRequest('Ya existe otra OC activa con ese numero.');
+
+    db.prepare(
+      `UPDATE ecovis_purchase_orders SET purchase_order_number = ?, project_name = ?, order_date = ?, total_amount = ?, currency = ?, notes = ?, updated_by = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`,
+    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, notes, req.session.username, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
+
+    logAuditEvent(db, { req, action: 'update', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: Number(req.params.id), entityLabel: purchaseOrderNumber, before: po });
+    res.json(db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/ecovis/purchase-orders/:id/cancel', requireAuth, requirePermission('ecovisAccount', 'cancel'), (req, res, next) => {
+  try {
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    if (!po) throw badRequest('Orden de compra no encontrada.');
+    if (po.is_cancelled) throw badRequest('La OC ya esta cancelada.');
+    const reason = requiredText(req.body, 'reason', 'Motivo de cancelacion');
+    const audit = updatedByFields(req);
+
+    db.prepare(
+      `UPDATE ecovis_purchase_orders SET is_cancelled = 1, status = 'cancelada', cancelled_at = ?, cancelled_by = ?, cancellation_reason = ?, updated_at = ?, updated_by_user_id = ?, updated_by_name = ? WHERE id = ?`,
+    ).run(audit.updated_at, req.session.username, reason, audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, req.params.id);
+
+    logAuditEvent(db, { req, action: 'cancel', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: Number(req.params.id), entityLabel: po.purchase_order_number, metadata: { reason } });
+    res.json(db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/ecovis/purchase-orders/:id/allocate', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
+  try {
+    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    if (!po) throw badRequest('Orden de compra no encontrada.');
+    if (po.is_cancelled) throw badRequest('No se puede asignar a una OC cancelada.');
+
+    const paymentId = req.body.payment_id;
+    if (!paymentId) throw badRequest('payment_id es obligatorio.');
+    const payment = db.prepare('SELECT * FROM ecovis_payments WHERE id = ?').get(paymentId);
+    if (!payment) throw badRequest('Pago no encontrado.');
+    if (payment.is_cancelled) throw badRequest('No se puede asignar a un pago cancelado.');
+
+    const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
+    const notes = optionalText(req.body, 'notes');
+    const audit = createdByFields(req);
+
+    const existingAllocs = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE payment_id = ? AND is_cancelled = 0').all(paymentId);
+    const totalAllocated = existingAllocs.reduce((s, a) => s + Number(a.amount), 0);
+    const available = Number(payment.amount) - totalAllocated;
+    if (amount > available + 0.01) throw badRequest(`Monto excede el disponible del pago ($${available.toFixed(2)}).`);
+
+    const result = db.prepare(
+      `INSERT INTO ecovis_payment_allocations (payment_id, ecovis_purchase_order_id, allocation_type, amount, notes, created_by, created_by_user_id, created_at, updated_at)
+       VALUES (?, ?, 'orden_compra', ?, ?, ?, ?, ?, ?)`,
+    ).run(paymentId, po.id, amount, notes, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
+
+    recalculatePaymentUnallocated(paymentId);
+    recalculatePurchaseOrderStatus(po.id);
+
+    logAuditEvent(db, { req, action: 'allocate_to_po', module: 'ecovis', entityType: 'ecovis_payment_allocation', entityId: result.lastInsertRowid, entityLabel: `${po.purchase_order_number} $${amount}` });
+    res.status(201).json(db.prepare('SELECT * FROM ecovis_payment_allocations WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) {
+    next(error);
+  }
+});
+
+function recalculatePurchaseOrderStatus(poId) {
+  const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(poId);
+  if (!po || po.is_cancelled) return;
+  const allocs = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND is_cancelled = 0').all(poId);
+  const totalApplied = allocs.reduce((s, a) => s + Number(a.amount), 0);
+  let newStatus = 'pendiente';
+  if (totalApplied >= Number(po.total_amount)) newStatus = 'pagada';
+  else if (totalApplied > 0) newStatus = 'parcialmente_pagada';
+  db.prepare('UPDATE ecovis_purchase_orders SET status = ? WHERE id = ?').run(newStatus, poId);
+}
+
 // ===================== END ECOVIS MODULE =====================
 
 // ===================== BACKUP MODULE =====================
@@ -3055,7 +3236,7 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
     const orderedEntities = [
       'settings', 'usersSafe', 'userPermissions', 'projects', 'closedProjects',
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
-      'projectReports', 'reportsArchive', 'ecovisProjects', 'ecovisPayments',
+      'projectReports', 'reportsArchive', 'ecovisPurchaseOrders', 'ecovisProjects', 'ecovisPayments',
       'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs', 'backupImportLogs',
     ];
 
@@ -3124,6 +3305,11 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
             const existing = db.prepare('SELECT id FROM project_reports WHERE report_folio = ?').get(row.report_folio);
             if (existing) { skipped++; continue; }
             db.prepare('INSERT INTO project_reports (project_id, report_folio, client_name, client_address, service_name, report_date, assigned_technicians, burner_model, equipment_model_serial, pumps_motors_model, fuel, voltage, gas_pressure_inh2o, liquid_fuel_pressure_psi, working_pressure, pump_amperage, fan_amperage, condensate_tank_temp_c, operating_output_temp_c, flue_gas_temp_c, safety_tests, comments, emissions_low_fire, emissions_high_fire, technician_name, plant_manager_name, created_by, updated_by, report_type, report_data, deleted_at, deleted_by, delete_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.project_id, row.report_folio, row.client_name, row.client_address || null, row.service_name, row.report_date, row.assigned_technicians || null, row.burner_model || null, row.equipment_model_serial || null, row.pumps_motors_model || null, row.fuel || null, row.voltage || null, row.gas_pressure_inh2o || null, row.liquid_fuel_pressure_psi || null, row.working_pressure || null, row.pump_amperage || null, row.fan_amperage || null, row.condensate_tank_temp_c || null, row.operating_output_temp_c || null, row.flue_gas_temp_c || null, row.safety_tests || null, row.comments || null, row.emissions_low_fire || null, row.emissions_high_fire || null, row.technician_name || null, row.plant_manager_name || null, row.created_by || null, row.updated_by || null, row.report_type || 'boiler_startup', row.report_data || null, row.deleted_at || null, row.deleted_by || null, row.delete_reason || null);
+            added++;
+          } else if (entityKey === 'ecovisPurchaseOrders') {
+            const existingPo = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ?').get(row.purchase_order_number);
+            if (existingPo) { skipped++; continue; }
+            db.prepare('INSERT INTO ecovis_purchase_orders (purchase_order_number, project_name, client_name, order_date, total_amount, currency, status, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.purchase_order_number, row.project_name || null, row.client_name || 'ECOVIS', row.order_date, row.total_amount, row.currency || 'MXN', row.status || 'pendiente', row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null);
             added++;
           } else if (entityKey === 'ecovisProjects') {
             db.prepare('INSERT INTO ecovis_projects (project_name, client_name, quote_number, purchase_order_number, invoice_number, project_date, description, total_amount, currency, status, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.project_name, row.client_name || 'ECOVIS', row.quote_number || null, row.purchase_order_number || null, row.invoice_number || null, row.project_date, row.description || null, row.total_amount, row.currency || 'MXN', row.status || 'pendiente', row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null, row.updated_by || null);

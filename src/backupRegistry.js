@@ -91,6 +91,14 @@ const BACKUP_ENTITIES = [
     module: 'ecovis',
   },
   {
+    key: 'ecovisPurchaseOrders',
+    table: 'ecovis_purchase_orders',
+    query: 'SELECT * FROM ecovis_purchase_orders ORDER BY id',
+    stableKeys: ['purchase_order_number'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'ecovis',
+  },
+  {
     key: 'ecovisPaymentAllocations',
     table: 'ecovis_payment_allocations',
     query: 'SELECT * FROM ecovis_payment_allocations ORDER BY id',
