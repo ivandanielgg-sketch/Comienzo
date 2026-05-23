@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lista de Asistencia</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 10px; padding: 10px; }
+    .header { text-align: center; margin-bottom: 12px; }
+    .header h1 { font-size: 16px; margin-bottom: 2px; }
+    .header h2 { font-size: 13px; font-weight: normal; margin-bottom: 2px; }
+    .header h3 { font-size: 11px; font-weight: normal; }
+    table { width: 100%; border-collapse: collapse; font-size: 9px; }
+    th, td { border: 1px solid #333; padding: 3px 4px; text-align: center; }
+    th { background: #f0f0f0; font-weight: bold; }
+    td.name-cell { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+    td.position-cell { text-align: left; font-size: 8px; max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+    .day-header { font-size: 8px; }
+    .day-date { font-size: 7px; color: #555; }
+    .status-F { background: #fff9c4; }
+    .status-B { background: #e0e0e0; }
+    .status-A\\* { background: #b3e5fc; }
+    .status-PC { background: #ffcdd2; }
+    .status-PS { background: #ef9a9a; }
+    .status-D { background: #bbdefb; }
+    .status-I { background: #c8e6c9; }
+    .status-V { background: #b2dfdb; }
+    .signatures { margin-top: 30px; display: flex; justify-content: space-around; }
+    .signature-box { text-align: center; width: 200px; }
+    .signature-line { border-top: 1px solid #333; margin-top: 40px; padding-top: 4px; font-size: 9px; }
+    .legend { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; font-size: 8px; }
+    .legend span { padding: 2px 5px; border: 1px solid #999; border-radius: 2px; }
+    .summary { margin-top: 10px; font-size: 9px; }
+    .no-print { margin-bottom: 12px; }
+    @media print {
+      .no-print { display: none; }
+      body { padding: 5mm; }
+      @page { size: letter landscape; margin: 8mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <button onclick="window.print()">Imprimir / Guardar PDF</button>
+    <button onclick="window.close()">Cerrar</button>
+  </div>
+
+  <div class="header">
+    <h1>REVRAM</h1>
+    <h2>LISTA DE ASISTENCIA</h2>
+    <h3 id="week-title"></h3>
+  </div>
+
+  <table>
+    <thead id="table-head"></thead>
+    <tbody id="table-body"></tbody>
+  </table>
+
+  <div class="summary" id="summary-section"></div>
+
+  <div class="signatures">
+    <div class="signature-box">
+      <div class="signature-line">Firma de Autorización</div>
+    </div>
+    <div class="signature-box">
+      <div class="signature-line">Firma de Contabilidad</div>
+    </div>
+    <div class="signature-box">
+      <div class="signature-line">Firma de Recursos Humanos</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="status-F">F Falta</span>
+    <span class="status-B">B Baja</span>
+    <span>A Asistencia</span>
+    <span class="status-A*">A* Personal fuera de taller / Trabajo fuera</span>
+    <span class="status-PC">PC Permiso c/goce de sueldo</span>
+    <span class="status-PS">PS Permiso s/goce de sueldo</span>
+    <span class="status-D">D Descanso</span>
+    <span class="status-I">I Incapacidad</span>
+    <span class="status-V">V Vacaciones</span>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const weekId = params.get('id');
+
+    if (!weekId) {
+      document.body.innerHTML = '<p>Error: No se especificó ID de nómina.</p>';
+    } else {
+      fetch(`/api/attendance/weeks/${weekId}/print`, { credentials: 'include' })
+        .then((r) => { if (!r.ok) throw new Error('Sin acceso'); return r.json(); })
+        .then(render)
+        .catch((e) => { document.body.innerHTML = `<p>Error: ${e.message}</p>`; });
+    }
+
+    function render(week) {
+      const titleEl = document.getElementById('week-title');
+      const startParts = week.week_start_date.split('-');
+      const endParts = week.week_end_date.split('-');
+      titleEl.textContent = `NOMINA SEMANA #${week.week_number} - ${startParts[2]}/${startParts[1]}/${startParts[0]} AL ${endParts[2]}/${endParts[1]}/${endParts[0]}`;
+
+      const startDate = new Date(week.week_start_date + 'T00:00:00Z');
+      const dayNames = ['LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO', 'DOMINGO'];
+      const months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+      const dayDates = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(startDate);
+        d.setUTCDate(d.getUTCDate() + i);
+        dayDates.push(`${d.getUTCDate()}-${months[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(2)}`);
+      }
+
+      const thead = document.getElementById('table-head');
+      thead.innerHTML = `<tr>
+        <th>Num</th>
+        <th>Nombre del trabajador</th>
+        <th>Puesto</th>
+        ${dayNames.map((d, i) => `<th><div class="day-header">${d}</div><div class="day-date">${dayDates[i]}</div></th>`).join('')}
+        <th>Ubicación / Proyecto</th>
+      </tr>`;
+
+      const tbody = document.getElementById('table-body');
+      const dayFields = ['monday_status', 'tuesday_status', 'wednesday_status', 'thursday_status', 'friday_status', 'saturday_status', 'sunday_status'];
+
+      tbody.innerHTML = (week.employees || []).map((emp, idx) => {
+        const dayCells = dayFields.map((f) => {
+          const val = emp[f] || 'A';
+          const cls = val !== 'A' ? ` class="status-${val.replace('*', '\\*')}"` : '';
+          return `<td${cls}>${val}</td>`;
+        }).join('');
+
+        let proj = emp.project_location_text || '';
+        if (emp.extra_payment_amount) {
+          proj += (proj ? ' ' : '') + '$' + Number(emp.extra_payment_amount).toLocaleString('es-MX', { minimumFractionDigits: 2 });
+        }
+
+        return `<tr>
+          <td>${idx + 1}</td>
+          <td class="name-cell">${emp.full_name_snapshot}</td>
+          <td class="position-cell">${emp.position_snapshot || ''}</td>
+          ${dayCells}
+          <td style="text-align:left;font-size:8px;">${proj}</td>
+        </tr>`;
+      }).join('');
+
+      if (week.summary) {
+        const s = week.summary;
+        const summaryEl = document.getElementById('summary-section');
+        const dayLabels = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+        const dayKeys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+        const absLines = dayKeys.map((k, i) => s.absencesByDay[k] > 0 ? `${dayLabels[i]}: ${s.absencesByDay[k]}` : '').filter(Boolean);
+        summaryEl.innerHTML = `<strong>Resumen:</strong> ${s.totalEmployees} empleados | Inasistencias: ${s.totalAbsences} ${absLines.length ? '(' + absLines.join(', ') + ')' : ''} | Pagos extra: $${s.totalExtraPayments.toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
+      }
+    }
+  </script>
+</body>
+</html>

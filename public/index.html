@@ -44,6 +44,7 @@
             <button id="reports-tab" class="secondary" type="button">Reportes</button>
             <button id="report-archive-tab" class="secondary" type="button">Archivo Reportes</button>
             <button id="vacations-tab" class="secondary hidden" type="button">Vacaciones</button>
+            <button id="attendance-tab" class="secondary hidden" type="button">Asistencias</button>
             <button id="ecovis-tab" class="secondary hidden" type="button">Cuenta ECOVIS</button>
             <button id="backup-create-btn" class="secondary hidden" type="button">Crear respaldo</button>
             <button id="backup-import-btn" class="secondary hidden" type="button">Importar respaldo</button>
@@ -757,6 +758,140 @@
                   <button type="button" id="save-and-print-vacation">Guardar y generar formato</button>
                 </div>
                 <p id="vacation-request-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <section id="attendance-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Módulo de Asistencias</p>
+                <h2>LISTA DE ASISTENCIA / NÓMINA</h2>
+                <p class="muted">Genera, captura e imprime listas semanales de asistencia.</p>
+              </div>
+              <div class="row-actions">
+                <button id="attendance-new-btn" type="button">Nueva nómina semanal</button>
+              </div>
+            </div>
+
+            <div class="grid-form" style="gap:10px;margin-bottom:16px;">
+              <label>
+                Año
+                <input id="attendance-filter-year" type="number" placeholder="2026" style="width:100px;" />
+              </label>
+              <label>
+                Semana
+                <input id="attendance-filter-week" type="number" min="1" max="53" placeholder="1-53" style="width:100px;" />
+              </label>
+              <label>
+                Estatus
+                <select id="attendance-filter-status">
+                  <option value="">Todos</option>
+                  <option value="borrador">Borrador</option>
+                  <option value="cerrada">Cerrada</option>
+                  <option value="cancelada">Cancelada</option>
+                </select>
+              </label>
+              <button id="attendance-filter-btn" type="button" class="secondary" style="align-self:end;padding:8px 14px;">Filtrar</button>
+            </div>
+
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Año</th>
+                    <th>Semana</th>
+                    <th>Rango</th>
+                    <th>Estatus</th>
+                    <th>Empleados</th>
+                    <th>Inasistencias</th>
+                    <th>Pagos extra</th>
+                    <th>Creado por</th>
+                    <th>Fecha</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="attendance-weeks-table"></tbody>
+              </table>
+            </div>
+            <div id="attendance-weeks-pagination"></div>
+          </div>
+
+          <!-- Attendance Edit Panel -->
+          <div id="attendance-edit-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Captura de asistencia</p>
+                <h2 id="attendance-edit-title">Nómina semanal</h2>
+                <p id="attendance-edit-subtitle" class="muted"></p>
+              </div>
+              <div class="row-actions">
+                <button id="attendance-save-btn" type="button">Guardar cambios</button>
+                <button id="attendance-close-btn" type="button" class="secondary">Cerrar nómina</button>
+                <button id="attendance-reopen-btn" type="button" class="secondary hidden">Reabrir</button>
+                <button id="attendance-print-btn" type="button" class="secondary">Imprimir</button>
+                <button id="attendance-cancel-btn" type="button" class="secondary">Cancelar nómina</button>
+                <button id="attendance-back-btn" type="button" class="secondary">Volver al archivo</button>
+              </div>
+            </div>
+            <p id="attendance-edit-message" class="message"></p>
+            <div class="table-wrapper" style="overflow-x:auto;">
+              <table class="attendance-table">
+                <thead id="attendance-table-head"></thead>
+                <tbody id="attendance-table-body"></tbody>
+              </table>
+            </div>
+            <div class="attendance-legend" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;font-size:0.82rem;">
+              <span style="background:#fff9c4;padding:2px 6px;border-radius:3px;">F Falta</span>
+              <span style="background:#e0e0e0;padding:2px 6px;border-radius:3px;">B Baja</span>
+              <span style="padding:2px 6px;border:1px solid #ddd;border-radius:3px;">A Asistencia</span>
+              <span style="background:#b3e5fc;padding:2px 6px;border-radius:3px;">A* Trabajo fuera</span>
+              <span style="background:#ffcdd2;padding:2px 6px;border-radius:3px;">PC Permiso c/goce</span>
+              <span style="background:#ef9a9a;padding:2px 6px;border-radius:3px;">PS Permiso s/goce</span>
+              <span style="background:#bbdefb;padding:2px 6px;border-radius:3px;">D Descanso</span>
+              <span style="background:#c8e6c9;padding:2px 6px;border-radius:3px;">I Incapacidad</span>
+              <span style="background:#b2dfdb;padding:2px 6px;border-radius:3px;">V Vacaciones</span>
+            </div>
+          </div>
+
+          <!-- New Week Modal -->
+          <div id="attendance-new-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2>Nueva nómina semanal</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="attendance-new-form" class="grid-form">
+                <label>
+                  Año *
+                  <input name="year" type="number" required value="2026" />
+                </label>
+                <label>
+                  Semana (1-53) *
+                  <input name="week_number" type="number" min="1" max="53" required />
+                </label>
+                <p id="attendance-week-preview" class="muted"></p>
+                <button type="submit">Generar nómina</button>
+                <p id="attendance-new-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+
+          <!-- Cancel Modal -->
+          <div id="attendance-cancel-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2>Cancelar nómina</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="attendance-cancel-form" class="stack">
+                <label>
+                  Motivo de cancelación *
+                  <textarea name="reason" rows="3" required></textarea>
+                </label>
+                <button type="submit">Confirmar cancelación</button>
               </form>
             </div>
           </div>

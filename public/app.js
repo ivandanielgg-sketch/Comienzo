@@ -656,6 +656,7 @@ function switchView(viewName) {
     reports: ['reports', 'view'],
     'report-archive': ['reportsArchive', 'view'],
     vacations: ['vacations', 'view'],
+    attendance: ['attendance', 'view'],
     ecovis: ['ecovisAccount', 'view'],
     users: ['users', 'view'],
   };
@@ -668,6 +669,7 @@ function switchView(viewName) {
   const showingClosedProjects = viewName === 'closed-projects';
   const showingUsers = viewName === 'users';
   const showingVacations = viewName === 'vacations';
+  const showingAttendance = viewName === 'attendance';
   const showingReports = viewName === 'reports';
   const showingEcovis = viewName === 'ecovis';
   const showingArchive = viewName === 'report-archive';
@@ -675,6 +677,7 @@ function switchView(viewName) {
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
   if (vacationsView) vacationsView.classList.toggle('hidden', !showingVacations);
+  if (attendanceView) attendanceView.classList.toggle('hidden', !showingAttendance);
   if (reportsView) reportsView.classList.toggle('hidden', !showingReports);
   if (ecovisView) ecovisView.classList.toggle('hidden', !showingEcovis);
   const archiveView = document.getElementById('report-archive-view');
@@ -683,6 +686,7 @@ function switchView(viewName) {
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
   if (vacationsTab) vacationsTab.classList.toggle('active', showingVacations);
+  if (attendanceTab) attendanceTab.classList.toggle('active', showingAttendance);
   if (reportsTab) reportsTab.classList.toggle('active', showingReports);
   if (ecovisTab) ecovisTab.classList.toggle('active', showingEcovis);
   const archiveTab = document.getElementById('report-archive-tab');
@@ -1218,6 +1222,7 @@ loginForm.addEventListener('submit', async (event) => {
       userPermissions = sessionData.permissions || {};
     } catch { userPermissions = {}; }
     showVacationsTab();
+    showAttendanceTab();
     showEcovisTab();
     loginForm.reset();
     await showApp();
@@ -3051,6 +3056,7 @@ function applyRoleVisibility() {
   closedProjectsTab.classList.toggle('hidden', !canAccess('closedProjects', 'view'));
   usersTab.classList.toggle('hidden', !canAccess('users', 'view'));
   if (vacationsTab) vacationsTab.classList.toggle('hidden', !canAccess('vacations', 'view'));
+  if (attendanceTab) attendanceTab.classList.toggle('hidden', !canAccess('attendance', 'view'));
   if (ecovisTab) ecovisTab.classList.toggle('hidden', !canAccess('ecovisAccount', 'view'));
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('hidden', !canAccess('reportsArchive', 'view'));
@@ -3628,6 +3634,388 @@ if (closedDateThisYear) closedDateThisYear.addEventListener('click', () => {
   setDateRange(`${y}-01-01`, `${y}-12-31`);
 });
 
+// ===================== ATTENDANCE MODULE =====================
+
+const attendanceTab = document.getElementById('attendance-tab');
+const attendanceView = document.getElementById('attendance-view');
+
+function showAttendanceTab() {
+  if (attendanceTab) {
+    attendanceTab.classList.toggle('hidden', !canAccess('attendance', 'view'));
+  }
+}
+
+let attendanceCurrentWeek = null;
+
+const ATTENDANCE_STATUS_OPTIONS = [
+  { code: 'A', label: 'Asistencia' },
+  { code: 'A*', label: 'Trabajo fuera' },
+  { code: 'F', label: 'Falta' },
+  { code: 'B', label: 'Baja' },
+  { code: 'PC', label: 'Permiso c/goce' },
+  { code: 'PS', label: 'Permiso s/goce' },
+  { code: 'D', label: 'Descanso' },
+  { code: 'I', label: 'Incapacidad' },
+  { code: 'V', label: 'Vacaciones' },
+];
+
+const STATUS_COLORS = { A: '#ffffff', 'A*': '#b3e5fc', F: '#fff9c4', B: '#e0e0e0', PC: '#ffcdd2', PS: '#ef9a9a', D: '#bbdefb', I: '#c8e6c9', V: '#b2dfdb' };
+
+if (attendanceTab) {
+  attendanceTab.addEventListener('click', () => {
+    switchView('attendance');
+    loadAttendanceWeeks();
+  });
+}
+
+async function loadAttendanceWeeks(page = 1) {
+  const yearFilter = document.getElementById('attendance-filter-year');
+  const weekFilter = document.getElementById('attendance-filter-week');
+  const statusFilter = document.getElementById('attendance-filter-status');
+
+  let url = `/api/attendance/weeks?page=${page}&limit=15`;
+  if (yearFilter && yearFilter.value) url += `&year=${yearFilter.value}`;
+  if (weekFilter && weekFilter.value) url += `&week_number=${weekFilter.value}`;
+  if (statusFilter && statusFilter.value) url += `&status=${statusFilter.value}`;
+
+  try {
+    const result = await api(url);
+    renderAttendanceWeeksTable(result.data);
+    renderAttendancePagination(result.pagination);
+  } catch (e) {
+    console.error('Error loading attendance weeks:', e);
+  }
+}
+
+function renderAttendanceWeeksTable(weeks) {
+  const tbody = document.getElementById('attendance-weeks-table');
+  if (!tbody) return;
+  if (!weeks || weeks.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;">No hay nóminas registradas.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = weeks.map((w) => {
+    const statusBadge = w.status === 'cerrada' ? '<span style="color:green;">Cerrada</span>' : w.status === 'cancelada' ? '<span style="color:red;">Cancelada</span>' : '<span style="color:orange;">Borrador</span>';
+    const extraPay = w.total_extra_payments > 0 ? formatMoney(w.total_extra_payments) : '-';
+    return `<tr>
+      <td>${escapeHtml(String(w.year))}</td>
+      <td>${w.week_number}</td>
+      <td>${escapeHtml(w.week_start_date)} – ${escapeHtml(w.week_end_date)}</td>
+      <td>${statusBadge}</td>
+      <td>${w.employee_count}</td>
+      <td>${w.total_absences}</td>
+      <td>${extraPay}</td>
+      <td>${escapeHtml(w.created_by_name || '')}</td>
+      <td>${escapeHtml(w.created_at_cdmx || '')}</td>
+      <td><button class="secondary" onclick="openAttendanceWeek(${w.id})">Abrir</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderAttendancePagination(pagination) {
+  const container = document.getElementById('attendance-weeks-pagination');
+  if (!container || !pagination) return;
+  if (pagination.totalPages <= 1) { container.innerHTML = ''; return; }
+  let html = '';
+  if (pagination.hasPreviousPage) html += `<button class="secondary" onclick="loadAttendanceWeeks(${pagination.page - 1})">Anterior</button> `;
+  html += `<span>Página ${pagination.page} de ${pagination.totalPages}</span> `;
+  if (pagination.hasNextPage) html += `<button class="secondary" onclick="loadAttendanceWeeks(${pagination.page + 1})">Siguiente</button>`;
+  container.innerHTML = html;
+}
+
+async function openAttendanceWeek(weekId) {
+  try {
+    const week = await api(`/api/attendance/weeks/${weekId}`);
+    attendanceCurrentWeek = week;
+    renderAttendanceEditPanel(week);
+  } catch (e) {
+    window.alert(e.message || 'Error al abrir nómina.');
+  }
+}
+
+function renderAttendanceEditPanel(week) {
+  const panel = document.getElementById('attendance-edit-panel');
+  const title = document.getElementById('attendance-edit-title');
+  const subtitle = document.getElementById('attendance-edit-subtitle');
+  const msg = document.getElementById('attendance-edit-message');
+
+  if (!panel) return;
+  panel.classList.remove('hidden');
+
+  title.textContent = week.title || `Semana ${week.week_number} - ${week.year}`;
+  subtitle.textContent = `Estatus: ${week.status} | ${week.week_start_date} al ${week.week_end_date}`;
+  if (msg) msg.textContent = '';
+
+  const saveBtn = document.getElementById('attendance-save-btn');
+  const closeBtn = document.getElementById('attendance-close-btn');
+  const reopenBtn = document.getElementById('attendance-reopen-btn');
+  const cancelBtn = document.getElementById('attendance-cancel-btn');
+
+  const isClosed = week.status === 'cerrada';
+  const isCancelled = week.status === 'cancelada';
+  const isEditable = !isClosed && !isCancelled;
+
+  if (saveBtn) saveBtn.classList.toggle('hidden', !isEditable || !canAccess('attendance', 'edit'));
+  if (closeBtn) closeBtn.classList.toggle('hidden', isClosed || isCancelled || !canAccess('attendance', 'approve'));
+  if (reopenBtn) reopenBtn.classList.toggle('hidden', !isClosed || !canAccess('attendance', 'reopen'));
+  if (cancelBtn) cancelBtn.classList.toggle('hidden', isCancelled || !canAccess('attendance', 'delete'));
+
+  renderAttendanceTable(week, isEditable);
+}
+
+function renderAttendanceTable(week, editable) {
+  const thead = document.getElementById('attendance-table-head');
+  const tbody = document.getElementById('attendance-table-body');
+  if (!thead || !tbody) return;
+
+  const days = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+  const startDate = new Date(week.week_start_date + 'T00:00:00Z');
+  const dayDates = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(startDate);
+    d.setUTCDate(d.getUTCDate() + i);
+    dayDates.push(`${d.getUTCDate()}/${d.getUTCMonth() + 1}`);
+  }
+
+  thead.innerHTML = `<tr>
+    <th>#</th><th>Nombre</th><th>Puesto</th>
+    ${days.map((d, i) => `<th>${d}<br><small>${dayDates[i]}</small></th>`).join('')}
+    <th>Proyecto/Ubicación</th><th>Pago extra</th><th>Notas</th>
+  </tr>`;
+
+  const dayFields = ['monday_status', 'tuesday_status', 'wednesday_status', 'thursday_status', 'friday_status', 'saturday_status', 'sunday_status'];
+
+  tbody.innerHTML = (week.employees || []).map((emp, idx) => {
+    const dayCells = dayFields.map((field) => {
+      const val = emp[field] || 'A';
+      const bg = STATUS_COLORS[val] || '#fff';
+      if (editable) {
+        const options = ATTENDANCE_STATUS_OPTIONS.map((o) => `<option value="${o.code}" ${o.code === val ? 'selected' : ''}>${o.code}</option>`).join('');
+        return `<td style="background:${bg};padding:2px;"><select data-emp-id="${emp.id}" data-field="${field}" style="font-size:0.8rem;padding:2px;width:50px;background:transparent;border:1px solid #ccc;" onchange="onAttendanceCellChange(this)">${options}</select></td>`;
+      }
+      return `<td style="background:${bg};text-align:center;font-weight:bold;font-size:0.85rem;">${escapeHtml(val)}</td>`;
+    }).join('');
+
+    const projInput = editable
+      ? `<td><input type="text" data-emp-id="${emp.id}" data-field="project_location_text" value="${escapeHtml(emp.project_location_text || '')}" style="width:120px;font-size:0.8rem;" /></td>`
+      : `<td>${escapeHtml(emp.project_location_text || '')}</td>`;
+
+    const extraInput = editable
+      ? `<td><input type="text" data-emp-id="${emp.id}" data-field="extra_payment_amount" value="${emp.extra_payment_amount || ''}" style="width:80px;font-size:0.8rem;" inputmode="decimal" /></td>`
+      : `<td>${emp.extra_payment_amount ? formatMoney(emp.extra_payment_amount) : ''}</td>`;
+
+    const notesInput = editable
+      ? `<td><input type="text" data-emp-id="${emp.id}" data-field="notes" value="${escapeHtml(emp.notes || '')}" style="width:100px;font-size:0.8rem;" /></td>`
+      : `<td>${escapeHtml(emp.notes || '')}</td>`;
+
+    return `<tr>
+      <td>${idx + 1}</td>
+      <td style="white-space:nowrap;">${escapeHtml(emp.full_name_snapshot)}</td>
+      <td>${escapeHtml(emp.position_snapshot || '')}</td>
+      ${dayCells}
+      ${projInput}
+      ${extraInput}
+      ${notesInput}
+    </tr>`;
+  }).join('');
+}
+
+function onAttendanceCellChange(select) {
+  const bg = STATUS_COLORS[select.value] || '#fff';
+  select.parentElement.style.background = bg;
+}
+
+function collectAttendanceEmployeeData() {
+  const employees = [];
+  if (!attendanceCurrentWeek || !attendanceCurrentWeek.employees) return employees;
+
+  for (const emp of attendanceCurrentWeek.employees) {
+    const row = { id: emp.id };
+    const dayFields = ['monday_status', 'tuesday_status', 'wednesday_status', 'thursday_status', 'friday_status', 'saturday_status', 'sunday_status'];
+    for (const field of dayFields) {
+      const sel = document.querySelector(`select[data-emp-id="${emp.id}"][data-field="${field}"]`);
+      row[field] = sel ? sel.value : emp[field];
+    }
+    const projInput = document.querySelector(`input[data-emp-id="${emp.id}"][data-field="project_location_text"]`);
+    row.project_location_text = projInput ? projInput.value : emp.project_location_text;
+    const extraInput = document.querySelector(`input[data-emp-id="${emp.id}"][data-field="extra_payment_amount"]`);
+    row.extra_payment_amount = extraInput ? (extraInput.value || null) : emp.extra_payment_amount;
+    const notesInput = document.querySelector(`input[data-emp-id="${emp.id}"][data-field="notes"]`);
+    row.notes = notesInput ? notesInput.value : emp.notes;
+    employees.push(row);
+  }
+  return employees;
+}
+
+const attendanceSaveBtn = document.getElementById('attendance-save-btn');
+if (attendanceSaveBtn) {
+  attendanceSaveBtn.addEventListener('click', async () => {
+    if (!attendanceCurrentWeek) return;
+    const msg = document.getElementById('attendance-edit-message');
+    try {
+      const employees = collectAttendanceEmployeeData();
+      const result = await api(`/api/attendance/weeks/${attendanceCurrentWeek.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ employees }),
+      });
+      attendanceCurrentWeek = result;
+      renderAttendanceEditPanel(result);
+      if (msg) { msg.textContent = 'Guardado correctamente.'; msg.style.color = 'green'; }
+    } catch (e) {
+      if (msg) { msg.textContent = e.message || 'Error al guardar.'; msg.style.color = 'red'; }
+    }
+  });
+}
+
+const attendanceCloseBtn = document.getElementById('attendance-close-btn');
+if (attendanceCloseBtn) {
+  attendanceCloseBtn.addEventListener('click', async () => {
+    if (!attendanceCurrentWeek) return;
+    if (!window.confirm('¿Cerrar esta nómina? No se podrá editar hasta que se reabra.')) return;
+    try {
+      const result = await api(`/api/attendance/weeks/${attendanceCurrentWeek.id}/close`, { method: 'POST' });
+      attendanceCurrentWeek = result;
+      renderAttendanceEditPanel(result);
+    } catch (e) {
+      window.alert(e.message || 'Error al cerrar nómina.');
+    }
+  });
+}
+
+const attendanceReopenBtn = document.getElementById('attendance-reopen-btn');
+if (attendanceReopenBtn) {
+  attendanceReopenBtn.addEventListener('click', async () => {
+    if (!attendanceCurrentWeek) return;
+    if (!window.confirm('¿Reabrir nómina para edición?')) return;
+    try {
+      const result = await api(`/api/attendance/weeks/${attendanceCurrentWeek.id}/reopen`, { method: 'POST' });
+      attendanceCurrentWeek = result;
+      renderAttendanceEditPanel(result);
+    } catch (e) {
+      window.alert(e.message || 'Error al reabrir nómina.');
+    }
+  });
+}
+
+const attendancePrintBtn = document.getElementById('attendance-print-btn');
+if (attendancePrintBtn) {
+  attendancePrintBtn.addEventListener('click', () => {
+    if (!attendanceCurrentWeek) return;
+    window.open(`/attendance-print.html?id=${attendanceCurrentWeek.id}`, '_blank');
+  });
+}
+
+const attendanceCancelBtn = document.getElementById('attendance-cancel-btn');
+if (attendanceCancelBtn) {
+  attendanceCancelBtn.addEventListener('click', () => {
+    const modal = document.getElementById('attendance-cancel-modal');
+    if (modal) modal.classList.remove('hidden');
+  });
+}
+
+const attendanceCancelForm = document.getElementById('attendance-cancel-form');
+if (attendanceCancelForm) {
+  attendanceCancelForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!attendanceCurrentWeek) return;
+    const reason = attendanceCancelForm.elements.reason.value.trim();
+    if (!reason) return;
+    try {
+      await api(`/api/attendance/weeks/${attendanceCurrentWeek.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ reason }),
+      });
+      const modal = document.getElementById('attendance-cancel-modal');
+      if (modal) modal.classList.add('hidden');
+      attendanceCancelForm.reset();
+      document.getElementById('attendance-edit-panel').classList.add('hidden');
+      attendanceCurrentWeek = null;
+      loadAttendanceWeeks();
+    } catch (err) {
+      window.alert(err.message || 'Error al cancelar.');
+    }
+  });
+}
+
+const attendanceBackBtn = document.getElementById('attendance-back-btn');
+if (attendanceBackBtn) {
+  attendanceBackBtn.addEventListener('click', () => {
+    document.getElementById('attendance-edit-panel').classList.add('hidden');
+    attendanceCurrentWeek = null;
+    loadAttendanceWeeks();
+  });
+}
+
+const attendanceNewBtn = document.getElementById('attendance-new-btn');
+if (attendanceNewBtn) {
+  attendanceNewBtn.addEventListener('click', () => {
+    const modal = document.getElementById('attendance-new-modal');
+    if (modal) modal.classList.remove('hidden');
+    const yearInput = modal.querySelector('input[name="year"]');
+    if (yearInput && !yearInput.value) yearInput.value = new Date().getFullYear();
+  });
+}
+
+const attendanceNewForm = document.getElementById('attendance-new-form');
+if (attendanceNewForm) {
+  const weekInput = attendanceNewForm.querySelector('input[name="week_number"]');
+  const yearInput = attendanceNewForm.querySelector('input[name="year"]');
+  const preview = document.getElementById('attendance-week-preview');
+
+  function updateWeekPreview() {
+    if (!preview) return;
+    const y = Number(yearInput.value);
+    const w = Number(weekInput.value);
+    if (y && w >= 1 && w <= 53) {
+      try {
+        const jan4 = new Date(Date.UTC(y, 0, 4));
+        const jan4Dow = jan4.getUTCDay() || 7;
+        const mon1 = new Date(jan4);
+        mon1.setUTCDate(jan4.getUTCDate() - (jan4Dow - 1));
+        const target = new Date(mon1);
+        target.setUTCDate(target.getUTCDate() + (w - 1) * 7);
+        const sun = new Date(target);
+        sun.setUTCDate(sun.getUTCDate() + 6);
+        preview.textContent = `${target.toISOString().slice(0, 10)} al ${sun.toISOString().slice(0, 10)}`;
+      } catch { preview.textContent = ''; }
+    } else {
+      preview.textContent = '';
+    }
+  }
+
+  if (weekInput) weekInput.addEventListener('input', updateWeekPreview);
+  if (yearInput) yearInput.addEventListener('input', updateWeekPreview);
+
+  attendanceNewForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('attendance-new-message');
+    const year = Number(yearInput.value);
+    const week_number = Number(weekInput.value);
+    try {
+      const result = await api('/api/attendance/weeks', {
+        method: 'POST',
+        body: JSON.stringify({ year, week_number }),
+      });
+      const modal = document.getElementById('attendance-new-modal');
+      if (modal) modal.classList.add('hidden');
+      attendanceNewForm.reset();
+      if (msg) msg.textContent = '';
+      attendanceCurrentWeek = result;
+      renderAttendanceEditPanel(result);
+      loadAttendanceWeeks();
+    } catch (err) {
+      if (msg) { msg.textContent = err.message || 'Error al crear nómina.'; msg.style.color = 'red'; }
+    }
+  });
+}
+
+const attendanceFilterBtn = document.getElementById('attendance-filter-btn');
+if (attendanceFilterBtn) {
+  attendanceFilterBtn.addEventListener('click', () => loadAttendanceWeeks());
+}
+
+// ===================== END ATTENDANCE MODULE =====================
+
 // ===================== END NEW MODULES =====================
 
 api('/api/session')
@@ -3636,6 +4024,7 @@ api('/api/session')
       state.userRole = session.user.role || 'user';
       userPermissions = session.permissions || {};
       showVacationsTab();
+      showAttendanceTab();
       showEcovisTab();
       showApp();
     } else {

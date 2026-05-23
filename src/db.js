@@ -437,6 +437,78 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts (attempted_at);
   `);
 
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS attendance_statuses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#ffffff',
+      counts_as_absence INTEGER NOT NULL DEFAULT 0,
+      requires_project_location INTEGER NOT NULL DEFAULT 0,
+      requires_extra_payment INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS payroll_attendance_weeks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL,
+      week_number INTEGER NOT NULL,
+      week_start_date TEXT NOT NULL,
+      week_end_date TEXT NOT NULL,
+      title TEXT,
+      status TEXT NOT NULL DEFAULT 'borrador' CHECK (status IN ('borrador', 'cerrada', 'cancelada')),
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      closed_by_user_id INTEGER,
+      closed_by_name TEXT,
+      closed_at TEXT,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_week_unique
+      ON payroll_attendance_weeks (year, week_number)
+      WHERE deleted_at IS NULL AND status != 'cancelada';
+
+    CREATE TABLE IF NOT EXISTS payroll_attendance_employees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payroll_attendance_week_id INTEGER NOT NULL,
+      employee_id INTEGER NOT NULL,
+      employee_number_snapshot TEXT NOT NULL,
+      full_name_snapshot TEXT NOT NULL,
+      position_snapshot TEXT,
+      department_snapshot TEXT,
+      monday_status TEXT NOT NULL DEFAULT 'A',
+      tuesday_status TEXT NOT NULL DEFAULT 'A',
+      wednesday_status TEXT NOT NULL DEFAULT 'A',
+      thursday_status TEXT NOT NULL DEFAULT 'A',
+      friday_status TEXT NOT NULL DEFAULT 'A',
+      saturday_status TEXT NOT NULL DEFAULT 'D',
+      sunday_status TEXT NOT NULL DEFAULT 'D',
+      project_location_text TEXT,
+      extra_payment_amount REAL,
+      extra_payment_currency TEXT DEFAULT 'MXN',
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (payroll_attendance_week_id) REFERENCES payroll_attendance_weeks(id) ON DELETE CASCADE,
+      FOREIGN KEY (employee_id) REFERENCES employees(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_payroll_emp_week ON payroll_attendance_employees (payroll_attendance_week_id);
+  `);
+
+  seedAttendanceStatuses(database);
   migrateCostCategories(database);
   migrateAllocationTypes(database);
   seedExchangeRates(database);
@@ -568,6 +640,18 @@ function migrateAllocationTypes(database) {
 
     PRAGMA foreign_keys = ON;
   `);
+}
+
+function seedAttendanceStatuses(database) {
+  const { ATTENDANCE_STATUSES } = require('./attendance');
+  const stmt = database.prepare(
+    `INSERT INTO attendance_statuses (code, label, color, counts_as_absence, requires_project_location, requires_extra_payment)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(code) DO NOTHING`,
+  );
+  for (const s of ATTENDANCE_STATUSES) {
+    stmt.run(s.code, s.label, s.color, s.counts_as_absence, s.requires_project_location, s.requires_extra_payment);
+  }
 }
 
 function seedExchangeRates(database) {
