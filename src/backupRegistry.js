@@ -91,6 +91,14 @@ const BACKUP_ENTITIES = [
     module: 'attendance',
   },
   {
+    key: 'attendanceStatuses',
+    table: 'attendance_statuses',
+    query: 'SELECT * FROM attendance_statuses ORDER BY id',
+    stableKeys: ['code'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'attendance',
+  },
+  {
     key: 'ecovisProjects',
     table: 'ecovis_projects',
     query: 'SELECT * FROM ecovis_projects ORDER BY id',

@@ -3672,11 +3672,17 @@ async function loadAttendanceWeeks(page = 1) {
   const yearFilter = document.getElementById('attendance-filter-year');
   const weekFilter = document.getElementById('attendance-filter-week');
   const statusFilter = document.getElementById('attendance-filter-status');
+  const dateFromFilter = document.getElementById('attendance-filter-date-from');
+  const dateToFilter = document.getElementById('attendance-filter-date-to');
+  const includeCancelledFilter = document.getElementById('attendance-filter-include-cancelled');
 
   let url = `/api/attendance/weeks?page=${page}&limit=15`;
   if (yearFilter && yearFilter.value) url += `&year=${yearFilter.value}`;
   if (weekFilter && weekFilter.value) url += `&week_number=${weekFilter.value}`;
   if (statusFilter && statusFilter.value) url += `&status=${statusFilter.value}`;
+  if (dateFromFilter && dateFromFilter.value) url += `&week_start_date_from=${dateFromFilter.value}`;
+  if (dateToFilter && dateToFilter.value) url += `&week_end_date_to=${dateToFilter.value}`;
+  if (includeCancelledFilter && includeCancelledFilter.checked) url += '&include_cancelled=true';
 
   try {
     const result = await api(url);
@@ -3691,7 +3697,7 @@ function renderAttendanceWeeksTable(weeks) {
   const tbody = document.getElementById('attendance-weeks-table');
   if (!tbody) return;
   if (!weeks || weeks.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;">No hay nóminas registradas.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;">No se encontraron nóminas con los filtros actuales.</td></tr>';
     return;
   }
   tbody.innerHTML = weeks.map((w) => {
@@ -4000,18 +4006,26 @@ if (attendanceNewForm) {
       if (modal) modal.classList.add('hidden');
       attendanceNewForm.reset();
       if (msg) msg.textContent = '';
+      if (preview) preview.textContent = '';
+      await loadAttendanceWeeks(1);
       attendanceCurrentWeek = result;
       renderAttendanceEditPanel(result);
-      loadAttendanceWeeks();
+      const editPanel = document.getElementById('attendance-edit-panel');
+      if (editPanel) editPanel.scrollIntoView({ behavior: 'smooth' });
     } catch (err) {
-      if (msg) { msg.textContent = err.message || 'Error al crear nómina.'; msg.style.color = 'red'; }
+      if (err.message && err.message.includes('Ya existe')) {
+        if (msg) { msg.textContent = err.message; msg.style.color = 'orange'; }
+        await loadAttendanceWeeks(1);
+      } else {
+        if (msg) { msg.textContent = err.message || 'Error al crear nómina.'; msg.style.color = 'red'; }
+      }
     }
   });
 }
 
 const attendanceFilterBtn = document.getElementById('attendance-filter-btn');
 if (attendanceFilterBtn) {
-  attendanceFilterBtn.addEventListener('click', () => loadAttendanceWeeks());
+  attendanceFilterBtn.addEventListener('click', () => loadAttendanceWeeks(1));
 }
 
 // ===================== END ATTENDANCE MODULE =====================

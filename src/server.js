@@ -2279,6 +2279,8 @@ app.get('/api/attendance/weeks', requireAuth, requirePermission('attendance', 'v
     week_number: { type: 'number', column: 'week_number' },
     status: { type: 'select', column: 'status', options: VALID_WEEK_STATUSES },
     created_by_name: { type: 'text', column: 'created_by_name' },
+    week_start_date: { type: 'date', column: 'week_start_date' },
+    week_end_date: { type: 'date', column: 'week_end_date' },
   };
 
   const whereParts = [];
@@ -2289,6 +2291,11 @@ app.get('/api/attendance/weeks', requireAuth, requirePermission('attendance', 'v
   if (search) {
     whereParts.push('(title LIKE ? OR created_by_name LIKE ?)');
     params.push(`%${search}%`, `%${search}%`);
+  }
+
+  const includeCancelled = req.query.include_cancelled === 'true' || req.query.include_cancelled === '1';
+  if (!includeCancelled && !activeFilters.status) {
+    whereParts.push("status != 'cancelada'");
   }
 
   const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
@@ -3512,7 +3519,7 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
     const orderedEntities = [
       'settings', 'usersSafe', 'userPermissions', 'projects', 'closedProjects',
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
-      'payrollAttendanceWeeks', 'payrollAttendanceEmployees',
+      'payrollAttendanceWeeks', 'payrollAttendanceEmployees', 'attendanceStatuses',
       'projectReports', 'reportsArchive', 'ecovisPurchaseOrders', 'ecovisProjects', 'ecovisPayments',
       'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs', 'backupImportLogs',
     ];
@@ -3586,6 +3593,8 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
             if (!parentWeek) { entityConflicts.push({ backupId: row.id, reason: 'Nómina semanal padre no encontrada' }); continue; }
             db.prepare('INSERT INTO payroll_attendance_employees (payroll_attendance_week_id, employee_id, employee_number_snapshot, full_name_snapshot, position_snapshot, department_snapshot, monday_status, tuesday_status, wednesday_status, thursday_status, friday_status, saturday_status, sunday_status, project_location_text, extra_payment_amount, extra_payment_currency, notes, created_by_user_id, created_by_name, created_at, updated_by_user_id, updated_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.payroll_attendance_week_id, row.employee_id, row.employee_number_snapshot, row.full_name_snapshot, row.position_snapshot || null, row.department_snapshot || null, row.monday_status || 'A', row.tuesday_status || 'A', row.wednesday_status || 'A', row.thursday_status || 'A', row.friday_status || 'A', row.saturday_status || 'D', row.sunday_status || 'D', row.project_location_text || null, row.extra_payment_amount || null, row.extra_payment_currency || 'MXN', row.notes || null, row.created_by_user_id || null, row.created_by_name || null, row.created_at, row.updated_by_user_id || null, row.updated_by_name || null, row.updated_at);
             added++;
+          } else if (entityKey === 'attendanceStatuses') {
+            skipped++;
           } else if (entityKey === 'projectReports' || entityKey === 'reportsArchive') {
             const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
             if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Proyecto padre no encontrado' }); continue; }

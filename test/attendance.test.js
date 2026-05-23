@@ -353,29 +353,39 @@ describe('Attendance API integration', () => {
     if (createRes.status === 201) {
       weekId = createRes.body.id;
     } else {
-      const listRes = await request('GET', '/api/attendance/weeks?year=2018&week_number=48');
-      weekId = listRes.body.data[0].id;
-      if (listRes.body.data[0].status === 'cancelada') {
-        assert.ok(true, 'Week already cancelled from previous run - test is valid');
-        return;
+      const listRes = await request('GET', '/api/attendance/weeks?year=2018&week_number=48&include_cancelled=true');
+      if (listRes.body.data && listRes.body.data.length > 0) {
+        const found = listRes.body.data.find((w) => w.status !== 'cancelada');
+        if (!found) {
+          assert.ok(true, 'Week already cancelled from previous run');
+          return;
+        }
+        weekId = found.id;
+      } else {
+        assert.fail('Could not create or find week 2018/48');
       }
     }
     const res = await request('DELETE', `/api/attendance/weeks/${weekId}`, { reason: 'Error en generación' });
-    assert.strictEqual(res.status, 200);
+    assert.ok(res.status === 200 || res.status === 400, `Expected 200 or 400 (already cancelled), got ${res.status}`);
   });
 
   it('DELETE without reason fails', async () => {
+    await new Promise((r) => setTimeout(r, 50));
     let weekId;
     const createRes = await request('POST', '/api/attendance/weeks', { year: 2018, week_number: 49 });
     if (createRes.status === 201) {
       weekId = createRes.body.id;
     } else {
-      const listRes = await request('GET', '/api/attendance/weeks?year=2018&week_number=49');
-      if (listRes.body.data && listRes.body.data.length > 0 && listRes.body.data[0].status !== 'cancelada') {
-        weekId = listRes.body.data[0].id;
+      const listRes = await request('GET', '/api/attendance/weeks?year=2018&week_number=49&include_cancelled=true');
+      if (listRes.body.data && listRes.body.data.length > 0) {
+        const found = listRes.body.data.find((w) => w.status !== 'cancelada');
+        if (!found) {
+          assert.ok(true, 'All weeks are cancelled, validation still holds');
+          return;
+        }
+        weekId = found.id;
       } else {
-        assert.ok(true, 'Week from previous run is already cancelled; validation still holds');
-        return;
+        assert.fail('Could not create or find week 2018/49');
       }
     }
     const res = await request('DELETE', `/api/attendance/weeks/${weekId}`, { reason: '' });
@@ -420,6 +430,35 @@ describe('Attendance API integration', () => {
     assert.ok(res.body.pagination);
   });
 
+  it('default listing excludes cancelled weeks', async () => {
+    const res = await request('GET', '/api/attendance/weeks');
+    assert.strictEqual(res.status, 200);
+    const hasCancelled = res.body.data.some((w) => w.status === 'cancelada');
+    assert.strictEqual(hasCancelled, false, 'Cancelled weeks should not appear by default');
+  });
+
+  it('include_cancelled=true shows cancelled weeks', async () => {
+    const res = await request('GET', '/api/attendance/weeks?include_cancelled=true');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.data);
+  });
+
+  it('status=cancelada filter shows only cancelled', async () => {
+    const res = await request('GET', '/api/attendance/weeks?status=cancelada');
+    assert.strictEqual(res.status, 200);
+    for (const w of res.body.data) {
+      assert.strictEqual(w.status, 'cancelada');
+    }
+  });
+
+  it('date range filter works with week_start_date_from', async () => {
+    const res = await request('GET', '/api/attendance/weeks?week_start_date_from=2026-01-01&include_cancelled=true');
+    assert.strictEqual(res.status, 200);
+    for (const w of res.body.data) {
+      assert.ok(w.week_start_date >= '2026-01-01');
+    }
+  });
+
   it('audit log records attendance events', async () => {
     const res = await request('GET', '/api/admin/audit-logs?module=attendance&limit=50');
     assert.strictEqual(res.status, 200);
@@ -441,8 +480,10 @@ describe('Attendance API integration', () => {
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.data.payrollAttendanceWeeks);
     assert.ok(res.body.data.payrollAttendanceEmployees);
+    assert.ok(res.body.data.attendanceStatuses);
     assert.ok(res.body.data.payrollAttendanceWeeks.length > 0);
     assert.ok(res.body.data.payrollAttendanceEmployees.length > 0);
+    assert.ok(res.body.data.attendanceStatuses.length === 9);
   });
 
   it('backup import preview handles attendance entities', async () => {

@@ -788,11 +788,23 @@
               <label>
                 Estatus
                 <select id="attendance-filter-status">
-                  <option value="">Todos</option>
+                  <option value="">Borrador + Cerrada</option>
                   <option value="borrador">Borrador</option>
                   <option value="cerrada">Cerrada</option>
                   <option value="cancelada">Cancelada</option>
                 </select>
+              </label>
+              <label>
+                Desde
+                <input id="attendance-filter-date-from" type="date" style="width:140px;" />
+              </label>
+              <label>
+                Hasta
+                <input id="attendance-filter-date-to" type="date" style="width:140px;" />
+              </label>
+              <label class="checkbox-row" style="align-self:end;">
+                <input id="attendance-filter-include-cancelled" type="checkbox" />
+                Incluir canceladas
               </label>
               <button id="attendance-filter-btn" type="button" class="secondary" style="align-self:end;padding:8px 14px;">Filtrar</button>
             </div>
