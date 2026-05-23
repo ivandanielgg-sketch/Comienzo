@@ -19,6 +19,7 @@ const { calculateEcovisAccountSummary, calculateProjectPaidAmount, calculateProj
 const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { formatDateTimeCDMX } = require('./dateHelper');
 const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES } = require('./permissions');
+const { ATTENDANCE_STATUSES, VALID_STATUS_CODES, VALID_WEEK_STATUSES, DAY_COLUMNS, calculateWeekRange, calculateAttendanceSummary, generateDefaultAttendance, validateStatusCode, employeeHasOutsideWork } = require('./attendance');
 
 const app = express();
 const db = getDb();
@@ -2221,6 +2222,312 @@ app.get('/api/vacation-requests/:id', requireAuth, requirePermission('vacations'
 
 // ===================== END VACATION MODULE =====================
 
+// ===================== ATTENDANCE MODULE =====================
+
+function getPayrollWeekOrFail(weekId) {
+  const week = db.prepare('SELECT * FROM payroll_attendance_weeks WHERE id = ?').get(weekId);
+  if (!week) {
+    const error = new Error('Nómina semanal no encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return week;
+}
+
+function mapPayrollWeek(row) {
+  const employees = db.prepare('SELECT * FROM payroll_attendance_employees WHERE payroll_attendance_week_id = ? ORDER BY employee_number_snapshot').all(row.id);
+  const summary = calculateAttendanceSummary(employees);
+  return {
+    ...row,
+    employees,
+    summary,
+    created_at_cdmx: formatDateTimeCDMX(row.created_at),
+    updated_at_cdmx: formatDateTimeCDMX(row.updated_at),
+    closed_at_cdmx: formatDateTimeCDMX(row.closed_at),
+  };
+}
+
+function mapPayrollWeekListItem(row) {
+  const empCount = db.prepare('SELECT COUNT(*) as cnt FROM payroll_attendance_employees WHERE payroll_attendance_week_id = ?').get(row.id);
+  const employees = db.prepare('SELECT monday_status, tuesday_status, wednesday_status, thursday_status, friday_status, saturday_status, sunday_status, extra_payment_amount FROM payroll_attendance_employees WHERE payroll_attendance_week_id = ?').all(row.id);
+  const summary = calculateAttendanceSummary(employees);
+  return {
+    id: row.id,
+    year: row.year,
+    week_number: row.week_number,
+    week_start_date: row.week_start_date,
+    week_end_date: row.week_end_date,
+    title: row.title,
+    status: row.status,
+    employee_count: empCount.cnt,
+    total_absences: summary.totalAbsences,
+    total_extra_payments: summary.totalExtraPayments,
+    created_by_name: row.created_by_name,
+    created_at: row.created_at,
+    created_at_cdmx: formatDateTimeCDMX(row.created_at),
+    updated_at_cdmx: formatDateTimeCDMX(row.updated_at),
+    closed_at_cdmx: formatDateTimeCDMX(row.closed_at),
+  };
+}
+
+// GET /api/attendance/weeks - List payroll weeks
+app.get('/api/attendance/weeks', requireAuth, requirePermission('attendance', 'view'), (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+
+  const filterDefs = {
+    year: { type: 'number', column: 'year' },
+    week_number: { type: 'number', column: 'week_number' },
+    status: { type: 'select', column: 'status', options: VALID_WEEK_STATUSES },
+    created_by_name: { type: 'text', column: 'created_by_name' },
+    week_start_date: { type: 'date', column: 'week_start_date' },
+    week_end_date: { type: 'date', column: 'week_end_date' },
+  };
+
+  const whereParts = [];
+  const params = [];
+
+  const { activeFilters } = addSqlFilters(req.query, filterDefs, whereParts, params);
+
+  if (search) {
+    whereParts.push('(title LIKE ? OR created_by_name LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
+  const includeCancelled = req.query.include_cancelled === 'true' || req.query.include_cancelled === '1';
+  const hasYearFilter = activeFilters.year != null;
+  if (!includeCancelled && !activeFilters.status && !hasYearFilter) {
+    whereParts.push("status != 'cancelada'");
+  }
+
+  const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+  const orderBy = hasYearFilter ? 'year DESC, week_number ASC' : 'year DESC, week_number DESC';
+
+  const countRow = db.prepare(`SELECT COUNT(*) as total FROM payroll_attendance_weeks ${whereClause}`).get(...params);
+  const pagination = buildPaginationMeta(page, limit, countRow.total);
+
+  const rows = db.prepare(`SELECT * FROM payroll_attendance_weeks ${whereClause} ORDER BY ${orderBy} LIMIT ? OFFSET ?`).all(...params, pagination.limit, pagination.offset);
+
+  const data = rows.map(mapPayrollWeekListItem);
+
+  const extra = {};
+  if (hasYearFilter) {
+    const summaryRows = db.prepare(`SELECT status, COUNT(*) as cnt FROM payroll_attendance_weeks ${whereClause} GROUP BY status`).all(...params);
+    const counts = { borrador: 0, cerrada: 0, cancelada: 0 };
+    for (const r of summaryRows) counts[r.status] = r.cnt;
+    extra.summary = {
+      year: activeFilters.year,
+      totalWeeks: countRow.total,
+      draftCount: counts.borrador,
+      closedCount: counts.cerrada,
+      cancelledCount: counts.cancelada,
+    };
+  }
+
+  res.json(buildListResponse(data, pagination, { sortBy: '', sortOrder: hasYearFilter ? 'asc' : 'desc' }, activeFilters, extra));
+});
+
+// GET /api/attendance/statuses - Get attendance status catalog
+app.get('/api/attendance/statuses', requireAuth, requirePermission('attendance', 'view'), (req, res) => {
+  res.json(ATTENDANCE_STATUSES);
+});
+
+// GET /api/attendance/years - Get distinct years that have payroll weeks
+app.get('/api/attendance/years', requireAuth, requirePermission('attendance', 'view'), (req, res) => {
+  const rows = db.prepare('SELECT DISTINCT year FROM payroll_attendance_weeks ORDER BY year DESC').all();
+  const years = rows.map((r) => r.year);
+  res.json({ years });
+});
+
+// POST /api/attendance/weeks - Create new payroll week
+app.post('/api/attendance/weeks', requireAuth, requirePermission('attendance', 'create'), (req, res) => {
+  const { year, week_number } = req.body;
+
+  if (!year || !week_number) {
+    return res.status(400).json({ message: 'Año y número de semana son obligatorios.' });
+  }
+
+  const yearNum = Number(year);
+  const weekNum = Number(week_number);
+
+  if (!Number.isFinite(yearNum) || !Number.isFinite(weekNum) || weekNum < 1 || weekNum > 53) {
+    return res.status(400).json({ message: 'Año o semana inválidos.' });
+  }
+
+  const existing = db.prepare("SELECT id FROM payroll_attendance_weeks WHERE year = ? AND week_number = ? AND deleted_at IS NULL AND status != 'cancelada'").get(yearNum, weekNum);
+  if (existing) {
+    return res.status(409).json({ message: 'Ya existe una nómina activa para esta semana/año.', existing_id: existing.id });
+  }
+
+  const { weekStartDate, weekEndDate, label } = calculateWeekRange(yearNum, weekNum);
+  const audit = createdByFields(req);
+
+  const result = db.prepare(`
+    INSERT INTO payroll_attendance_weeks (year, week_number, week_start_date, week_end_date, title, status, created_by_user_id, created_by_name, created_at, updated_by_user_id, updated_by_name, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'borrador', ?, ?, ?, ?, ?, ?)
+  `).run(yearNum, weekNum, weekStartDate, weekEndDate, label, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_by_user_id, audit.created_by_name, audit.created_at);
+
+  const weekId = result.lastInsertRowid;
+
+  const activeEmployees = db.prepare('SELECT * FROM employees WHERE active = 1 ORDER BY employee_number').all();
+  const defaults = generateDefaultAttendance();
+
+  const insertEmp = db.prepare(`
+    INSERT INTO payroll_attendance_employees (payroll_attendance_week_id, employee_id, employee_number_snapshot, full_name_snapshot, position_snapshot, department_snapshot, monday_status, tuesday_status, wednesday_status, thursday_status, friday_status, saturday_status, sunday_status, created_by_user_id, created_by_name, created_at, updated_by_user_id, updated_by_name, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const emp of activeEmployees) {
+    insertEmp.run(weekId, emp.id, emp.employee_number, emp.full_name, emp.position || null, emp.department || null, defaults.monday_status, defaults.tuesday_status, defaults.wednesday_status, defaults.thursday_status, defaults.friday_status, defaults.saturday_status, defaults.sunday_status, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_by_user_id, audit.created_by_name, audit.created_at);
+  }
+
+  logAuditEvent(db, { req, action: 'create', module: 'attendance', entityType: 'payroll_week', entityId: weekId, entityLabel: label });
+
+  const created = getPayrollWeekOrFail(weekId);
+  res.status(201).json(mapPayrollWeek(created));
+});
+
+// GET /api/attendance/weeks/:id - Get payroll week details
+app.get('/api/attendance/weeks/:id', requireAuth, requirePermission('attendance', 'view'), (req, res) => {
+  const week = getPayrollWeekOrFail(Number(req.params.id));
+  res.json(mapPayrollWeek(week));
+});
+
+// PUT /api/attendance/weeks/:id - Update payroll week employees
+app.put('/api/attendance/weeks/:id', requireAuth, requirePermission('attendance', 'edit'), (req, res) => {
+  const week = getPayrollWeekOrFail(Number(req.params.id));
+
+  if (week.status === 'cerrada') {
+    return res.status(403).json({ message: 'La nómina está cerrada. Debe reabrirse antes de editar.' });
+  }
+  if (week.status === 'cancelada') {
+    return res.status(403).json({ message: 'No se puede editar una nómina cancelada.' });
+  }
+
+  const { employees } = req.body;
+  if (!Array.isArray(employees)) {
+    return res.status(400).json({ message: 'Se requiere un arreglo de empleados.' });
+  }
+
+  const audit = updatedByFields(req);
+
+  const updateEmp = db.prepare(`
+    UPDATE payroll_attendance_employees SET
+      monday_status = ?, tuesday_status = ?, wednesday_status = ?,
+      thursday_status = ?, friday_status = ?, saturday_status = ?, sunday_status = ?,
+      project_location_text = ?, extra_payment_amount = ?, extra_payment_currency = ?, notes = ?,
+      updated_by_user_id = ?, updated_by_name = ?, updated_at = ?
+    WHERE id = ? AND payroll_attendance_week_id = ?
+  `);
+
+  for (const emp of employees) {
+    if (!emp.id) continue;
+
+    const days = [emp.monday_status, emp.tuesday_status, emp.wednesday_status, emp.thursday_status, emp.friday_status, emp.saturday_status, emp.sunday_status];
+    for (const d of days) {
+      if (d && !validateStatusCode(d)) {
+        return res.status(400).json({ message: `Código de incidencia inválido: ${d}` });
+      }
+    }
+
+    if (employeeHasOutsideWork(emp) && !emp.project_location_text) {
+      return res.status(400).json({ message: `Proyecto/Ubicación es obligatorio cuando se usa A* (empleado ID ${emp.id}).` });
+    }
+
+    const extraAmount = emp.extra_payment_amount != null ? Number(emp.extra_payment_amount) : null;
+    if (extraAmount !== null && (!Number.isFinite(extraAmount) || extraAmount < 0)) {
+      return res.status(400).json({ message: 'Pago extra debe ser un número >= 0.' });
+    }
+
+    updateEmp.run(
+      emp.monday_status || 'A', emp.tuesday_status || 'A', emp.wednesday_status || 'A',
+      emp.thursday_status || 'A', emp.friday_status || 'A', emp.saturday_status || 'D', emp.sunday_status || 'D',
+      emp.project_location_text || null, extraAmount, emp.extra_payment_currency || 'MXN', emp.notes || null,
+      audit.updated_by_user_id, audit.updated_by_name, audit.updated_at,
+      emp.id, week.id,
+    );
+  }
+
+  db.prepare('UPDATE payroll_attendance_weeks SET updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?').run(audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, week.id);
+
+  logAuditEvent(db, { req, action: 'update', module: 'attendance', entityType: 'payroll_week', entityId: week.id, entityLabel: week.title });
+
+  const updated = getPayrollWeekOrFail(week.id);
+  res.json(mapPayrollWeek(updated));
+});
+
+// POST /api/attendance/weeks/:id/close - Close payroll week
+app.post('/api/attendance/weeks/:id/close', requireAuth, requirePermission('attendance', 'approve'), (req, res) => {
+  const week = getPayrollWeekOrFail(Number(req.params.id));
+
+  if (week.status === 'cerrada') {
+    return res.status(400).json({ message: 'La nómina ya está cerrada.' });
+  }
+  if (week.status === 'cancelada') {
+    return res.status(400).json({ message: 'No se puede cerrar una nómina cancelada.' });
+  }
+
+  const now = nowUtc();
+  db.prepare('UPDATE payroll_attendance_weeks SET status = ?, closed_by_user_id = ?, closed_by_name = ?, closed_at = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?')
+    .run('cerrada', req.session.userId, req.session.username, now, req.session.userId, req.session.username, now, week.id);
+
+  logAuditEvent(db, { req, action: 'close', module: 'attendance', entityType: 'payroll_week', entityId: week.id, entityLabel: week.title });
+
+  const updated = getPayrollWeekOrFail(week.id);
+  res.json(mapPayrollWeek(updated));
+});
+
+// POST /api/attendance/weeks/:id/reopen - Reopen payroll week (admin only)
+app.post('/api/attendance/weeks/:id/reopen', requireAuth, requirePermission('attendance', 'reopen'), (req, res) => {
+  const week = getPayrollWeekOrFail(Number(req.params.id));
+
+  if (week.status !== 'cerrada') {
+    return res.status(400).json({ message: 'Solo se puede reabrir una nómina cerrada.' });
+  }
+
+  const now = nowUtc();
+  db.prepare('UPDATE payroll_attendance_weeks SET status = ?, closed_by_user_id = NULL, closed_by_name = NULL, closed_at = NULL, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?')
+    .run('borrador', req.session.userId, req.session.username, now, week.id);
+
+  logAuditEvent(db, { req, action: 'reopen', module: 'attendance', entityType: 'payroll_week', entityId: week.id, entityLabel: week.title });
+
+  const updated = getPayrollWeekOrFail(week.id);
+  res.json(mapPayrollWeek(updated));
+});
+
+// DELETE /api/attendance/weeks/:id - Cancel payroll week (logical delete)
+app.delete('/api/attendance/weeks/:id', requireAuth, requirePermission('attendance', 'delete'), (req, res) => {
+  const week = getPayrollWeekOrFail(Number(req.params.id));
+  const { reason } = req.body || {};
+
+  if (!reason || typeof reason !== 'string' || !reason.trim()) {
+    return res.status(400).json({ message: 'El motivo de cancelación es obligatorio.' });
+  }
+
+  if (week.status === 'cancelada') {
+    return res.status(400).json({ message: 'La nómina ya está cancelada.' });
+  }
+
+  const now = nowUtc();
+  db.prepare('UPDATE payroll_attendance_weeks SET status = ?, deleted_at = ?, deleted_by_user_id = ?, deleted_by_name = ?, delete_reason = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?')
+    .run('cancelada', now, req.session.userId, req.session.username, reason.trim(), req.session.userId, req.session.username, now, week.id);
+
+  logAuditEvent(db, { req, action: 'cancel', module: 'attendance', entityType: 'payroll_week', entityId: week.id, entityLabel: week.title, metadata: { reason: reason.trim() } });
+
+  res.json({ message: 'Nómina cancelada correctamente.' });
+});
+
+// GET /api/attendance/weeks/:id/print - Get print data
+app.get('/api/attendance/weeks/:id/print', requireAuth, requirePermission('attendance', 'print'), (req, res) => {
+  const week = getPayrollWeekOrFail(Number(req.params.id));
+
+  logAuditEvent(db, { req, action: 'print', module: 'attendance', entityType: 'payroll_week', entityId: week.id, entityLabel: week.title });
+
+  res.json(mapPayrollWeek(week));
+});
+
+// ===================== END ATTENDANCE MODULE =====================
+
 // ===================== ECOVIS MODULE =====================
 
 const VALID_ECOVIS_DIRECTIONS = ['ecovis_debe_a_revram', 'revram_debe_a_ecovis', 'neutral'];
@@ -3236,6 +3543,7 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
     const orderedEntities = [
       'settings', 'usersSafe', 'userPermissions', 'projects', 'closedProjects',
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
+      'payrollAttendanceWeeks', 'payrollAttendanceEmployees', 'attendanceStatuses',
       'projectReports', 'reportsArchive', 'ecovisPurchaseOrders', 'ecovisProjects', 'ecovisPayments',
       'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs', 'backupImportLogs',
     ];
@@ -3299,6 +3607,18 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
             if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Empleado padre no encontrado' }); continue; }
             db.prepare('INSERT INTO vacation_requests (employee_id, start_date, end_date, requested_days, vacation_exercise_year, status, is_first_vacation_of_exercise, include_vacation_bonus, created_by, authorized_by, hr_responsible, notes, creates_negative_balance, negative_days_generated, admin_override_reason, balance_after_request) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.employee_id, row.start_date, row.end_date, row.requested_days, row.vacation_exercise_year, row.status, row.is_first_vacation_of_exercise ?? 0, row.include_vacation_bonus ?? 1, row.created_by || null, row.authorized_by || null, row.hr_responsible || null, row.notes || null, row.creates_negative_balance ?? 0, row.negative_days_generated ?? 0, row.admin_override_reason || null, row.balance_after_request ?? null);
             added++;
+          } else if (entityKey === 'payrollAttendanceWeeks') {
+            const existingWeek = db.prepare("SELECT id FROM payroll_attendance_weeks WHERE year = ? AND week_number = ? AND deleted_at IS NULL AND status != 'cancelada'").get(row.year, row.week_number);
+            if (existingWeek) { skipped++; continue; }
+            db.prepare('INSERT INTO payroll_attendance_weeks (year, week_number, week_start_date, week_end_date, title, status, created_by_user_id, created_by_name, created_at, updated_by_user_id, updated_by_name, updated_at, closed_by_user_id, closed_by_name, closed_at, deleted_at, deleted_by_user_id, deleted_by_name, delete_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.year, row.week_number, row.week_start_date, row.week_end_date, row.title || null, row.status || 'borrador', row.created_by_user_id || null, row.created_by_name || null, row.created_at, row.updated_by_user_id || null, row.updated_by_name || null, row.updated_at, row.closed_by_user_id || null, row.closed_by_name || null, row.closed_at || null, row.deleted_at || null, row.deleted_by_user_id || null, row.deleted_by_name || null, row.delete_reason || null);
+            added++;
+          } else if (entityKey === 'payrollAttendanceEmployees') {
+            const parentWeek = db.prepare('SELECT id FROM payroll_attendance_weeks WHERE id = ?').get(row.payroll_attendance_week_id);
+            if (!parentWeek) { entityConflicts.push({ backupId: row.id, reason: 'Nómina semanal padre no encontrada' }); continue; }
+            db.prepare('INSERT INTO payroll_attendance_employees (payroll_attendance_week_id, employee_id, employee_number_snapshot, full_name_snapshot, position_snapshot, department_snapshot, monday_status, tuesday_status, wednesday_status, thursday_status, friday_status, saturday_status, sunday_status, project_location_text, extra_payment_amount, extra_payment_currency, notes, created_by_user_id, created_by_name, created_at, updated_by_user_id, updated_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.payroll_attendance_week_id, row.employee_id, row.employee_number_snapshot, row.full_name_snapshot, row.position_snapshot || null, row.department_snapshot || null, row.monday_status || 'A', row.tuesday_status || 'A', row.wednesday_status || 'A', row.thursday_status || 'A', row.friday_status || 'A', row.saturday_status || 'D', row.sunday_status || 'D', row.project_location_text || null, row.extra_payment_amount || null, row.extra_payment_currency || 'MXN', row.notes || null, row.created_by_user_id || null, row.created_by_name || null, row.created_at, row.updated_by_user_id || null, row.updated_by_name || null, row.updated_at);
+            added++;
+          } else if (entityKey === 'attendanceStatuses') {
+            skipped++;
           } else if (entityKey === 'projectReports' || entityKey === 'reportsArchive') {
             const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
             if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Proyecto padre no encontrado' }); continue; }
