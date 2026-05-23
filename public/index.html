@@ -768,64 +768,48 @@
             <div class="panel-header">
               <div>
                 <p class="eyebrow">Módulo de Asistencias</p>
-                <h2>LISTA DE ASISTENCIA / NÓMINA</h2>
-                <p class="muted">Genera, captura e imprime listas semanales de asistencia.</p>
+                <h2>ARCHIVO DE NÓMINAS</h2>
+                <p class="muted">Consulta y administra las listas semanales de asistencia por año.</p>
               </div>
               <div class="row-actions">
                 <button id="attendance-new-btn" type="button">Nueva nómina semanal</button>
               </div>
             </div>
 
-            <div class="grid-form" style="gap:10px;margin-bottom:16px;">
+            <div style="display:flex;gap:10px;align-items:end;margin-bottom:16px;flex-wrap:wrap;">
               <label>
                 Año
-                <input id="attendance-filter-year" type="number" placeholder="2026" style="width:100px;" />
+                <select id="attendance-filter-year" style="width:120px;"></select>
               </label>
-              <label>
-                Semana
-                <input id="attendance-filter-week" type="number" min="1" max="53" placeholder="1-53" style="width:100px;" />
-              </label>
-              <label>
-                Estatus
-                <select id="attendance-filter-status">
-                  <option value="">Borrador + Cerrada</option>
-                  <option value="borrador">Borrador</option>
-                  <option value="cerrada">Cerrada</option>
-                  <option value="cancelada">Cancelada</option>
-                </select>
-              </label>
-              <label>
-                Desde
-                <input id="attendance-filter-date-from" type="date" style="width:140px;" />
-              </label>
-              <label>
-                Hasta
-                <input id="attendance-filter-date-to" type="date" style="width:140px;" />
-              </label>
-              <label class="checkbox-row" style="align-self:end;">
-                <input id="attendance-filter-include-cancelled" type="checkbox" />
-                Incluir canceladas
-              </label>
-              <button id="attendance-filter-btn" type="button" class="secondary" style="align-self:end;padding:8px 14px;">Filtrar</button>
+              <button id="attendance-search-btn" type="button" style="padding:8px 18px;">Buscar</button>
+              <p id="attendance-search-message" class="message" style="margin:0;"></p>
+            </div>
+
+            <div id="attendance-summary" class="cards hidden" style="margin-bottom:16px;">
+              <article><span>Total nóminas</span><strong id="att-summary-total">0</strong></article>
+              <article><span>Borradores</span><strong id="att-summary-draft" style="color:orange;">0</strong></article>
+              <article><span>Cerradas</span><strong id="att-summary-closed" style="color:green;">0</strong></article>
+              <article><span>Canceladas</span><strong id="att-summary-cancelled" style="color:red;">0</strong></article>
             </div>
 
             <div class="table-wrapper">
               <table>
                 <thead>
                   <tr>
-                    <th>Año</th>
                     <th>Semana</th>
-                    <th>Rango</th>
+                    <th>Rango de fechas</th>
                     <th>Estatus</th>
                     <th>Empleados</th>
                     <th>Inasistencias</th>
                     <th>Pagos extra</th>
                     <th>Creado por</th>
-                    <th>Fecha</th>
+                    <th>Creado el</th>
                     <th></th>
                   </tr>
                 </thead>
-                <tbody id="attendance-weeks-table"></tbody>
+                <tbody id="attendance-weeks-table">
+                  <tr><td colspan="9" style="text-align:center;">Selecciona un año y presiona Buscar.</td></tr>
+                </tbody>
               </table>
             </div>
             <div id="attendance-weeks-pagination"></div>

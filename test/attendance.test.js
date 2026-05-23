@@ -430,17 +430,37 @@ describe('Attendance API integration', () => {
     assert.ok(res.body.pagination);
   });
 
-  it('default listing excludes cancelled weeks', async () => {
+  it('year search returns summary with counts', async () => {
+    const res = await request('GET', '/api/attendance/weeks?year=2026');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.summary);
+    assert.strictEqual(res.body.summary.year, 2026);
+    assert.ok(res.body.summary.totalWeeks >= 1);
+    assert.ok(typeof res.body.summary.draftCount === 'number');
+    assert.ok(typeof res.body.summary.closedCount === 'number');
+    assert.ok(typeof res.body.summary.cancelledCount === 'number');
+  });
+
+  it('year search includes all statuses (borrador, cerrada, cancelada)', async () => {
+    const res = await request('GET', '/api/attendance/weeks?year=2026&include_cancelled=true');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.data);
+  });
+
+  it('year search orders by week_number ascending', async () => {
+    const res = await request('GET', '/api/attendance/weeks?year=2026');
+    assert.strictEqual(res.status, 200);
+    const weeks = res.body.data;
+    for (let i = 1; i < weeks.length; i++) {
+      assert.ok(weeks[i].week_number >= weeks[i - 1].week_number, 'Should be ordered by week_number ASC');
+    }
+  });
+
+  it('default listing without year excludes cancelled weeks', async () => {
     const res = await request('GET', '/api/attendance/weeks');
     assert.strictEqual(res.status, 200);
     const hasCancelled = res.body.data.some((w) => w.status === 'cancelada');
-    assert.strictEqual(hasCancelled, false, 'Cancelled weeks should not appear by default');
-  });
-
-  it('include_cancelled=true shows cancelled weeks', async () => {
-    const res = await request('GET', '/api/attendance/weeks?include_cancelled=true');
-    assert.strictEqual(res.status, 200);
-    assert.ok(res.body.data);
+    assert.strictEqual(hasCancelled, false, 'Cancelled weeks should not appear by default without year filter');
   });
 
   it('status=cancelada filter shows only cancelled', async () => {

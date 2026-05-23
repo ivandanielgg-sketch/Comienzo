@@ -2294,20 +2294,37 @@ app.get('/api/attendance/weeks', requireAuth, requirePermission('attendance', 'v
   }
 
   const includeCancelled = req.query.include_cancelled === 'true' || req.query.include_cancelled === '1';
-  if (!includeCancelled && !activeFilters.status) {
+  const hasYearFilter = activeFilters.year != null;
+  if (!includeCancelled && !activeFilters.status && !hasYearFilter) {
     whereParts.push("status != 'cancelada'");
   }
 
   const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
+  const orderBy = hasYearFilter ? 'year DESC, week_number ASC' : 'year DESC, week_number DESC';
+
   const countRow = db.prepare(`SELECT COUNT(*) as total FROM payroll_attendance_weeks ${whereClause}`).get(...params);
   const pagination = buildPaginationMeta(page, limit, countRow.total);
 
-  const rows = db.prepare(`SELECT * FROM payroll_attendance_weeks ${whereClause} ORDER BY year DESC, week_number DESC LIMIT ? OFFSET ?`).all(...params, pagination.limit, pagination.offset);
+  const rows = db.prepare(`SELECT * FROM payroll_attendance_weeks ${whereClause} ORDER BY ${orderBy} LIMIT ? OFFSET ?`).all(...params, pagination.limit, pagination.offset);
 
   const data = rows.map(mapPayrollWeekListItem);
 
-  res.json(buildListResponse(data, pagination, { sortBy: '', sortOrder: 'desc' }, activeFilters));
+  const extra = {};
+  if (hasYearFilter) {
+    const summaryRows = db.prepare(`SELECT status, COUNT(*) as cnt FROM payroll_attendance_weeks ${whereClause} GROUP BY status`).all(...params);
+    const counts = { borrador: 0, cerrada: 0, cancelada: 0 };
+    for (const r of summaryRows) counts[r.status] = r.cnt;
+    extra.summary = {
+      year: activeFilters.year,
+      totalWeeks: countRow.total,
+      draftCount: counts.borrador,
+      closedCount: counts.cerrada,
+      cancelledCount: counts.cancelada,
+    };
+  }
+
+  res.json(buildListResponse(data, pagination, { sortBy: '', sortOrder: hasYearFilter ? 'asc' : 'desc' }, activeFilters, extra));
 });
 
 // GET /api/attendance/statuses - Get attendance status catalog
