@@ -20,7 +20,7 @@
     .day-date { font-size: 7px; color: #555; }
     .status-F { background: #fff9c4; }
     .status-B { background: #e0e0e0; }
-    .status-A\\* { background: #b3e5fc; }
+    .status-A\* { background: #b3e5fc; }
     .status-PC { background: #ffcdd2; }
     .status-PS { background: #ef9a9a; }
     .status-D { background: #bbdefb; }
@@ -128,7 +128,7 @@
       tbody.innerHTML = (week.employees || []).map((emp, idx) => {
         const dayCells = dayFields.map((f) => {
           const val = emp[f] || 'A';
-          const cls = val !== 'A' ? ` class="status-${val.replace('*', '\\*')}"` : '';
+          const cls = val !== 'A' ? ` class="status-${val}"` : '';
           return `<td${cls}>${val}</td>`;
         }).join('');
 
