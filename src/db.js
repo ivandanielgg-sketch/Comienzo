@@ -737,19 +737,14 @@ function seedServiceTypes(database) {
 
 function seedServiceQuoteSettings(database) {
   const defaults = [
-    { key: 'salario_base_programador', value: '5500', label: 'Salario base programador (semanal)', category: 'mano_de_obra' },
-    { key: 'porcentaje_imss_prestaciones', value: '27', label: 'Porcentaje IMSS y prestaciones (%)', category: 'mano_de_obra' },
-    { key: 'horas_semanales_calculo', value: '40', label: 'Horas semanales de cálculo', category: 'mano_de_obra' },
-    { key: 'tarifa_programador_cliente', value: '291', label: 'Tarifa programador al cliente ($/h)', category: 'mano_de_obra' },
-    { key: 'tarifa_ayudante_cliente', value: '175', label: 'Tarifa ayudante al cliente ($/h)', category: 'mano_de_obra' },
-    { key: 'costo_por_kilometro', value: '7.50', label: 'Costo por kilómetro ($)', category: 'viaticos' },
+    { key: 'tarifa_programador_hora', value: '300', label: 'Tarifa programador ($/h)', category: 'mano_de_obra' },
+    { key: 'tarifa_tecnico_hora', value: '250', label: 'Tarifa técnico ($/h)', category: 'mano_de_obra' },
+    { key: 'tarifa_ayudante_hora', value: '175', label: 'Tarifa ayudante ($/h)', category: 'mano_de_obra' },
+    { key: 'horas_por_dia_servicio', value: '9', label: 'Horas por día de servicio', category: 'mano_de_obra' },
+    { key: 'costo_por_kilometro', value: '7.50', label: 'Costo por kilómetro ($)', category: 'transporte' },
     { key: 'hotel_default', value: '2500', label: 'Hotel por noche default ($)', category: 'viaticos' },
     { key: 'hotel_opcion_baja', value: '2000', label: 'Hotel opción baja ($)', category: 'viaticos' },
     { key: 'comida_diaria_default', value: '150', label: 'Comida diaria default ($)', category: 'viaticos' },
-    { key: 'iva_importacion', value: '16', label: 'IVA importación (%)', category: 'importacion' },
-    { key: 'igi_importacion', value: '5', label: 'IGI importación (%)', category: 'importacion' },
-    { key: 'agente_aduanal_usd', value: '200', label: 'Agente aduanal (USD)', category: 'importacion' },
-    { key: 'moneda_default_importacion', value: 'USD', label: 'Moneda default importación', category: 'importacion' },
     { key: 'iva_final', value: '16', label: 'IVA final (%)', category: 'cotizacion' },
   ];
 

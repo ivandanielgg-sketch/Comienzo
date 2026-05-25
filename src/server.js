@@ -3366,7 +3366,7 @@ function recalculatePurchaseOrderStatus(poId) {
 
 // GET /api/service-quoter/config - Load configuration and service types
 app.get('/api/service-quoter/config', requireAuth, requirePermission('serviceQuoter', 'view'), (req, res) => {
-  const settings = db.prepare('SELECT key, value, label, category FROM service_quote_settings ORDER BY key').all();
+  const settings = db.prepare("SELECT key, value, label, category FROM service_quote_settings WHERE category != 'importacion' ORDER BY key").all();
   const serviceTypes = db.prepare('SELECT id, name, margin, active, sort_order FROM service_types WHERE active = 1 ORDER BY sort_order, id').all();
   res.json({ settings, serviceTypes });
 });
@@ -3383,9 +3383,18 @@ app.get('/api/service-quoter/service-types', requireAuth, requirePermission('ser
   })));
 });
 
-// POST /api/service-quoter/service-types - Create a new service type
+// POST /api/service-quoter/service-types - Create a new service type (requires admin password)
 app.post('/api/service-quoter/service-types', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
-  const { name, margin, sort_order } = req.body;
+  const { name, margin, sort_order, adminPassword } = req.body;
+  if (!adminPassword) {
+    return res.status(400).json({ message: 'Se requiere contraseña de administrador.' });
+  }
+  const adminUser = db.prepare("SELECT password_hash FROM users WHERE role = 'admin' LIMIT 1").get();
+  if (!adminUser || !bcrypt.compareSync(adminPassword, adminUser.password_hash)) {
+    logAuditEvent(db, { req, action: 'config_change_denied', module: 'serviceQuoter', entityType: 'service_type', entityLabel: 'Intento fallido: contraseña incorrecta' });
+    return res.status(403).json({ message: 'Contraseña de administrador incorrecta.' });
+  }
+
   if (!name || !String(name).trim()) {
     return res.status(400).json({ message: 'Nombre del tipo de servicio es obligatorio.' });
   }
@@ -3411,9 +3420,19 @@ app.post('/api/service-quoter/service-types', requireAuth, requirePermission('se
   res.status(201).json({ ...created, created_at_cdmx: formatDateTimeCDMX(created.created_at), updated_at_cdmx: formatDateTimeCDMX(created.updated_at) });
 });
 
-// PUT /api/service-quoter/service-types/:id - Update a service type
+// PUT /api/service-quoter/service-types/:id - Update a service type (requires admin password)
 app.put('/api/service-quoter/service-types/:id', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
   const { id } = req.params;
+  const { adminPassword } = req.body;
+  if (!adminPassword) {
+    return res.status(400).json({ message: 'Se requiere contraseña de administrador.' });
+  }
+  const adminUser = db.prepare("SELECT password_hash FROM users WHERE role = 'admin' LIMIT 1").get();
+  if (!adminUser || !bcrypt.compareSync(adminPassword, adminUser.password_hash)) {
+    logAuditEvent(db, { req, action: 'config_change_denied', module: 'serviceQuoter', entityType: 'service_type', entityId: Number(id), entityLabel: 'Intento fallido: contraseña incorrecta' });
+    return res.status(403).json({ message: 'Contraseña de administrador incorrecta.' });
+  }
+
   const existing = db.prepare('SELECT * FROM service_types WHERE id = ?').get(id);
   if (!existing) {
     return res.status(404).json({ message: 'Tipo de servicio no encontrado.' });
@@ -3455,21 +3474,29 @@ app.put('/api/service-quoter/service-types/:id', requireAuth, requirePermission(
 
 // GET /api/service-quoter/settings - Get all settings (for configure panel)
 app.get('/api/service-quoter/settings', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
-  const settings = db.prepare('SELECT key, value, label, category, updated_by_name, updated_at FROM service_quote_settings ORDER BY category, key').all();
+  const settings = db.prepare("SELECT key, value, label, category, updated_by_name, updated_at FROM service_quote_settings WHERE category != 'importacion' ORDER BY category, key").all();
   res.json(settings.map((s) => ({ ...s, updated_at_cdmx: formatDateTimeCDMX(s.updated_at) })));
 });
 
-// PUT /api/service-quoter/settings - Update settings (batch)
+// PUT /api/service-quoter/settings - Update settings (requires admin password)
 app.put('/api/service-quoter/settings', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
-  const { settings } = req.body;
+  const { settings, adminPassword } = req.body;
   if (!settings || typeof settings !== 'object') {
     return res.status(400).json({ message: 'Se requiere un objeto settings con las claves a actualizar.' });
+  }
+  if (!adminPassword) {
+    return res.status(400).json({ message: 'Se requiere contraseña de administrador.' });
+  }
+  const adminUser = db.prepare("SELECT password_hash FROM users WHERE role = 'admin' LIMIT 1").get();
+  if (!adminUser || !bcrypt.compareSync(adminPassword, adminUser.password_hash)) {
+    logAuditEvent(db, { req, action: 'config_change_denied', module: 'serviceQuoter', entityType: 'service_quote_settings', entityLabel: 'Intento fallido: contraseña incorrecta' });
+    return res.status(403).json({ message: 'Contraseña de administrador incorrecta.' });
   }
 
   const audit = updatedByFields(req);
   const beforeSettings = {};
   const afterSettings = {};
-  const existingRows = db.prepare('SELECT key, value FROM service_quote_settings').all();
+  const existingRows = db.prepare("SELECT key, value FROM service_quote_settings WHERE category != 'importacion'").all();
   const existingMap = Object.fromEntries(existingRows.map((r) => [r.key, r.value]));
 
   const updateStmt = db.prepare(
@@ -3497,7 +3524,7 @@ app.put('/api/service-quoter/settings', requireAuth, requirePermission('serviceQ
     });
   }
 
-  const updatedSettings = db.prepare('SELECT key, value, label, category, updated_by_name, updated_at FROM service_quote_settings ORDER BY category, key').all();
+  const updatedSettings = db.prepare("SELECT key, value, label, category, updated_by_name, updated_at FROM service_quote_settings WHERE category != 'importacion' ORDER BY category, key").all();
   res.json(updatedSettings.map((s) => ({ ...s, updated_at_cdmx: formatDateTimeCDMX(s.updated_at) })));
 });
 

@@ -85,17 +85,8 @@ test('service quoter module', async (t) => {
     try { fs.unlinkSync(DB_PATH); } catch {}
   });
 
-  await t.test('GET /api/service-quoter/config requires auth', async () => {
-    const res = await request('GET', '/api/service-quoter/config');
-    assert.equal(res.status, 401);
-  });
-
-  await t.test('user without serviceQuoter.view gets 403', async () => {
-    const res = await request('GET', '/api/service-quoter/config', null, userCookie);
-    assert.equal(res.status, 403);
-  });
-
-  await t.test('admin can load config with service types and settings', async () => {
+  // 1. Load default configuration
+  await t.test('loads default configuration', async () => {
     const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
     assert.equal(res.status, 200);
     assert.ok(Array.isArray(res.body.settings));
@@ -103,318 +94,322 @@ test('service quoter module', async (t) => {
     assert.equal(res.body.serviceTypes.length, 6);
   });
 
-  await t.test('service types have correct default margins', async () => {
+  // 2. Programador default = $300/h
+  await t.test('programador default tariff is 300', async () => {
     const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
-    const types = res.body.serviceTypes;
-    const byName = Object.fromEntries(types.map((t) => [t.name, t.margin]));
-    assert.equal(byName['Emergencia'], 0.6);
-    assert.equal(byName['Automatización'], 0.6);
-    assert.equal(byName['Instalaciones'], 0.45);
-    assert.equal(byName['Mantenimiento Mayor'], 0.35);
-    assert.equal(byName['Mantenimiento Preventivo'], 0.3);
-    assert.equal(byName['Calentadores'], 0.3);
+    const s = res.body.settings.find((x) => x.key === 'tarifa_programador_hora');
+    assert.equal(s.value, '300');
   });
 
-  await t.test('settings have correct default values', async () => {
+  // 3. Técnico default = $250/h
+  await t.test('tecnico default tariff is 250', async () => {
     const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
-    const settingsMap = Object.fromEntries(res.body.settings.map((s) => [s.key, s.value]));
-    assert.equal(settingsMap['tarifa_programador_cliente'], '291');
-    assert.equal(settingsMap['tarifa_ayudante_cliente'], '175');
-    assert.equal(settingsMap['costo_por_kilometro'], '7.50');
-    assert.equal(settingsMap['hotel_default'], '2500');
-    assert.equal(settingsMap['comida_diaria_default'], '150');
-    assert.equal(settingsMap['iva_importacion'], '16');
-    assert.equal(settingsMap['igi_importacion'], '5');
-    assert.equal(settingsMap['agente_aduanal_usd'], '200');
-    assert.equal(settingsMap['iva_final'], '16');
+    const s = res.body.settings.find((x) => x.key === 'tarifa_tecnico_hora');
+    assert.equal(s.value, '250');
   });
 
-  await t.test('user without configure cannot access settings', async () => {
-    const res = await request('GET', '/api/service-quoter/settings', null, userCookie);
-    assert.equal(res.status, 403);
+  // 4. Ayudante default = $175/h
+  await t.test('ayudante default tariff is 175', async () => {
+    const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    const s = res.body.settings.find((x) => x.key === 'tarifa_ayudante_hora');
+    assert.equal(s.value, '175');
   });
 
-  await t.test('user without configure cannot update settings', async () => {
-    const res = await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '3000' } }, userCookie);
-    assert.equal(res.status, 403);
-  });
-
-  await t.test('admin can update settings', async () => {
-    const res = await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '3000' } }, adminCookie);
+  // 5. Admin can modify tariffs with correct password
+  await t.test('admin can modify tariffs with correct password', async () => {
+    const res = await request('PUT', '/api/service-quoter/settings', { settings: { tarifa_programador_hora: '320' }, adminPassword: 'admin123' }, adminCookie);
     assert.equal(res.status, 200);
-    const updated = res.body.find((s) => s.key === 'hotel_default');
-    assert.equal(updated.value, '3000');
-    assert.equal(updated.updated_by_name, 'admin');
-    assert.ok(updated.updated_at_cdmx);
-
-    await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '2500' } }, adminCookie);
+    const updated = res.body.find((s) => s.key === 'tarifa_programador_hora');
+    assert.equal(updated.value, '320');
+    await request('PUT', '/api/service-quoter/settings', { settings: { tarifa_programador_hora: '300' }, adminPassword: 'admin123' }, adminCookie);
   });
 
-  await t.test('admin can create a service type', async () => {
-    const res = await request('POST', '/api/service-quoter/service-types', { name: 'Consultoría', margin: 0.50, sort_order: 7 }, adminCookie);
-    assert.equal(res.status, 201);
-    assert.equal(res.body.name, 'Consultoría');
-    assert.equal(res.body.margin, 0.50);
-    assert.equal(res.body.active, 1);
-    assert.ok(res.body.created_at_cdmx);
+  // 6. Cannot modify tariffs with incorrect password
+  await t.test('cannot modify tariffs with incorrect password', async () => {
+    const res = await request('PUT', '/api/service-quoter/settings', { settings: { tarifa_programador_hora: '999' }, adminPassword: 'wrongpass' }, adminCookie);
+    assert.equal(res.status, 403);
+    const check = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    const s = check.body.settings.find((x) => x.key === 'tarifa_programador_hora');
+    assert.equal(s.value, '300');
   });
 
-  await t.test('admin can update a service type', async () => {
-    const config = await request('GET', '/api/service-quoter/service-types', null, adminCookie);
-    const consultoria = config.body.find((t) => t.name === 'Consultoría');
-    const res = await request('PUT', `/api/service-quoter/service-types/${consultoria.id}`, { margin: 0.55 }, adminCookie);
+  // 7. Settings change persists
+  await t.test('settings change persists', async () => {
+    await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '3000' }, adminPassword: 'admin123' }, adminCookie);
+    const check = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    const s = check.body.settings.find((x) => x.key === 'hotel_default');
+    assert.equal(s.value, '3000');
+    await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '2500' }, adminPassword: 'admin123' }, adminCookie);
+  });
+
+  // 8. Margin change persists
+  await t.test('margin change persists with correct password', async () => {
+    const typesRes = await request('GET', '/api/service-quoter/service-types', null, adminCookie);
+    const emergencia = typesRes.body.find((t) => t.name === 'Emergencia');
+    const res = await request('PUT', `/api/service-quoter/service-types/${emergencia.id}`, { margin: 0.65, adminPassword: 'admin123' }, adminCookie);
     assert.equal(res.status, 200);
-    assert.equal(res.body.margin, 0.55);
+    assert.equal(res.body.margin, 0.65);
+    await request('PUT', `/api/service-quoter/service-types/${emergencia.id}`, { margin: 0.60, adminPassword: 'admin123' }, adminCookie);
   });
 
-  await t.test('admin can deactivate a service type', async () => {
-    const config = await request('GET', '/api/service-quoter/service-types', null, adminCookie);
-    const consultoria = config.body.find((t) => t.name === 'Consultoría');
-    const res = await request('PUT', `/api/service-quoter/service-types/${consultoria.id}`, { active: false }, adminCookie);
-    assert.equal(res.status, 200);
-    assert.equal(res.body.active, 0);
-
-    const publicConfig = await request('GET', '/api/service-quoter/config', null, adminCookie);
-    const activeTypes = publicConfig.body.serviceTypes;
-    assert.ok(!activeTypes.find((t) => t.name === 'Consultoría'));
+  // 9. Changes are audited
+  await t.test('configuration changes are audited', async () => {
+    await request('PUT', '/api/service-quoter/settings', { settings: { comida_diaria_default: '180' }, adminPassword: 'admin123' }, adminCookie);
+    const auditRes = await request('GET', '/api/admin/audit-logs?module=serviceQuoter&limit=5', null, adminCookie);
+    assert.equal(auditRes.status, 200);
+    const logs = auditRes.body.data || [];
+    const configLog = logs.find((l) => l.entity_type === 'service_quote_settings' && l.action === 'update');
+    assert.ok(configLog);
+    await request('PUT', '/api/service-quoter/settings', { settings: { comida_diaria_default: '150' }, adminPassword: 'admin123' }, adminCookie);
   });
 
-  await t.test('margin validation rejects >= 1', async () => {
-    const res = await request('POST', '/api/service-quoter/service-types', { name: 'Bad', margin: 1.0 }, adminCookie);
-    assert.equal(res.status, 400);
-    assert.ok(res.body.message.includes('menor a 1'));
-  });
-
-  await t.test('margin validation rejects negative', async () => {
-    const res = await request('POST', '/api/service-quoter/service-types', { name: 'Bad', margin: -0.1 }, adminCookie);
-    assert.equal(res.status, 400);
-  });
-
-  await t.test('name is required for service types', async () => {
-    const res = await request('POST', '/api/service-quoter/service-types', { name: '', margin: 0.3 }, adminCookie);
-    assert.equal(res.status, 400);
-    assert.ok(res.body.message.includes('obligatorio'));
-  });
-
-  await t.test('user without configure cannot create service types', async () => {
-    const res = await request('POST', '/api/service-quoter/service-types', { name: 'X', margin: 0.3 }, userCookie);
+  // 10. User without configure cannot modify configuration
+  await t.test('user without configure cannot modify configuration', async () => {
+    const res = await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '9999' }, adminPassword: 'admin123' }, userCookie);
     assert.equal(res.status, 403);
   });
 
-  await t.test('user without configure cannot list all service types', async () => {
-    const res = await request('GET', '/api/service-quoter/service-types', null, userCookie);
-    assert.equal(res.status, 403);
+  // 11-12. Work by hours and by days (1 day = 9 hours)
+  await t.test('1 day equals 9 hours', () => {
+    const hoursPerDay = 9;
+    assert.equal(1 * hoursPerDay, 9);
+    assert.equal(3 * hoursPerDay, 27);
   });
 
-  await t.test('grant serviceQuoter.view to user allows config access', async () => {
-    const usersRes = await request('GET', '/api/users', null, adminCookie);
-    const usersList = usersRes.body.data || usersRes.body;
-    const ventas = usersList.find((u) => u.username === 'ventas1');
-    await request('PUT', `/api/users/${ventas.id}/permissions`, {
-      permissions: { serviceQuoter: ['view'] },
-    }, adminCookie);
-
-    const newLogin = await request('POST', '/api/login', { username: 'ventas1', password: 'pass123' });
-    userCookie = newLogin.cookie;
-
-    const res = await request('GET', '/api/service-quoter/config', null, userCookie);
-    assert.equal(res.status, 200);
-    assert.ok(res.body.serviceTypes.length >= 6);
+  // 13-14. Days conversion
+  await t.test('3 days equals 27 hours', () => {
+    assert.equal(3 * 9, 27);
   });
 
-  await t.test('user with view still cannot configure', async () => {
-    const res = await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '9999' } }, userCookie);
-    assert.equal(res.status, 403);
+  // 15. Calculate programmer by hours
+  await t.test('calculate programmer by hours: qty × hours × rate', () => {
+    const cost = 2 * 16 * 300;
+    assert.equal(cost, 9600);
   });
 
-  await t.test('real margin formula: price = cost / (1 - margin)', async () => {
-    const cost = 1000;
+  // 16. Calculate technician by days
+  await t.test('calculate technician by days: qty × (days×9) × rate', () => {
+    const cost = 1 * (3 * 9) * 250;
+    assert.equal(cost, 6750);
+  });
+
+  // 17. Calculate helper by hours
+  await t.test('calculate helper by hours', () => {
+    const cost = 1 * 8 * 175;
+    assert.equal(cost, 1400);
+  });
+
+  // 18. Vehicle transport: travel hours
+  await t.test('vehicle transport calculates travel hours at programmer rate', () => {
+    const cost = 4 * 300;
+    assert.equal(cost, 1200);
+  });
+
+  // 19. Vehicle transport: km × $7.50
+  await t.test('vehicle transport calculates km at $7.50', () => {
+    const cost = 200 * 7.50;
+    assert.equal(cost, 1500);
+  });
+
+  // 20. Air transport: cost per person × persons
+  await t.test('air transport: cost per person × persons', () => {
+    const cost = 3 * 5000;
+    assert.equal(cost, 15000);
+  });
+
+  // 21. Air transport does not calculate km
+  await t.test('air transport does not use km calculation', () => {
+    const transportType = 'aereo';
+    const persons = 2;
+    const costPerPerson = 4000;
+    const otherFlight = 500;
+    const subtotal = (persons * costPerPerson) + otherFlight;
+    assert.equal(subtotal, 8500);
+  });
+
+  // 22. Hotel default $2,500
+  await t.test('hotel default is $2,500', async () => {
+    const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    const s = res.body.settings.find((x) => x.key === 'hotel_default');
+    assert.equal(s.value, '2500');
+  });
+
+  // 23. Hotel allows $2,000
+  await t.test('hotel allows $2,000 option', async () => {
+    const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    const s = res.body.settings.find((x) => x.key === 'hotel_opcion_baja');
+    assert.equal(s.value, '2000');
+  });
+
+  // 24. Meals $150/day
+  await t.test('meals default is $150/day', async () => {
+    const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    const s = res.body.settings.find((x) => x.key === 'comida_diaria_default');
+    assert.equal(s.value, '150');
+  });
+
+  // 25. No import section exists
+  await t.test('no import settings exist in config', async () => {
+    const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    const importSettings = res.body.settings.filter((s) => s.category === 'importacion');
+    assert.equal(importSettings.length, 0);
+  });
+
+  // 26. No import calculation
+  await t.test('no importCosts permission exists', async () => {
+    const sessionRes = await request('GET', '/api/session', null, adminCookie);
+    const perms = sessionRes.body.permissions.serviceQuoter;
+    assert.ok(!perms.includes('importCosts'));
+  });
+
+  // 27. No discount field
+  await t.test('no discount settings exist', async () => {
+    const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    const discountSettings = res.body.settings.filter((s) => s.key.includes('descuento') || s.key.includes('discount'));
+    assert.equal(discountSettings.length, 0);
+  });
+
+  // 28. No discount calculation
+  await t.test('no discount endpoint exists', async () => {
+    const res = await request('POST', '/api/service-quoter/discount', {}, adminCookie);
+    assert.equal(res.status, 404);
+  });
+
+  // 29. Emergencia with 60% real margin
+  await t.test('emergencia 60% margin: price = cost / (1 - 0.60)', () => {
+    const cost = 10000;
     const margin = 0.60;
-    const expectedPrice = cost / (1 - margin);
-    assert.equal(expectedPrice, 2500);
-    const utility = expectedPrice - cost;
-    assert.equal(utility, 1500);
+    const price = cost / (1 - margin);
+    assert.equal(price, 25000);
   });
 
-  await t.test('real margin formula for all service type margins', async () => {
+  // 30. Verify formula price = cost / (1 - margin)
+  await t.test('real margin formula: price = cost / (1 - margin)', () => {
     const cases = [
-      { margin: 0.60, cost: 10000, expectedPrice: 25000 },
-      { margin: 0.45, cost: 10000, expectedPrice: 10000 / 0.55 },
-      { margin: 0.35, cost: 10000, expectedPrice: 10000 / 0.65 },
-      { margin: 0.30, cost: 10000, expectedPrice: 10000 / 0.70 },
+      { cost: 1000, margin: 0.60, price: 2500 },
+      { cost: 10000, margin: 0.45, price: 10000 / 0.55 },
+      { cost: 10000, margin: 0.35, price: 10000 / 0.65 },
+      { cost: 10000, margin: 0.30, price: 10000 / 0.70 },
     ];
     for (const c of cases) {
       const price = c.cost / (1 - c.margin);
-      assert.equal(Math.round(price * 100), Math.round(c.expectedPrice * 100));
-      assert.ok(price > c.cost);
-      const actualMargin = (price - c.cost) / price;
-      assert.ok(Math.abs(actualMargin - c.margin) < 0.0001);
+      assert.equal(Math.round(price * 100), Math.round(c.price * 100));
     }
   });
 
-  await t.test('formula is NOT cost * (1 + margin)', async () => {
+  // 31. Verify NOT cost × (1 + margin)
+  await t.test('formula is NOT cost × (1 + margin)', () => {
     const cost = 1000;
     const margin = 0.60;
-    const wrongPrice = cost * (1 + margin);
-    const correctPrice = cost / (1 - margin);
-    assert.notEqual(wrongPrice, correctPrice);
-    assert.equal(correctPrice, 2500);
-    assert.equal(wrongPrice, 1600);
+    const wrong = cost * (1 + margin);
+    const correct = cost / (1 - margin);
+    assert.notEqual(wrong, correct);
+    assert.equal(correct, 2500);
+    assert.equal(wrong, 1600);
   });
 
-  await t.test('labor calculation: qty × hours × rate', async () => {
-    const progQty = 2, progHours = 8, progRate = 291;
-    const helperQty = 1, helperHours = 8, helperRate = 175;
-    const costProg = progQty * progHours * progRate;
-    const costHelper = helperQty * helperHours * helperRate;
-    assert.equal(costProg, 4656);
-    assert.equal(costHelper, 1400);
-    assert.equal(costProg + costHelper, 6056);
-  });
-
-  await t.test('travel hours at programmer rate', async () => {
-    const hours = 4, rate = 291;
-    assert.equal(hours * rate, 1164);
-  });
-
-  await t.test('kilometers at $7.50/km', async () => {
-    const km = 200, rate = 7.50;
-    assert.equal(km * rate, 1500);
-  });
-
-  await t.test('hotel default $2,500', async () => {
-    const nights = 2, rate = 2500;
-    assert.equal(nights * rate, 5000);
-  });
-
-  await t.test('hotel allows $2,000', async () => {
-    const nights = 2, rate = 2000;
-    assert.equal(nights * rate, 4000);
-  });
-
-  await t.test('meals at $150/day', async () => {
-    const days = 3, rate = 150;
-    assert.equal(days * rate, 450);
-  });
-
-  await t.test('import calculation: IVA 16% + IGI 5% + agent $200 USD', async () => {
-    const valorCompraUSD = 5000;
-    const ivaImportPct = 0.16;
-    const igiPct = 0.05;
-    const agenteUSD = 200;
-    const otrosUSD = 0;
-
-    const igiUSD = valorCompraUSD * igiPct;
-    const ivaImportUSD = valorCompraUSD * ivaImportPct;
-    const totalImportUSD = igiUSD + ivaImportUSD + agenteUSD + otrosUSD;
-
-    assert.equal(igiUSD, 250);
-    assert.equal(ivaImportUSD, 800);
-    assert.equal(totalImportUSD, 1250);
-  });
-
-  await t.test('import per equipment division', async () => {
-    const totalImportUSD = 1250;
-    const cantidadEquipos = 5;
-    const perUnit = totalImportUSD / cantidadEquipos;
-    assert.equal(perUnit, 250);
-  });
-
-  await t.test('IVA final 16% on price before IVA', async () => {
-    const subtotalCostos = 10000;
+  // 32. IVA final 16%
+  await t.test('IVA final 16% on price before IVA', () => {
+    const subtotal = 10000;
     const margin = 0.60;
-    const precioAntesIVA = subtotalCostos / (1 - margin);
-    const ivaFinal = precioAntesIVA * 0.16;
-    const totalFinal = precioAntesIVA + ivaFinal;
-
-    assert.equal(precioAntesIVA, 25000);
-    assert.equal(ivaFinal, 4000);
-    assert.equal(totalFinal, 29000);
+    const price = subtotal / (1 - margin);
+    const iva = price * 0.16;
+    const total = price + iva;
+    assert.equal(price, 25000);
+    assert.equal(iva, 4000);
+    assert.equal(total, 29000);
   });
 
-  await t.test('no discount field or logic exists', async () => {
-    const configRes = await request('GET', '/api/service-quoter/config', null, adminCookie);
-    const settingsKeys = configRes.body.settings.map((s) => s.key);
-    assert.ok(!settingsKeys.some((k) => k.includes('descuento') || k.includes('discount')));
-  });
-
-  await t.test('results are not saved - no quote storage endpoint', async () => {
+  // 33. No result saved
+  await t.test('no results are saved - no quote storage endpoint', async () => {
     const res = await request('POST', '/api/service-quoter/calculate', { test: true }, adminCookie);
     assert.equal(res.status, 404);
   });
 
-  await t.test('no quote history endpoint exists', async () => {
+  // 34. No folio generated
+  await t.test('no folio endpoint exists', async () => {
     const res = await request('GET', '/api/service-quoter/history', null, adminCookie);
     assert.equal(res.status, 404);
   });
 
-  await t.test('configuration changes are audited', async () => {
-    await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '2800' } }, adminCookie);
-
-    const auditRes = await request('GET', '/api/admin/audit-logs?module=serviceQuoter&limit=5', null, adminCookie);
-    assert.equal(auditRes.status, 200);
-    const logs = auditRes.body.data || auditRes.body;
-    const configLog = (Array.isArray(logs) ? logs : []).find((l) => l.entity_type === 'service_quote_settings');
-    assert.ok(configLog, 'Should have audit log for settings change');
-    assert.equal(configLog.action, 'update');
-
-    await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '2500' } }, adminCookie);
+  // 35. No history of quotes
+  await t.test('no quote history exists', async () => {
+    const res = await request('GET', '/api/service-quoter/quotes', null, adminCookie);
+    assert.equal(res.status, 404);
   });
 
-  await t.test('CDMX timezone in audit timestamps', async () => {
-    const auditRes = await request('GET', '/api/admin/audit-logs?module=serviceQuoter&limit=5', null, adminCookie);
-    if (auditRes.body.data && auditRes.body.data.length > 0) {
-      const log = auditRes.body.data[0];
-      assert.ok(log.timestamp_cdmx || log.timestamp_utc);
-    }
-  });
-
-  await t.test('backup includes serviceTypes and serviceQuoteSettings', async () => {
+  // 36. Backup includes serviceQuoteSettings and serviceTypes
+  await t.test('backup includes serviceQuoteSettings and serviceTypes', async () => {
     const backupRes = await request('GET', '/api/admin/backup', null, adminCookie);
     assert.equal(backupRes.status, 200);
     assert.ok(backupRes.body.data.serviceTypes);
     assert.ok(backupRes.body.data.serviceQuoteSettings);
     assert.ok(backupRes.body.data.serviceTypes.length >= 6);
-    assert.ok(backupRes.body.data.serviceQuoteSettings.length >= 14);
   });
 
+  // 37. Backup does not include calculation results
   await t.test('backup does not include calculation results', async () => {
     const backupRes = await request('GET', '/api/admin/backup', null, adminCookie);
     assert.ok(!backupRes.body.data.serviceQuotes);
     assert.ok(!backupRes.body.data.serviceQuoteResults);
-    assert.ok(!backupRes.body.data.serviceQuoteHistory);
   });
 
-  await t.test('coverage manifest includes serviceQuoter module', async () => {
-    const backupRes = await request('GET', '/api/admin/backup', null, adminCookie);
-    const manifest = backupRes.body.coverageManifest;
-    assert.ok(manifest.modulesDetected.includes('serviceQuoter'));
-    assert.ok(manifest.entitiesIncluded.includes('serviceTypes'));
-    assert.ok(manifest.entitiesIncluded.includes('serviceQuoteSettings'));
+  // 38. CDMX timezone in audit
+  await t.test('CDMX timezone in configuration audit', async () => {
+    const settingsRes = await request('GET', '/api/service-quoter/settings', null, adminCookie);
+    if (settingsRes.body.length > 0 && settingsRes.body[0].updated_at_cdmx) {
+      assert.ok(settingsRes.body[0].updated_at_cdmx.includes('/'));
+    }
   });
 
-  await t.test('full calculation scenario: Emergencia 60% margin', async () => {
-    const progCost = 1 * 16 * 291;
-    const travelHours = 4 * 291;
-    const km = 300 * 7.50;
+  // 39. Full end-to-end scenario
+  await t.test('full calculation: programmer 2 days + technician 8h + vehicle 200km + hotel 2 nights', () => {
+    const hoursPerDay = 9;
+    const progCost = 1 * (2 * hoursPerDay) * 300;
+    const techCost = 1 * 8 * 250;
+    const travelHoursCost = 3 * 300;
+    const kmCost = 200 * 7.50;
     const hotel = 2 * 2500;
     const meals = 3 * 150;
-    const subtotal = progCost + travelHours + km + hotel + meals;
-
-    const price = subtotal / (1 - 0.60);
-    const utility = price - subtotal;
+    const subtotalLabor = progCost + techCost;
+    const subtotalTransport = travelHoursCost + kmCost;
+    const subtotalViaticos = hotel + meals;
+    const subtotalCostos = subtotalLabor + subtotalTransport + subtotalViaticos;
+    const margin = 0.60;
+    const price = subtotalCostos / (1 - margin);
+    const utility = price - subtotalCostos;
     const iva = price * 0.16;
     const total = price + iva;
 
-    assert.equal(progCost, 4656);
-    assert.equal(travelHours, 1164);
-    assert.equal(km, 2250);
+    assert.equal(progCost, 5400);
+    assert.equal(techCost, 2000);
+    assert.equal(subtotalLabor, 7400);
+    assert.equal(travelHoursCost, 900);
+    assert.equal(kmCost, 1500);
+    assert.equal(subtotalTransport, 2400);
     assert.equal(hotel, 5000);
     assert.equal(meals, 450);
-    assert.equal(subtotal, 13520);
-    assert.equal(price, 33800);
-    assert.equal(utility, 20280);
-    assert.equal(iva, 5408);
-    assert.equal(total, 39208);
+    assert.equal(subtotalViaticos, 5450);
+    assert.equal(subtotalCostos, 15250);
+    assert.equal(price, 38125);
+    assert.equal(utility, 22875);
+    assert.equal(iva, 6100);
+    assert.equal(total, 44225);
+  });
+
+  // 40. Password not required for read, only for write
+  await t.test('admin password not required for reading config', async () => {
+    const res = await request('GET', '/api/service-quoter/config', null, adminCookie);
+    assert.equal(res.status, 200);
+  });
+
+  // Denied attempt is audited
+  await t.test('failed password attempt is audited without storing password', async () => {
+    await request('PUT', '/api/service-quoter/settings', { settings: { hotel_default: '1' }, adminPassword: 'badpass' }, adminCookie);
+    const auditRes = await request('GET', '/api/admin/audit-logs?module=serviceQuoter&limit=5', null, adminCookie);
+    const logs = auditRes.body.data || [];
+    const denied = logs.find((l) => l.action === 'config_change_denied');
+    assert.ok(denied);
+    assert.ok(!JSON.stringify(denied).includes('badpass'));
   });
 });

@@ -8,7 +8,7 @@ const MODULES = {
   vacations: ['view', 'create', 'edit', 'delete'],
   attendance: ['view', 'create', 'edit', 'delete', 'print', 'approve', 'reopen'],
   ecovisAccount: ['view', 'create', 'edit', 'cancel'],
-  serviceQuoter: ['view', 'configure', 'importCosts'],
+  serviceQuoter: ['view', 'configure'],
   users: ['view', 'create', 'edit', 'managePermissions'],
   backups: ['view', 'backup', 'import'],
   settings: ['view', 'edit'],
