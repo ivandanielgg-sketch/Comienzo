@@ -18,14 +18,14 @@
     td.position-cell { text-align: left; font-size: 8px; max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
     .day-header { font-size: 8px; }
     .day-date { font-size: 7px; color: #555; }
-    .status-F { background: #fff9c4; }
-    .status-B { background: #e0e0e0; }
-    .status-A\\* { background: #b3e5fc; }
-    .status-PC { background: #ffcdd2; }
-    .status-PS { background: #ef9a9a; }
-    .status-D { background: #bbdefb; }
-    .status-I { background: #c8e6c9; }
-    .status-V { background: #b2dfdb; }
+    .status-F { background-color: #fff9c4; }
+    .status-B { background-color: #e0e0e0; }
+    .status-Astar { background-color: #b3e5fc; color: #0d47a1; font-weight: 700; border-color: #0d47a1; }
+    .status-PC { background-color: #ffcdd2; }
+    .status-PS { background-color: #ef9a9a; }
+    .status-D { background-color: #bbdefb; }
+    .status-I { background-color: #c8e6c9; }
+    .status-V { background-color: #b2dfdb; }
     .signatures { margin-top: 30px; display: flex; justify-content: space-around; }
     .signature-box { text-align: center; width: 200px; }
     .signature-line { border-top: 1px solid #333; margin-top: 40px; padding-top: 4px; font-size: 9px; }
@@ -37,6 +37,18 @@
       .no-print { display: none; }
       body { padding: 5mm; }
       @page { size: letter landscape; margin: 8mm; }
+      th, td, .legend span {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .status-F { background-color: #fff9c4 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .status-B { background-color: #e0e0e0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .status-Astar { background-color: #b3e5fc !important; color: #0d47a1 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .status-PC { background-color: #ffcdd2 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .status-PS { background-color: #ef9a9a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .status-D { background-color: #bbdefb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .status-I { background-color: #c8e6c9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .status-V { background-color: #b2dfdb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
   </style>
 </head>
@@ -75,7 +87,7 @@
     <span class="status-F">F Falta</span>
     <span class="status-B">B Baja</span>
     <span>A Asistencia</span>
-    <span class="status-A*">A* Personal fuera de taller / Trabajo fuera</span>
+    <span class="status-Astar">A* Personal fuera de taller / Trabajo fuera</span>
     <span class="status-PC">PC Permiso c/goce de sueldo</span>
     <span class="status-PS">PS Permiso s/goce de sueldo</span>
     <span class="status-D">D Descanso</span>
@@ -124,10 +136,12 @@
       const tbody = document.getElementById('table-body');
       const dayFields = ['monday_status', 'tuesday_status', 'wednesday_status', 'thursday_status', 'friday_status', 'saturday_status', 'sunday_status'];
 
+      const statusClassMap = { 'A*': 'status-Astar', F: 'status-F', B: 'status-B', PC: 'status-PC', PS: 'status-PS', D: 'status-D', I: 'status-I', V: 'status-V' };
+
       tbody.innerHTML = (week.employees || []).map((emp, idx) => {
         const dayCells = dayFields.map((f) => {
           const val = emp[f] || 'A';
-          const cls = val !== 'A' ? ` class="status-${val.replace('*', '\\*')}"` : '';
+          const cls = statusClassMap[val] ? ` class="${statusClassMap[val]}"` : '';
           return `<td${cls}>${val}</td>`;
         }).join('');
 
