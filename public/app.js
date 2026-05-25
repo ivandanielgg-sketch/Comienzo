@@ -4162,6 +4162,29 @@ async function initServiceQuoter() {
       document.getElementById(prefix + '-input-label').textContent = e.target.value === 'dias' ? 'Días' : 'Horas';
     });
   });
+
+  ['sq-prog-qty', 'sq-tech-qty', 'sq-helper-qty'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', updateTravelRate);
+  });
+}
+
+function roundUpToNearestTen(value) {
+  return Math.ceil(value / 10) * 10;
+}
+
+function updateTravelRate() {
+  const num = (id) => Math.max(0, Number(document.getElementById(id).value) || 0);
+  const progQty = num('sq-prog-qty');
+  const techQty = num('sq-tech-qty');
+  const helperQty = num('sq-helper-qty');
+  const progRate = num('sq-prog-rate');
+  const techRate = num('sq-tech-rate');
+  const helperRate = num('sq-helper-rate');
+
+  const sumaTarifas = (progQty * progRate) + (techQty * techRate) + (helperQty * helperRate);
+  const tarifaBase = sumaTarifas / 3;
+  const tarifaTraslado = sumaTarifas > 0 ? roundUpToNearestTen(tarifaBase) : 0;
+  document.getElementById('sq-travel-rate').value = '$' + tarifaTraslado;
 }
 
 function populateServiceQuoterDefaults(data) {
@@ -4178,15 +4201,17 @@ function populateServiceQuoterDefaults(data) {
   const helperRate = settingsMap['tarifa_ayudante_hora'] || '175';
   const kmRate = settingsMap['costo_por_kilometro'] || '7.50';
   const hotelRate = settingsMap['hotel_default'] || '2500';
-  const mealRate = settingsMap['comida_diaria_default'] || '150';
+  const mealRate = settingsMap['costo_por_comida'] || settingsMap['comida_diaria_default'] || '150';
+  const mealsPerDay = settingsMap['comidas_por_dia'] || '3';
 
   document.getElementById('sq-prog-rate').value = progRate;
   document.getElementById('sq-tech-rate').value = techRate;
   document.getElementById('sq-helper-rate').value = helperRate;
-  document.getElementById('sq-travel-rate').value = progRate;
   document.getElementById('sq-km-rate').value = kmRate;
   document.getElementById('sq-hotel-rate').value = hotelRate;
   document.getElementById('sq-meal-rate').value = mealRate;
+  document.getElementById('sq-meals-per-day').value = mealsPerDay;
+  updateTravelRate();
 }
 
 function calculateServiceQuote() {
@@ -4224,13 +4249,21 @@ function calculateServiceQuote() {
   const subtotalManoObra = costoProgramador + costoTecnico + costoAyudante;
 
   let subtotalTransporte = 0;
+  let sumaTarifas = 0;
+  let tarifaTrasladoHora = 0;
+  let costoHorasTraslado = 0;
+  let costoKm = 0;
   const transportType = document.getElementById('sq-transport-type').value;
   if (transportType === 'vehiculo') {
+    sumaTarifas = (progQty * progRate) + (techQty * techRate) + (helperQty * helperRate);
+    const tarifaBase = sumaTarifas / 3;
+    tarifaTrasladoHora = sumaTarifas > 0 ? roundUpToNearestTen(tarifaBase) : 0;
     const travelHours = num('sq-travel-hours');
-    const travelRate = num('sq-travel-rate');
     const km = num('sq-km');
     const kmRate = num('sq-km-rate');
-    subtotalTransporte = (travelHours * travelRate) + (km * kmRate);
+    costoHorasTraslado = travelHours * tarifaTrasladoHora;
+    costoKm = km * kmRate;
+    subtotalTransporte = costoHorasTraslado + costoKm;
   } else {
     const persons = num('sq-flight-persons');
     const costPerPerson = num('sq-flight-cost');
@@ -4241,9 +4274,12 @@ function calculateServiceQuote() {
   const hotelNights = num('sq-hotel-nights');
   const hotelRate = num('sq-hotel-rate');
   const mealDays = num('sq-meal-days');
-  const mealRate = num('sq-meal-rate');
-  const otherTravel = num('sq-other-travel');
-  const subtotalViaticos = (hotelNights * hotelRate) + (mealDays * mealRate) + otherTravel;
+  const mealCost = num('sq-meal-rate');
+  const mealsPerDay = num('sq-meals-per-day');
+  const totalPersonas = progQty + techQty + helperQty;
+  const costoHotel = hotelNights * hotelRate;
+  const costoComidas = mealCost * totalPersonas * mealDays * mealsPerDay;
+  const subtotalViaticos = costoHotel + costoComidas;
 
   const otherCosts = num('sq-other-costs');
   const subtotalCostos = subtotalManoObra + subtotalTransporte + subtotalViaticos + otherCosts;
@@ -4261,7 +4297,14 @@ function calculateServiceQuote() {
   document.getElementById('sq-r-labor-tech').textContent = fmt(costoTecnico);
   document.getElementById('sq-r-labor-helper').textContent = fmt(costoAyudante);
   document.getElementById('sq-r-transport').textContent = fmt(subtotalTransporte);
+  document.getElementById('sq-r-t-sum').textContent = '$' + sumaTarifas;
+  document.getElementById('sq-r-t-rate').textContent = '$' + Math.round(sumaTarifas / 3) + ' → $' + tarifaTrasladoHora;
+  document.getElementById('sq-r-t-hours-cost').textContent = fmt(costoHorasTraslado);
+  document.getElementById('sq-r-t-km-cost').textContent = fmt(costoKm);
   document.getElementById('sq-r-viaticos').textContent = fmt(subtotalViaticos);
+  document.getElementById('sq-r-v-hotel').textContent = fmt(costoHotel);
+  document.getElementById('sq-r-v-meals').textContent = fmt(costoComidas);
+  document.getElementById('sq-r-v-meals-detail').textContent = `${totalPersonas} pers × $${mealCost} × ${mealDays}d × ${mealsPerDay}c`;
   document.getElementById('sq-r-other').textContent = fmt(otherCosts);
   document.getElementById('sq-r-subtotal').textContent = fmt(subtotalCostos);
   document.getElementById('sq-r-margin').textContent = (margin * 100).toFixed(0) + '%';
@@ -4301,8 +4344,6 @@ function clearServiceQuote() {
   document.getElementById('sq-flight-notes').value = '';
   document.getElementById('sq-hotel-nights').value = '0';
   document.getElementById('sq-meal-days').value = '0';
-  document.getElementById('sq-other-travel').value = '0';
-  document.getElementById('sq-travel-notes').value = '';
   document.getElementById('sq-other-costs').value = '0';
   document.getElementById('sq-other-costs-notes').value = '';
   document.getElementById('sq-results').classList.add('hidden');

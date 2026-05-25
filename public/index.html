@@ -1294,7 +1294,7 @@
                 <label>Tipo<select id="sq-transport-type"><option value="vehiculo">Vehículo</option><option value="aereo">Aéreo</option></select></label>
                 <div id="sq-transport-vehiculo">
                   <label>Horas de traslado<input id="sq-travel-hours" type="number" min="0" value="0"></label>
-                  <label>Tarifa hora traslado ($/h)<input id="sq-travel-rate" type="number" min="0" step="0.01" value="300" readonly></label>
+                  <label>Tarifa calculada por hora de traslado ($/h)<input id="sq-travel-rate" type="text" value="$0" readonly disabled style="background:#f3f4f6;"></label>
                   <label>Kilómetros<input id="sq-km" type="number" min="0" value="0"></label>
                   <label>Costo por km ($)<input id="sq-km-rate" type="number" min="0" step="0.01" value="7.50" readonly></label>
                 </div>
@@ -1312,9 +1312,8 @@
                 <label>Noches hotel<input id="sq-hotel-nights" type="number" min="0" value="0"></label>
                 <label>Costo hotel/noche ($)<input id="sq-hotel-rate" type="number" min="0" step="0.01" value="2500"></label>
                 <label>Días comida<input id="sq-meal-days" type="number" min="0" value="0"></label>
-                <label>Comida diaria ($)<input id="sq-meal-rate" type="number" min="0" step="0.01" value="150"></label>
-                <label>Otros viáticos ($)<input id="sq-other-travel" type="number" min="0" step="0.01" value="0"></label>
-                <label>Notas viáticos<input id="sq-travel-notes" type="text" placeholder="Opcional"></label>
+                <label>Costo por comida ($)<input id="sq-meal-rate" type="number" min="0" step="0.01" value="150"></label>
+                <label>Comidas por día<input id="sq-meals-per-day" type="number" min="0" value="3"></label>
               </fieldset>
 
               <!-- Otros costos -->
@@ -1335,7 +1334,13 @@
                   <tr><td style="padding-left:20px;color:var(--muted);">— Técnico(s)</td><td style="text-align:right;color:var(--muted);" id="sq-r-labor-tech">$0.00</td></tr>
                   <tr><td style="padding-left:20px;color:var(--muted);">— Ayudante(s)</td><td style="text-align:right;color:var(--muted);" id="sq-r-labor-helper">$0.00</td></tr>
                   <tr><td>Subtotal Transporte</td><td style="text-align:right;font-weight:600;" id="sq-r-transport">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Suma tarifas personal</td><td style="text-align:right;color:var(--muted);" id="sq-r-t-sum">$0</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— 1/3 suma → redondeado</td><td style="text-align:right;color:var(--muted);" id="sq-r-t-rate">$0</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Horas traslado × tarifa</td><td style="text-align:right;color:var(--muted);" id="sq-r-t-hours-cost">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Kilómetros</td><td style="text-align:right;color:var(--muted);" id="sq-r-t-km-cost">$0.00</td></tr>
                   <tr><td>Subtotal Viáticos</td><td style="text-align:right;font-weight:600;" id="sq-r-viaticos">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Hotel</td><td style="text-align:right;color:var(--muted);" id="sq-r-v-hotel">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Comidas (<span id="sq-r-v-meals-detail">0 pers × $0 × 0d × 0c</span>)</td><td style="text-align:right;color:var(--muted);" id="sq-r-v-meals">$0.00</td></tr>
                   <tr><td>Otros Costos</td><td style="text-align:right;font-weight:600;" id="sq-r-other">$0.00</td></tr>
                   <tr style="border-top:2px solid var(--border);"><td style="padding-top:8px;font-weight:700;">Subtotal Costos</td><td style="text-align:right;font-weight:700;padding-top:8px;" id="sq-r-subtotal">$0.00</td></tr>
                   <tr><td>Margen real aplicado</td><td style="text-align:right;" id="sq-r-margin">0%</td></tr>
@@ -1349,8 +1354,8 @@
           </section>
 
           <!-- Configuration Modal -->
-          <div id="sq-config-modal" class="modal-overlay hidden">
-            <div class="modal" style="max-width:700px;">
+          <div id="sq-config-modal" class="modal-overlay hidden" style="background:rgba(0,0,0,0.7);">
+            <div class="modal" style="max-width:700px;background:#fff;border-radius:12px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto;">
               <h2>Configuración del Cotizador</h2>
               <div id="sq-config-content">
                 <div style="margin-bottom:16px;">

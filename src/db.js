@@ -744,7 +744,8 @@ function seedServiceQuoteSettings(database) {
     { key: 'costo_por_kilometro', value: '7.50', label: 'Costo por kilómetro ($)', category: 'transporte' },
     { key: 'hotel_default', value: '2500', label: 'Hotel por noche default ($)', category: 'viaticos' },
     { key: 'hotel_opcion_baja', value: '2000', label: 'Hotel opción baja ($)', category: 'viaticos' },
-    { key: 'comida_diaria_default', value: '150', label: 'Comida diaria default ($)', category: 'viaticos' },
+    { key: 'costo_por_comida', value: '150', label: 'Costo por comida ($)', category: 'viaticos' },
+    { key: 'comidas_por_dia', value: '3', label: 'Comidas por día', category: 'viaticos' },
     { key: 'iva_final', value: '16', label: 'IVA final (%)', category: 'cotizacion' },
   ];
 
