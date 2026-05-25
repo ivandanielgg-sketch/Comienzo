@@ -512,6 +512,36 @@ function migrate(database) {
   migrateCostCategories(database);
   migrateAllocationTypes(database);
   seedExchangeRates(database);
+
+  // Service Quoter module tables
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS service_types (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      margin REAL NOT NULL CHECK (margin >= 0 AND margin < 1),
+      active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS service_quote_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      label TEXT,
+      category TEXT NOT NULL DEFAULT 'general',
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  seedServiceTypes(database);
+  seedServiceQuoteSettings(database);
 }
 
 function ensureColumn(database, tableName, columnName, definition) {
@@ -683,6 +713,54 @@ function seedAdmin(database) {
   database
     .prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')")
     .run(adminUsername, passwordHash);
+}
+
+function seedServiceTypes(database) {
+  const defaults = [
+    { name: 'Emergencia', margin: 0.60, sort_order: 1 },
+    { name: 'Automatización', margin: 0.60, sort_order: 2 },
+    { name: 'Instalaciones', margin: 0.45, sort_order: 3 },
+    { name: 'Mantenimiento Mayor', margin: 0.35, sort_order: 4 },
+    { name: 'Mantenimiento Preventivo', margin: 0.30, sort_order: 5 },
+    { name: 'Calentadores', margin: 0.30, sort_order: 6 },
+  ];
+
+  const stmt = database.prepare(
+    `INSERT INTO service_types (name, margin, sort_order, created_by_name, created_at)
+     VALUES (?, ?, ?, 'system', CURRENT_TIMESTAMP)
+     ON CONFLICT(name) DO NOTHING`,
+  );
+  for (const st of defaults) {
+    stmt.run(st.name, st.margin, st.sort_order);
+  }
+}
+
+function seedServiceQuoteSettings(database) {
+  const defaults = [
+    { key: 'salario_base_programador', value: '5500', label: 'Salario base programador (semanal)', category: 'mano_de_obra' },
+    { key: 'porcentaje_imss_prestaciones', value: '27', label: 'Porcentaje IMSS y prestaciones (%)', category: 'mano_de_obra' },
+    { key: 'horas_semanales_calculo', value: '40', label: 'Horas semanales de cálculo', category: 'mano_de_obra' },
+    { key: 'tarifa_programador_cliente', value: '291', label: 'Tarifa programador al cliente ($/h)', category: 'mano_de_obra' },
+    { key: 'tarifa_ayudante_cliente', value: '175', label: 'Tarifa ayudante al cliente ($/h)', category: 'mano_de_obra' },
+    { key: 'costo_por_kilometro', value: '7.50', label: 'Costo por kilómetro ($)', category: 'viaticos' },
+    { key: 'hotel_default', value: '2500', label: 'Hotel por noche default ($)', category: 'viaticos' },
+    { key: 'hotel_opcion_baja', value: '2000', label: 'Hotel opción baja ($)', category: 'viaticos' },
+    { key: 'comida_diaria_default', value: '150', label: 'Comida diaria default ($)', category: 'viaticos' },
+    { key: 'iva_importacion', value: '16', label: 'IVA importación (%)', category: 'importacion' },
+    { key: 'igi_importacion', value: '5', label: 'IGI importación (%)', category: 'importacion' },
+    { key: 'agente_aduanal_usd', value: '200', label: 'Agente aduanal (USD)', category: 'importacion' },
+    { key: 'moneda_default_importacion', value: 'USD', label: 'Moneda default importación', category: 'importacion' },
+    { key: 'iva_final', value: '16', label: 'IVA final (%)', category: 'cotizacion' },
+  ];
+
+  const stmt = database.prepare(
+    `INSERT INTO service_quote_settings (key, value, label, category, updated_by_name, updated_at)
+     VALUES (?, ?, ?, ?, 'system', CURRENT_TIMESTAMP)
+     ON CONFLICT(key) DO NOTHING`,
+  );
+  for (const s of defaults) {
+    stmt.run(s.key, s.value, s.label, s.category);
+  }
 }
 
 module.exports = {

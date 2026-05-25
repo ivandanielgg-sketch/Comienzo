@@ -3362,6 +3362,147 @@ function recalculatePurchaseOrderStatus(poId) {
 
 // ===================== END ECOVIS MODULE =====================
 
+// ===================== SERVICE QUOTER MODULE =====================
+
+// GET /api/service-quoter/config - Load configuration and service types
+app.get('/api/service-quoter/config', requireAuth, requirePermission('serviceQuoter', 'view'), (req, res) => {
+  const settings = db.prepare('SELECT key, value, label, category FROM service_quote_settings ORDER BY key').all();
+  const serviceTypes = db.prepare('SELECT id, name, margin, active, sort_order FROM service_types WHERE active = 1 ORDER BY sort_order, id').all();
+  res.json({ settings, serviceTypes });
+});
+
+// GET /api/service-quoter/service-types - List all service types (including inactive, for configure)
+app.get('/api/service-quoter/service-types', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
+  const serviceTypes = db.prepare(
+    'SELECT id, name, margin, active, sort_order, created_by_name, created_at, updated_by_name, updated_at FROM service_types ORDER BY sort_order, id',
+  ).all();
+  res.json(serviceTypes.map((st) => ({
+    ...st,
+    created_at_cdmx: formatDateTimeCDMX(st.created_at),
+    updated_at_cdmx: formatDateTimeCDMX(st.updated_at),
+  })));
+});
+
+// POST /api/service-quoter/service-types - Create a new service type
+app.post('/api/service-quoter/service-types', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
+  const { name, margin, sort_order } = req.body;
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ message: 'Nombre del tipo de servicio es obligatorio.' });
+  }
+  const marginNum = Number(margin);
+  if (Number.isNaN(marginNum) || marginNum < 0 || marginNum >= 1) {
+    return res.status(400).json({ message: 'Margen debe ser un valor entre 0 y menor a 1 (ej: 0.60 para 60%).' });
+  }
+  const sortNum = Number(sort_order) || 0;
+  const audit = createdByFields(req);
+
+  const result = db.prepare(
+    `INSERT INTO service_types (name, margin, sort_order, created_by_user_id, created_by_name, created_at, updated_by_user_id, updated_by_name, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(String(name).trim(), marginNum, sortNum, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_by_user_id, audit.created_by_name, audit.created_at);
+
+  logAuditEvent(db, {
+    req, action: 'create', module: 'serviceQuoter', entityType: 'service_type',
+    entityId: result.lastInsertRowid, entityLabel: String(name).trim(),
+    after: { name: String(name).trim(), margin: marginNum, sort_order: sortNum },
+  });
+
+  const created = db.prepare('SELECT * FROM service_types WHERE id = ?').get(result.lastInsertRowid);
+  res.status(201).json({ ...created, created_at_cdmx: formatDateTimeCDMX(created.created_at), updated_at_cdmx: formatDateTimeCDMX(created.updated_at) });
+});
+
+// PUT /api/service-quoter/service-types/:id - Update a service type
+app.put('/api/service-quoter/service-types/:id', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
+  const { id } = req.params;
+  const existing = db.prepare('SELECT * FROM service_types WHERE id = ?').get(id);
+  if (!existing) {
+    return res.status(404).json({ message: 'Tipo de servicio no encontrado.' });
+  }
+
+  const { name, margin, active, sort_order } = req.body;
+  const newName = name !== undefined ? String(name).trim() : existing.name;
+  if (!newName) {
+    return res.status(400).json({ message: 'Nombre del tipo de servicio es obligatorio.' });
+  }
+
+  let newMargin = existing.margin;
+  if (margin !== undefined) {
+    newMargin = Number(margin);
+    if (Number.isNaN(newMargin) || newMargin < 0 || newMargin >= 1) {
+      return res.status(400).json({ message: 'Margen debe ser un valor entre 0 y menor a 1 (ej: 0.60 para 60%).' });
+    }
+  }
+
+  const newActive = active !== undefined ? (active ? 1 : 0) : existing.active;
+  const newSort = sort_order !== undefined ? Number(sort_order) : existing.sort_order;
+  const audit = updatedByFields(req);
+
+  db.prepare(
+    `UPDATE service_types SET name = ?, margin = ?, active = ?, sort_order = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`,
+  ).run(newName, newMargin, newActive, newSort, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, id);
+
+  const action = active === false || active === 0 ? 'deactivate' : 'update';
+  logAuditEvent(db, {
+    req, action, module: 'serviceQuoter', entityType: 'service_type',
+    entityId: Number(id), entityLabel: newName,
+    before: { name: existing.name, margin: existing.margin, active: existing.active, sort_order: existing.sort_order },
+    after: { name: newName, margin: newMargin, active: newActive, sort_order: newSort },
+  });
+
+  const updated = db.prepare('SELECT * FROM service_types WHERE id = ?').get(id);
+  res.json({ ...updated, created_at_cdmx: formatDateTimeCDMX(updated.created_at), updated_at_cdmx: formatDateTimeCDMX(updated.updated_at) });
+});
+
+// GET /api/service-quoter/settings - Get all settings (for configure panel)
+app.get('/api/service-quoter/settings', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
+  const settings = db.prepare('SELECT key, value, label, category, updated_by_name, updated_at FROM service_quote_settings ORDER BY category, key').all();
+  res.json(settings.map((s) => ({ ...s, updated_at_cdmx: formatDateTimeCDMX(s.updated_at) })));
+});
+
+// PUT /api/service-quoter/settings - Update settings (batch)
+app.put('/api/service-quoter/settings', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
+  const { settings } = req.body;
+  if (!settings || typeof settings !== 'object') {
+    return res.status(400).json({ message: 'Se requiere un objeto settings con las claves a actualizar.' });
+  }
+
+  const audit = updatedByFields(req);
+  const beforeSettings = {};
+  const afterSettings = {};
+  const existingRows = db.prepare('SELECT key, value FROM service_quote_settings').all();
+  const existingMap = Object.fromEntries(existingRows.map((r) => [r.key, r.value]));
+
+  const updateStmt = db.prepare(
+    'UPDATE service_quote_settings SET value = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE key = ?',
+  );
+
+  const updateAll = db.transaction(() => {
+    for (const [key, value] of Object.entries(settings)) {
+      if (existingMap[key] === undefined) continue;
+      if (String(value) === existingMap[key]) continue;
+      beforeSettings[key] = existingMap[key];
+      afterSettings[key] = String(value);
+      updateStmt.run(String(value), audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, key);
+    }
+  });
+
+  updateAll();
+
+  if (Object.keys(afterSettings).length > 0) {
+    logAuditEvent(db, {
+      req, action: 'update', module: 'serviceQuoter', entityType: 'service_quote_settings',
+      entityLabel: 'Configuración del cotizador',
+      before: beforeSettings,
+      after: afterSettings,
+    });
+  }
+
+  const updatedSettings = db.prepare('SELECT key, value, label, category, updated_by_name, updated_at FROM service_quote_settings ORDER BY category, key').all();
+  res.json(updatedSettings.map((s) => ({ ...s, updated_at_cdmx: formatDateTimeCDMX(s.updated_at) })));
+});
+
+// ===================== END SERVICE QUOTER MODULE =====================
+
 // ===================== BACKUP MODULE =====================
 
 const {
@@ -3545,7 +3686,9 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
       'payrollAttendanceWeeks', 'payrollAttendanceEmployees', 'attendanceStatuses',
       'projectReports', 'reportsArchive', 'ecovisPurchaseOrders', 'ecovisProjects', 'ecovisPayments',
-      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'loginAttempts', 'auditLogs', 'backupImportLogs',
+      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements',
+      'serviceTypes', 'serviceQuoteSettings',
+      'loginAttempts', 'auditLogs', 'backupImportLogs',
     ];
 
     for (const entityKey of orderedEntities) {
@@ -3644,6 +3787,16 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
             added++;
           } else if (entityKey === 'ecovisLoans' || entityKey === 'ecovisMovements') {
             db.prepare('INSERT INTO ecovis_movements (movement_date, movement_type, description, amount, currency, direction, reference, related_project_id, related_payment_id, payment_method, bank_reference, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.movement_date, row.movement_type, row.description, row.amount, row.currency || 'MXN', row.direction || 'neutral', row.reference || null, row.related_project_id || null, row.related_payment_id || null, row.payment_method || null, row.bank_reference || null, row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null, row.updated_by || null);
+            added++;
+          } else if (entityKey === 'serviceTypes') {
+            const existing = db.prepare('SELECT id FROM service_types WHERE name = ?').get(row.name);
+            if (existing) { skipped++; continue; }
+            db.prepare('INSERT INTO service_types (name, margin, active, sort_order, created_by_user_id, created_by_name, created_at, updated_by_user_id, updated_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.name, row.margin, row.active ?? 1, row.sort_order ?? 0, row.created_by_user_id || null, row.created_by_name || null, row.created_at || nowUtc(), row.updated_by_user_id || null, row.updated_by_name || null, row.updated_at || nowUtc());
+            added++;
+          } else if (entityKey === 'serviceQuoteSettings') {
+            const existing = db.prepare('SELECT key FROM service_quote_settings WHERE key = ?').get(row.key);
+            if (existing) { skipped++; continue; }
+            db.prepare('INSERT INTO service_quote_settings (key, value, label, category, updated_by_user_id, updated_by_name, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(row.key, row.value, row.label || null, row.category || 'general', row.updated_by_user_id || null, row.updated_by_name || null, row.updated_at || nowUtc());
             added++;
           } else if (entityKey === 'auditLogs') {
             db.prepare('INSERT INTO audit_logs (user_id, user_name, action, module, entity_type, entity_id, entity_label, timestamp_utc, ip_address, user_agent, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.user_id || null, row.user_name || null, row.action, row.module || null, row.entity_type || null, row.entity_id || null, row.entity_label || null, row.timestamp_utc, row.ip_address || null, row.user_agent || null, row.metadata_json || null, row.created_at || row.timestamp_utc);

@@ -56,6 +56,7 @@ function applyPermissionVisibility() {
     'report-archive-tab': canAccess('reportsArchive', 'view'),
     'vacations-tab': canAccess('vacations', 'view'),
     'ecovis-tab': canAccess('ecovisAccount', 'view'),
+    'service-quoter-tab': canAccess('serviceQuoter', 'view'),
     'users-tab': canAccess('users', 'view'),
   };
 
@@ -664,6 +665,7 @@ function switchView(viewName) {
     vacations: ['vacations', 'view'],
     attendance: ['attendance', 'view'],
     ecovis: ['ecovisAccount', 'view'],
+    'service-quoter': ['serviceQuoter', 'view'],
     users: ['users', 'view'],
   };
   const perm = viewPermMap[viewName];
@@ -679,6 +681,7 @@ function switchView(viewName) {
   const showingReports = viewName === 'reports';
   const showingEcovis = viewName === 'ecovis';
   const showingArchive = viewName === 'report-archive';
+  const showingServiceQuoter = viewName === 'service-quoter';
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
@@ -688,6 +691,8 @@ function switchView(viewName) {
   if (ecovisView) ecovisView.classList.toggle('hidden', !showingEcovis);
   const archiveView = document.getElementById('report-archive-view');
   if (archiveView) archiveView.classList.toggle('hidden', !showingArchive);
+  const sqView = document.getElementById('service-quoter-view');
+  if (sqView) sqView.classList.toggle('hidden', !showingServiceQuoter);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
@@ -697,6 +702,9 @@ function switchView(viewName) {
   if (ecovisTab) ecovisTab.classList.toggle('active', showingEcovis);
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('active', showingArchive);
+  const sqTab = document.getElementById('service-quoter-tab');
+  if (sqTab) sqTab.classList.toggle('active', showingServiceQuoter);
+  if (showingServiceQuoter) initServiceQuoter();
 }
 
 function showPasswordModal(message = 'Ingresa la contraseña del admin:') {
@@ -1251,6 +1259,10 @@ closedProjectsTab.addEventListener('click', async () => {
   switchView('closed-projects');
   await loadClosedProjects();
 });
+
+const serviceQuoterTabBtn = document.getElementById('service-quoter-tab');
+if (serviceQuoterTabBtn) serviceQuoterTabBtn.addEventListener('click', () => switchView('service-quoter'));
+
 usersTab.addEventListener('click', async () => {
   try {
     if (!state.adminVerified) {
@@ -4099,6 +4111,354 @@ if (attendanceSearchBtn) {
 
 // ===================== END ATTENDANCE MODULE =====================
 
+// ===================== SERVICE QUOTER MODULE =====================
+
+function showServiceQuoterTab() {
+  const sqTab = document.getElementById('service-quoter-tab');
+  if (sqTab) {
+    sqTab.classList.toggle('hidden', !canAccess('serviceQuoter', 'view'));
+  }
+}
+
+let sqConfig = null;
+let sqInitialized = false;
+
+async function initServiceQuoter() {
+  if (sqInitialized) return;
+  sqInitialized = true;
+
+  try {
+    const data = await api('/api/service-quoter/config');
+    sqConfig = data;
+    populateServiceQuoterDefaults(data);
+  } catch (e) {
+    console.error('Error loading service quoter config:', e);
+  }
+
+  const configBtn = document.getElementById('sq-config-btn');
+  if (configBtn && canAccess('serviceQuoter', 'configure')) {
+    configBtn.classList.remove('hidden');
+    configBtn.addEventListener('click', openSqConfig);
+  }
+
+  const importCheckbox = document.getElementById('sq-import-enabled');
+  if (importCheckbox) {
+    if (!canAccess('serviceQuoter', 'importCosts') && state.userRole !== 'admin') {
+      importCheckbox.disabled = true;
+      importCheckbox.parentElement.title = 'Sin permiso para importación';
+    }
+    importCheckbox.addEventListener('change', () => {
+      document.getElementById('sq-import-fields').classList.toggle('hidden', !importCheckbox.checked);
+    });
+  }
+
+  document.getElementById('sq-calculate-btn').addEventListener('click', calculateServiceQuote);
+  document.getElementById('sq-clear-btn').addEventListener('click', clearServiceQuote);
+
+  const serviceTypeSelect = document.getElementById('sq-service-type');
+  serviceTypeSelect.addEventListener('change', () => {
+    const selected = sqConfig.serviceTypes.find((t) => t.id === Number(serviceTypeSelect.value));
+    const marginDisplay = document.getElementById('sq-margin-display');
+    if (selected) {
+      marginDisplay.value = (selected.margin * 100).toFixed(0) + '%';
+    } else {
+      marginDisplay.value = '';
+    }
+  });
+}
+
+function populateServiceQuoterDefaults(data) {
+  const typeSelect = document.getElementById('sq-service-type');
+  typeSelect.innerHTML = '<option value="">Seleccionar...</option>';
+  for (const st of data.serviceTypes) {
+    typeSelect.innerHTML += `<option value="${st.id}">${st.name} (${(st.margin * 100).toFixed(0)}%)</option>`;
+  }
+
+  const settingsMap = Object.fromEntries(data.settings.map((s) => [s.key, s.value]));
+
+  const setVal = (id, key) => {
+    const el = document.getElementById(id);
+    if (el && settingsMap[key] !== undefined) el.value = settingsMap[key];
+  };
+
+  setVal('sq-prog-rate', 'tarifa_programador_cliente');
+  setVal('sq-helper-rate', 'tarifa_ayudante_cliente');
+  setVal('sq-travel-rate', 'tarifa_programador_cliente');
+  setVal('sq-km-rate', 'costo_por_kilometro');
+  setVal('sq-hotel-rate', 'hotel_default');
+  setVal('sq-meal-rate', 'comida_diaria_default');
+  setVal('sq-import-iva', 'iva_importacion');
+  setVal('sq-import-igi', 'igi_importacion');
+  setVal('sq-import-agent', 'agente_aduanal_usd');
+}
+
+function calculateServiceQuote() {
+  const serviceTypeSelect = document.getElementById('sq-service-type');
+  if (!serviceTypeSelect.value) {
+    alert('Selecciona un tipo de servicio.');
+    return;
+  }
+  const selectedType = sqConfig.serviceTypes.find((t) => t.id === Number(serviceTypeSelect.value));
+  if (!selectedType) return;
+
+  const margin = selectedType.margin;
+
+  const num = (id) => Math.max(0, Number(document.getElementById(id).value) || 0);
+
+  const progQty = num('sq-prog-qty');
+  const progHours = num('sq-prog-hours');
+  const progRate = num('sq-prog-rate');
+  const helperQty = num('sq-helper-qty');
+  const helperHours = num('sq-helper-hours');
+  const helperRate = num('sq-helper-rate');
+
+  const costoProgramador = progQty * progHours * progRate;
+  const costoAyudante = helperQty * helperHours * helperRate;
+  const subtotalManoObra = costoProgramador + costoAyudante;
+
+  const travelHours = num('sq-travel-hours');
+  const travelRate = num('sq-travel-rate');
+  const km = num('sq-km');
+  const kmRate = num('sq-km-rate');
+  const hotelNights = num('sq-hotel-nights');
+  const hotelRate = num('sq-hotel-rate');
+  const mealDays = num('sq-meal-days');
+  const mealRate = num('sq-meal-rate');
+  const otherTravel = num('sq-other-travel');
+
+  const costoHorasTraslado = travelHours * travelRate;
+  const costoKilometros = km * kmRate;
+  const costoHotel = hotelNights * hotelRate;
+  const costoComidas = mealDays * mealRate;
+  const subtotalViaticos = costoHorasTraslado + costoKilometros + costoHotel + costoComidas + otherTravel;
+
+  let subtotalImportacionMXN = 0;
+  let totalImportacionUSD = 0;
+  let costoImportacionPorEquipoUSD = 0;
+  const importEnabled = document.getElementById('sq-import-enabled').checked;
+
+  if (importEnabled) {
+    const valorCompraUSD = num('sq-import-value');
+    const tipoCambio = num('sq-import-exchange');
+    const cantidadEquipos = Math.max(1, num('sq-import-qty'));
+    const ivaImportPct = num('sq-import-iva') / 100;
+    const igiPct = num('sq-import-igi') / 100;
+    const agenteUSD = num('sq-import-agent');
+    const otrosImportUSD = num('sq-import-other');
+
+    const igiUSD = valorCompraUSD * igiPct;
+    const ivaImportacionUSD = valorCompraUSD * ivaImportPct;
+    totalImportacionUSD = igiUSD + ivaImportacionUSD + agenteUSD + otrosImportUSD;
+    costoImportacionPorEquipoUSD = totalImportacionUSD / cantidadEquipos;
+    subtotalImportacionMXN = totalImportacionUSD * tipoCambio;
+  }
+
+  const subtotalCostos = subtotalManoObra + subtotalViaticos + subtotalImportacionMXN;
+
+  if (subtotalCostos < 0) {
+    alert('El subtotal de costos no puede ser negativo.');
+    return;
+  }
+
+  const precioAntesIVA = subtotalCostos / (1 - margin);
+  const utilidadGenerada = precioAntesIVA - subtotalCostos;
+  const ivaFinalPct = 0.16;
+  const ivaFinal = precioAntesIVA * ivaFinalPct;
+  const totalFinal = precioAntesIVA + ivaFinal;
+
+  const fmt = (v) => money.format(v);
+
+  document.getElementById('sq-r-labor').textContent = fmt(subtotalManoObra);
+  document.getElementById('sq-r-labor-prog').textContent = fmt(costoProgramador);
+  document.getElementById('sq-r-labor-helper').textContent = fmt(costoAyudante);
+  document.getElementById('sq-r-travel').textContent = fmt(subtotalViaticos);
+  document.getElementById('sq-r-travel-hours').textContent = fmt(costoHorasTraslado);
+  document.getElementById('sq-r-travel-km').textContent = fmt(costoKilometros);
+  document.getElementById('sq-r-travel-hotel').textContent = fmt(costoHotel);
+  document.getElementById('sq-r-travel-meals').textContent = fmt(costoComidas);
+  document.getElementById('sq-r-travel-other').textContent = fmt(otherTravel);
+
+  const importRow = document.getElementById('sq-r-import-row');
+  const importDetail = document.getElementById('sq-r-import-detail');
+  const importPerUnit = document.getElementById('sq-r-import-per-unit');
+  if (importEnabled) {
+    importRow.classList.remove('hidden');
+    importDetail.classList.remove('hidden');
+    importPerUnit.classList.remove('hidden');
+    document.getElementById('sq-r-import').textContent = fmt(subtotalImportacionMXN);
+    document.getElementById('sq-r-import-usd').textContent = '$' + totalImportacionUSD.toFixed(2) + ' USD';
+    document.getElementById('sq-r-import-per-unit-val').textContent = '$' + costoImportacionPorEquipoUSD.toFixed(2) + ' USD';
+  } else {
+    importRow.classList.add('hidden');
+    importDetail.classList.add('hidden');
+    importPerUnit.classList.add('hidden');
+  }
+
+  document.getElementById('sq-r-subtotal').textContent = fmt(subtotalCostos);
+  document.getElementById('sq-r-margin').textContent = (margin * 100).toFixed(0) + '%';
+  document.getElementById('sq-r-profit').textContent = fmt(utilidadGenerada);
+  document.getElementById('sq-r-price-no-iva').textContent = fmt(precioAntesIVA);
+  document.getElementById('sq-r-iva').textContent = fmt(ivaFinal);
+  document.getElementById('sq-r-total').textContent = fmt(totalFinal);
+
+  document.getElementById('sq-results').classList.remove('hidden');
+}
+
+function clearServiceQuote() {
+  document.getElementById('sq-client').value = '';
+  document.getElementById('sq-reference').value = '';
+  document.getElementById('sq-notes').value = '';
+  document.getElementById('sq-service-type').value = '';
+  document.getElementById('sq-margin-display').value = '';
+  document.getElementById('sq-prog-qty').value = '1';
+  document.getElementById('sq-prog-hours').value = '0';
+  document.getElementById('sq-helper-qty').value = '0';
+  document.getElementById('sq-helper-hours').value = '0';
+  document.getElementById('sq-travel-hours').value = '0';
+  document.getElementById('sq-km').value = '0';
+  document.getElementById('sq-hotel-nights').value = '0';
+  document.getElementById('sq-meal-days').value = '0';
+  document.getElementById('sq-other-travel').value = '0';
+  document.getElementById('sq-travel-notes').value = '';
+  document.getElementById('sq-import-enabled').checked = false;
+  document.getElementById('sq-import-fields').classList.add('hidden');
+  document.getElementById('sq-import-value').value = '0';
+  document.getElementById('sq-import-qty').value = '1';
+  document.getElementById('sq-import-other').value = '0';
+  document.getElementById('sq-import-maneuvers').checked = false;
+  document.getElementById('sq-import-notes').value = '';
+  document.getElementById('sq-results').classList.add('hidden');
+
+  if (sqConfig) populateServiceQuoterDefaults(sqConfig);
+}
+
+async function openSqConfig() {
+  const modal = document.getElementById('sq-config-modal');
+  modal.classList.remove('hidden');
+
+  try {
+    const [types, settings] = await Promise.all([
+      api('/api/service-quoter/service-types'),
+      api('/api/service-quoter/settings'),
+    ]);
+    renderSqConfigTypes(types);
+    renderSqConfigSettings(settings);
+  } catch (e) {
+    document.getElementById('sq-config-message').textContent = 'Error cargando configuración: ' + e.message;
+  }
+
+  document.getElementById('sq-config-close-btn').onclick = () => modal.classList.add('hidden');
+  document.getElementById('sq-config-save-btn').onclick = saveSqConfig;
+  document.getElementById('sq-add-type-btn').onclick = addSqServiceType;
+}
+
+function renderSqConfigTypes(types) {
+  const tbody = document.querySelector('#sq-config-types-table tbody');
+  tbody.innerHTML = '';
+  for (const t of types) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="text" value="${t.name}" data-id="${t.id}" data-field="name" style="width:100%;"></td>
+      <td><input type="number" value="${t.margin}" data-id="${t.id}" data-field="margin" min="0" max="0.99" step="0.01" style="width:70px;"></td>
+      <td><input type="checkbox" data-id="${t.id}" data-field="active" ${t.active ? 'checked' : ''}></td>
+      <td><input type="number" value="${t.sort_order}" data-id="${t.id}" data-field="sort_order" min="0" style="width:50px;"></td>
+      <td><button class="secondary sq-save-type-btn" data-id="${t.id}" type="button" style="font-size:0.75rem;padding:2px 6px;">Guardar</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  tbody.querySelectorAll('.sq-save-type-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const row = btn.closest('tr');
+      const name = row.querySelector('[data-field="name"]').value;
+      const margin = Number(row.querySelector('[data-field="margin"]').value);
+      const active = row.querySelector('[data-field="active"]').checked;
+      const sort_order = Number(row.querySelector('[data-field="sort_order"]').value);
+
+      try {
+        await api(`/api/service-quoter/service-types/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, margin, active, sort_order }),
+        });
+        document.getElementById('sq-config-message').textContent = 'Tipo actualizado.';
+        setTimeout(() => { document.getElementById('sq-config-message').textContent = ''; }, 2000);
+        refreshSqConfig();
+      } catch (e) {
+        document.getElementById('sq-config-message').textContent = e.message || 'Error al actualizar.';
+      }
+    });
+  });
+}
+
+function renderSqConfigSettings(settings) {
+  const container = document.getElementById('sq-config-settings-form');
+  container.innerHTML = '';
+  for (const s of settings) {
+    const label = document.createElement('label');
+    label.style.fontSize = '0.85rem';
+    label.innerHTML = `${s.label || s.key}<input type="text" data-key="${s.key}" value="${s.value}" style="margin-top:2px;">`;
+    if (s.updated_by_name) {
+      label.innerHTML += `<small style="color:var(--muted);">Mod: ${s.updated_by_name} - ${s.updated_at_cdmx || ''}</small>`;
+    }
+    container.appendChild(label);
+  }
+}
+
+async function addSqServiceType() {
+  const name = document.getElementById('sq-new-type-name').value.trim();
+  const margin = Number(document.getElementById('sq-new-type-margin').value);
+  if (!name) { alert('Ingresa un nombre.'); return; }
+  if (Number.isNaN(margin) || margin < 0 || margin >= 1) { alert('Margen entre 0 y 0.99.'); return; }
+
+  try {
+    await api('/api/service-quoter/service-types', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, margin, sort_order: 99 }),
+    });
+    document.getElementById('sq-new-type-name').value = '';
+    document.getElementById('sq-new-type-margin').value = '';
+    document.getElementById('sq-config-message').textContent = 'Tipo agregado.';
+    setTimeout(() => { document.getElementById('sq-config-message').textContent = ''; }, 2000);
+    refreshSqConfig();
+    const types = await api('/api/service-quoter/service-types');
+    renderSqConfigTypes(types);
+  } catch (e) {
+    document.getElementById('sq-config-message').textContent = e.message || 'Error al agregar.';
+  }
+}
+
+async function saveSqConfig() {
+  const inputs = document.querySelectorAll('#sq-config-settings-form input[data-key]');
+  const settings = {};
+  inputs.forEach((inp) => { settings[inp.dataset.key] = inp.value; });
+
+  try {
+    await api('/api/service-quoter/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings }),
+    });
+    document.getElementById('sq-config-message').textContent = 'Configuración guardada.';
+    setTimeout(() => { document.getElementById('sq-config-message').textContent = ''; }, 2000);
+    refreshSqConfig();
+  } catch (e) {
+    document.getElementById('sq-config-message').textContent = e.message || 'Error al guardar.';
+  }
+}
+
+async function refreshSqConfig() {
+  try {
+    const data = await api('/api/service-quoter/config');
+    sqConfig = data;
+    populateServiceQuoterDefaults(data);
+  } catch (e) { /* ignore */ }
+}
+
+// ===================== END SERVICE QUOTER MODULE =====================
+
 // ===================== END NEW MODULES =====================
 
 api('/api/session')
@@ -4109,6 +4469,7 @@ api('/api/session')
       showVacationsTab();
       showAttendanceTab();
       showEcovisTab();
+      showServiceQuoterTab();
       showApp();
     } else {
       showLogin();
