@@ -3076,6 +3076,8 @@ function applyRoleVisibility() {
   if (vacationsTab) vacationsTab.classList.toggle('hidden', !canAccess('vacations', 'view'));
   if (attendanceTab) attendanceTab.classList.toggle('hidden', !canAccess('attendance', 'view'));
   if (ecovisTab) ecovisTab.classList.toggle('hidden', !canAccess('ecovisAccount', 'view'));
+  const sqTab = document.getElementById('service-quoter-tab');
+  if (sqTab) sqTab.classList.toggle('hidden', !canAccess('serviceQuoter', 'view'));
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('hidden', !canAccess('reportsArchive', 'view'));
   const reportsTab = document.getElementById('reports-tab');
@@ -4116,7 +4118,11 @@ if (attendanceSearchBtn) {
 function showServiceQuoterTab() {
   const sqTab = document.getElementById('service-quoter-tab');
   if (sqTab) {
-    sqTab.classList.toggle('hidden', !canAccess('serviceQuoter', 'view'));
+    if (canAccess('serviceQuoter', 'view')) {
+      sqTab.classList.remove('hidden');
+    } else {
+      sqTab.classList.add('hidden');
+    }
   }
 }
 
