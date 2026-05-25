@@ -35,7 +35,8 @@
     .no-print { margin-bottom: 12px; }
     @media print {
       .no-print { display: none; }
-      body { padding: 5mm; }
+      body { padding: 5mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      th, td, .legend span { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       @page { size: letter landscape; margin: 8mm; }
     }
   </style>
