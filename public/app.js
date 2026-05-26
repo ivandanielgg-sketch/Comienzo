@@ -3169,6 +3169,8 @@ function applyRoleVisibility() {
   if (ecovisTab) ecovisTab.classList.toggle('hidden', !canAccess('ecovisAccount', 'view'));
   const sqTab = document.getElementById('service-quoter-tab');
   if (sqTab) sqTab.classList.toggle('hidden', !canAccess('serviceQuoter', 'view'));
+  const finTab = document.getElementById('financial-tab');
+  if (finTab) finTab.classList.toggle('hidden', state.userRole !== 'admin');
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('hidden', !canAccess('reportsArchive', 'view'));
   const reportsTab = document.getElementById('reports-tab');
