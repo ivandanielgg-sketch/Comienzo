@@ -199,6 +199,23 @@ const BACKUP_ENTITIES = [
     status: ENTITY_STATUS.INCLUDED,
     module: 'backup',
   },
+  // --- Service Quoter ---
+  {
+    key: 'serviceTypes',
+    table: 'service_types',
+    query: 'SELECT * FROM service_types ORDER BY sort_order, id',
+    stableKeys: ['name'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'serviceQuoter',
+  },
+  {
+    key: 'serviceQuoteSettings',
+    table: 'service_quote_settings',
+    query: 'SELECT * FROM service_quote_settings ORDER BY key',
+    stableKeys: ['key'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'serviceQuoter',
+  },
 ];
 
 const EXCLUDED_ENTITIES = [
@@ -247,6 +264,7 @@ const DETECTED_ROUTES = [
   '/vacations',
   '/attendance',
   '/ecovis',
+  '/service-quoter',
   '/users',
   '/admin/backup',
 ];
@@ -262,6 +280,7 @@ const DETECTED_MODULES = [
   'vacations',
   'attendance',
   'ecovis',
+  'serviceQuoter',
   'settings',
   'users',
   'auth',

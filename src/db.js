@@ -512,6 +512,36 @@ function migrate(database) {
   migrateCostCategories(database);
   migrateAllocationTypes(database);
   seedExchangeRates(database);
+
+  // Service Quoter module tables
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS service_types (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      margin REAL NOT NULL CHECK (margin >= 0 AND margin < 1),
+      active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS service_quote_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      label TEXT,
+      category TEXT NOT NULL DEFAULT 'general',
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  seedServiceTypes(database);
+  seedServiceQuoteSettings(database);
 }
 
 function ensureColumn(database, tableName, columnName, definition) {
@@ -683,6 +713,50 @@ function seedAdmin(database) {
   database
     .prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')")
     .run(adminUsername, passwordHash);
+}
+
+function seedServiceTypes(database) {
+  const defaults = [
+    { name: 'Emergencia', margin: 0.60, sort_order: 1 },
+    { name: 'Automatización', margin: 0.60, sort_order: 2 },
+    { name: 'Instalaciones', margin: 0.45, sort_order: 3 },
+    { name: 'Mantenimiento Mayor', margin: 0.35, sort_order: 4 },
+    { name: 'Mantenimiento Preventivo', margin: 0.30, sort_order: 5 },
+    { name: 'Calentadores', margin: 0.30, sort_order: 6 },
+  ];
+
+  const stmt = database.prepare(
+    `INSERT INTO service_types (name, margin, sort_order, created_by_name, created_at)
+     VALUES (?, ?, ?, 'system', CURRENT_TIMESTAMP)
+     ON CONFLICT(name) DO NOTHING`,
+  );
+  for (const st of defaults) {
+    stmt.run(st.name, st.margin, st.sort_order);
+  }
+}
+
+function seedServiceQuoteSettings(database) {
+  const defaults = [
+    { key: 'tarifa_programador_hora', value: '300', label: 'Tarifa programador ($/h)', category: 'mano_de_obra' },
+    { key: 'tarifa_tecnico_hora', value: '250', label: 'Tarifa técnico ($/h)', category: 'mano_de_obra' },
+    { key: 'tarifa_ayudante_hora', value: '175', label: 'Tarifa ayudante ($/h)', category: 'mano_de_obra' },
+    { key: 'horas_por_dia_servicio', value: '9', label: 'Horas por día de servicio', category: 'mano_de_obra' },
+    { key: 'costo_por_kilometro', value: '7.50', label: 'Costo por kilómetro ($)', category: 'transporte' },
+    { key: 'hotel_default', value: '2500', label: 'Hotel por noche default ($)', category: 'viaticos' },
+    { key: 'hotel_opcion_baja', value: '2000', label: 'Hotel opción baja ($)', category: 'viaticos' },
+    { key: 'costo_por_comida', value: '150', label: 'Costo por comida ($)', category: 'viaticos' },
+    { key: 'comidas_por_dia', value: '3', label: 'Comidas por día', category: 'viaticos' },
+    { key: 'iva_final', value: '16', label: 'IVA final (%)', category: 'cotizacion' },
+  ];
+
+  const stmt = database.prepare(
+    `INSERT INTO service_quote_settings (key, value, label, category, updated_by_name, updated_at)
+     VALUES (?, ?, ?, ?, 'system', CURRENT_TIMESTAMP)
+     ON CONFLICT(key) DO NOTHING`,
+  );
+  for (const s of defaults) {
+    stmt.run(s.key, s.value, s.label, s.category);
+  }
 }
 
 module.exports = {

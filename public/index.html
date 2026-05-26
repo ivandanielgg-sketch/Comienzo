@@ -46,6 +46,7 @@
             <button id="vacations-tab" class="secondary hidden" type="button">Vacaciones</button>
             <button id="attendance-tab" class="secondary hidden" type="button">Asistencias</button>
             <button id="ecovis-tab" class="secondary hidden" type="button">Cuenta ECOVIS</button>
+            <button id="service-quoter-tab" class="secondary hidden" type="button">Cotizador</button>
             <button id="backup-create-btn" class="secondary hidden" type="button">Crear respaldo</button>
             <button id="backup-import-btn" class="secondary hidden" type="button">Importar respaldo</button>
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
@@ -1232,6 +1233,159 @@
             <p id="backup-import-message" class="message" style="margin-top:12px;"></p>
           </div>
         </div>
+
+        <!-- Service Quoter Module -->
+        <section id="service-quoter-view" class="hidden">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Herramienta de consulta</p>
+                <h2>Cotizador Rápido de Servicios</h2>
+                <p class="muted">Estimación de costos de mano de obra, transporte, viáticos e IVA. No guarda resultados.</p>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button id="sq-calculate-btn" type="button">Calcular</button>
+                <button id="sq-clear-btn" class="secondary" type="button">Limpiar</button>
+                <button id="sq-config-btn" class="secondary hidden" type="button">Configuración</button>
+              </div>
+            </div>
+
+            <div class="grid-form" style="grid-template-columns:1fr 1fr;gap:16px;">
+              <!-- General Context + Service Type -->
+              <fieldset style="border:1px solid var(--border);border-radius:8px;padding:12px;">
+                <legend style="font-weight:600;font-size:0.85rem;">Datos de Consulta</legend>
+                <label>Cliente (opcional)<input id="sq-client" type="text" placeholder="Nombre del cliente"></label>
+                <label>Proyecto/Referencia (opcional)<input id="sq-reference" type="text" placeholder="Referencia"></label>
+                <label>Tipo de servicio *<select id="sq-service-type"><option value="">Seleccionar...</option></select></label>
+                <label>Margen real aplicado<input id="sq-margin-display" type="text" readonly disabled></label>
+                <label>Notas internas (opcional)<textarea id="sq-notes" rows="2" placeholder="Notas de contexto"></textarea></label>
+              </fieldset>
+
+              <!-- Labor -->
+              <fieldset style="border:1px solid var(--border);border-radius:8px;padding:12px;">
+                <legend style="font-weight:600;font-size:0.85rem;">Mano de Obra</legend>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:0.85rem;">
+                  <div><strong>Programador</strong>
+                    <label>Cantidad<input id="sq-prog-qty" type="number" min="0" value="0"></label>
+                    <label>Modo<select id="sq-prog-mode"><option value="horas">Horas</option><option value="dias">Días</option></select></label>
+                    <label><span id="sq-prog-input-label">Horas</span><input id="sq-prog-time" type="number" min="0" value="0"></label>
+                    <label>Tarifa ($/h)<input id="sq-prog-rate" type="number" min="0" step="0.01" value="300" readonly></label>
+                  </div>
+                  <div><strong>Técnico</strong>
+                    <label>Cantidad<input id="sq-tech-qty" type="number" min="0" value="0"></label>
+                    <label>Modo<select id="sq-tech-mode"><option value="horas">Horas</option><option value="dias">Días</option></select></label>
+                    <label><span id="sq-tech-input-label">Horas</span><input id="sq-tech-time" type="number" min="0" value="0"></label>
+                    <label>Tarifa ($/h)<input id="sq-tech-rate" type="number" min="0" step="0.01" value="250" readonly></label>
+                  </div>
+                  <div><strong>Ayudante</strong>
+                    <label>Cantidad<input id="sq-helper-qty" type="number" min="0" value="0"></label>
+                    <label>Modo<select id="sq-helper-mode"><option value="horas">Horas</option><option value="dias">Días</option></select></label>
+                    <label><span id="sq-helper-input-label">Horas</span><input id="sq-helper-time" type="number" min="0" value="0"></label>
+                    <label>Tarifa ($/h)<input id="sq-helper-rate" type="number" min="0" step="0.01" value="175" readonly></label>
+                  </div>
+                </div>
+              </fieldset>
+            </div>
+
+            <div class="grid-form" style="grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:16px;">
+              <!-- Transport -->
+              <fieldset style="border:1px solid var(--border);border-radius:8px;padding:12px;">
+                <legend style="font-weight:600;font-size:0.85rem;">Transporte</legend>
+                <label>Tipo<select id="sq-transport-type"><option value="vehiculo">Vehículo</option><option value="aereo">Aéreo</option></select></label>
+                <div id="sq-transport-vehiculo">
+                  <label>Horas de traslado<input id="sq-travel-hours" type="number" min="0" value="0"></label>
+                  <label>Tarifa calculada por hora de traslado ($/h)<input id="sq-travel-rate" type="text" value="$0" readonly disabled style="background:#f3f4f6;"></label>
+                  <label>Kilómetros<input id="sq-km" type="number" min="0" value="0"></label>
+                  <label>Costo por km ($)<input id="sq-km-rate" type="number" min="0" step="0.01" value="7.50" readonly></label>
+                </div>
+                <div id="sq-transport-aereo" class="hidden">
+                  <label>Personas en vuelo<input id="sq-flight-persons" type="number" min="0" value="0"></label>
+                  <label>Costo vuelo/persona ($)<input id="sq-flight-cost" type="number" min="0" step="0.01" value="0"></label>
+                  <label>Otros costos aéreos ($)<input id="sq-flight-other" type="number" min="0" step="0.01" value="0"></label>
+                  <label>Notas transporte<input id="sq-flight-notes" type="text" placeholder="Opcional"></label>
+                </div>
+              </fieldset>
+
+              <!-- Viáticos -->
+              <fieldset style="border:1px solid var(--border);border-radius:8px;padding:12px;">
+                <legend style="font-weight:600;font-size:0.85rem;">Viáticos</legend>
+                <label>Noches hotel<input id="sq-hotel-nights" type="number" min="0" value="0"></label>
+                <label>Costo hotel/noche ($)<input id="sq-hotel-rate" type="number" min="0" step="0.01" value="2500"></label>
+                <label>Días comida<input id="sq-meal-days" type="number" min="0" value="0"></label>
+                <label>Costo por comida ($)<input id="sq-meal-rate" type="number" min="0" step="0.01" value="150"></label>
+                <label>Comidas por día<input id="sq-meals-per-day" type="number" min="0" value="3"></label>
+              </fieldset>
+
+              <!-- Otros costos -->
+              <fieldset style="border:1px solid var(--border);border-radius:8px;padding:12px;">
+                <legend style="font-weight:600;font-size:0.85rem;">Otros Costos</legend>
+                <label>Monto ($)<input id="sq-other-costs" type="number" min="0" step="0.01" value="0"></label>
+                <label>Notas<input id="sq-other-costs-notes" type="text" placeholder="Opcional"></label>
+              </fieldset>
+            </div>
+
+            <!-- Results -->
+            <div id="sq-results" class="hidden" style="margin-top:20px;border:2px solid var(--primary);border-radius:8px;padding:16px;">
+              <h3 style="margin:0 0 12px 0;">Resumen de Cálculo</h3>
+              <table style="width:100%;border-collapse:collapse;">
+                <tbody>
+                  <tr><td>Subtotal Mano de Obra</td><td style="text-align:right;font-weight:600;" id="sq-r-labor">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Programador(es)</td><td style="text-align:right;color:var(--muted);" id="sq-r-labor-prog">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Técnico(s)</td><td style="text-align:right;color:var(--muted);" id="sq-r-labor-tech">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Ayudante(s)</td><td style="text-align:right;color:var(--muted);" id="sq-r-labor-helper">$0.00</td></tr>
+                  <tr><td>Subtotal Transporte</td><td style="text-align:right;font-weight:600;" id="sq-r-transport">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Suma tarifas personal</td><td style="text-align:right;color:var(--muted);" id="sq-r-t-sum">$0</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— 1/3 suma → redondeado</td><td style="text-align:right;color:var(--muted);" id="sq-r-t-rate">$0</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Horas traslado × tarifa</td><td style="text-align:right;color:var(--muted);" id="sq-r-t-hours-cost">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Kilómetros</td><td style="text-align:right;color:var(--muted);" id="sq-r-t-km-cost">$0.00</td></tr>
+                  <tr><td>Subtotal Viáticos</td><td style="text-align:right;font-weight:600;" id="sq-r-viaticos">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Hotel</td><td style="text-align:right;color:var(--muted);" id="sq-r-v-hotel">$0.00</td></tr>
+                  <tr><td style="padding-left:20px;color:var(--muted);">— Comidas (<span id="sq-r-v-meals-detail">0 pers × $0 × 0d × 0c</span>)</td><td style="text-align:right;color:var(--muted);" id="sq-r-v-meals">$0.00</td></tr>
+                  <tr><td>Otros Costos</td><td style="text-align:right;font-weight:600;" id="sq-r-other">$0.00</td></tr>
+                  <tr style="border-top:2px solid var(--border);"><td style="padding-top:8px;font-weight:700;">Subtotal Costos</td><td style="text-align:right;font-weight:700;padding-top:8px;" id="sq-r-subtotal">$0.00</td></tr>
+                  <tr><td>Margen real aplicado</td><td style="text-align:right;" id="sq-r-margin">0%</td></tr>
+                  <tr><td>Utilidad generada</td><td style="text-align:right;color:green;font-weight:600;" id="sq-r-profit">$0.00</td></tr>
+                  <tr style="border-top:1px solid var(--border);"><td style="padding-top:6px;font-weight:700;">Precio antes de IVA</td><td style="text-align:right;font-weight:700;padding-top:6px;" id="sq-r-price-no-iva">$0.00</td></tr>
+                  <tr><td>IVA 16%</td><td style="text-align:right;" id="sq-r-iva">$0.00</td></tr>
+                  <tr style="border-top:2px solid var(--primary);"><td style="padding-top:8px;font-size:1.1rem;font-weight:700;">TOTAL FINAL</td><td style="text-align:right;font-size:1.1rem;font-weight:700;padding-top:8px;color:var(--primary);" id="sq-r-total">$0.00</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- Configuration Modal -->
+          <div id="sq-config-modal" class="modal-overlay hidden" style="background:rgba(0,0,0,0.7);">
+            <div class="modal" style="max-width:700px;background:#fff;border-radius:12px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto;">
+              <h2>Configuración del Cotizador</h2>
+              <div id="sq-config-content">
+                <div style="margin-bottom:16px;">
+                  <h3 style="margin:0 0 8px 0;">Tipos de Servicio</h3>
+                  <table id="sq-config-types-table" style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+                    <thead><tr><th>Nombre</th><th>Margen</th><th>Activo</th><th>Orden</th><th></th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                  <div style="margin-top:8px;display:flex;gap:8px;">
+                    <input id="sq-new-type-name" type="text" placeholder="Nuevo tipo" style="flex:1;">
+                    <input id="sq-new-type-margin" type="number" min="0" max="0.99" step="0.01" placeholder="0.60" style="width:80px;">
+                    <button id="sq-add-type-btn" type="button" class="secondary">Agregar</button>
+                  </div>
+                </div>
+                <div>
+                  <h3 style="margin:0 0 8px 0;">Parámetros Generales</h3>
+                  <div id="sq-config-settings-form" class="grid-form" style="grid-template-columns:1fr 1fr;gap:8px;"></div>
+                </div>
+              </div>
+              <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
+                <label style="font-weight:600;">Contraseña de administrador *<input id="sq-config-password" type="password" autocomplete="current-password" placeholder="Requerida para guardar cambios"></label>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:12px;">
+                <button id="sq-config-save-btn" type="button">Guardar configuración</button>
+                <button id="sq-config-close-btn" class="secondary" type="button">Cerrar</button>
+              </div>
+              <p id="sq-config-message" class="message" style="margin-top:8px;"></p>
+            </div>
+          </div>
+        </section>
 
         <section id="users-view" class="layout hidden">
           <div class="panel">

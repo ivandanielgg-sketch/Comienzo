@@ -56,6 +56,7 @@ function applyPermissionVisibility() {
     'report-archive-tab': canAccess('reportsArchive', 'view'),
     'vacations-tab': canAccess('vacations', 'view'),
     'ecovis-tab': canAccess('ecovisAccount', 'view'),
+    'service-quoter-tab': canAccess('serviceQuoter', 'view'),
     'users-tab': canAccess('users', 'view'),
   };
 
@@ -664,6 +665,7 @@ function switchView(viewName) {
     vacations: ['vacations', 'view'],
     attendance: ['attendance', 'view'],
     ecovis: ['ecovisAccount', 'view'],
+    'service-quoter': ['serviceQuoter', 'view'],
     users: ['users', 'view'],
   };
   const perm = viewPermMap[viewName];
@@ -679,6 +681,7 @@ function switchView(viewName) {
   const showingReports = viewName === 'reports';
   const showingEcovis = viewName === 'ecovis';
   const showingArchive = viewName === 'report-archive';
+  const showingServiceQuoter = viewName === 'service-quoter';
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
@@ -688,6 +691,8 @@ function switchView(viewName) {
   if (ecovisView) ecovisView.classList.toggle('hidden', !showingEcovis);
   const archiveView = document.getElementById('report-archive-view');
   if (archiveView) archiveView.classList.toggle('hidden', !showingArchive);
+  const sqView = document.getElementById('service-quoter-view');
+  if (sqView) sqView.classList.toggle('hidden', !showingServiceQuoter);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
@@ -697,6 +702,9 @@ function switchView(viewName) {
   if (ecovisTab) ecovisTab.classList.toggle('active', showingEcovis);
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('active', showingArchive);
+  const sqTab = document.getElementById('service-quoter-tab');
+  if (sqTab) sqTab.classList.toggle('active', showingServiceQuoter);
+  if (showingServiceQuoter) initServiceQuoter();
 }
 
 function showPasswordModal(message = 'Ingresa la contraseña del admin:') {
@@ -1251,6 +1259,10 @@ closedProjectsTab.addEventListener('click', async () => {
   switchView('closed-projects');
   await loadClosedProjects();
 });
+
+const serviceQuoterTabBtn = document.getElementById('service-quoter-tab');
+if (serviceQuoterTabBtn) serviceQuoterTabBtn.addEventListener('click', () => switchView('service-quoter'));
+
 usersTab.addEventListener('click', async () => {
   try {
     if (!state.adminVerified) {
@@ -3064,6 +3076,8 @@ function applyRoleVisibility() {
   if (vacationsTab) vacationsTab.classList.toggle('hidden', !canAccess('vacations', 'view'));
   if (attendanceTab) attendanceTab.classList.toggle('hidden', !canAccess('attendance', 'view'));
   if (ecovisTab) ecovisTab.classList.toggle('hidden', !canAccess('ecovisAccount', 'view'));
+  const sqTab = document.getElementById('service-quoter-tab');
+  if (sqTab) sqTab.classList.toggle('hidden', !canAccess('serviceQuoter', 'view'));
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('hidden', !canAccess('reportsArchive', 'view'));
   const reportsTab = document.getElementById('reports-tab');
@@ -4099,6 +4113,387 @@ if (attendanceSearchBtn) {
 
 // ===================== END ATTENDANCE MODULE =====================
 
+// ===================== SERVICE QUOTER MODULE =====================
+
+function showServiceQuoterTab() {
+  const sqTab = document.getElementById('service-quoter-tab');
+  if (sqTab) {
+    if (canAccess('serviceQuoter', 'view')) {
+      sqTab.classList.remove('hidden');
+    } else {
+      sqTab.classList.add('hidden');
+    }
+  }
+}
+
+let sqConfig = null;
+let sqInitialized = false;
+
+async function initServiceQuoter() {
+  if (sqInitialized) return;
+  sqInitialized = true;
+
+  try {
+    const data = await api('/api/service-quoter/config');
+    sqConfig = data;
+    populateServiceQuoterDefaults(data);
+  } catch (e) {
+    console.error('Error loading service quoter config:', e);
+  }
+
+  const configBtn = document.getElementById('sq-config-btn');
+  if (configBtn && canAccess('serviceQuoter', 'configure')) {
+    configBtn.classList.remove('hidden');
+    configBtn.addEventListener('click', openSqConfig);
+  }
+
+  document.getElementById('sq-calculate-btn').addEventListener('click', calculateServiceQuote);
+  document.getElementById('sq-clear-btn').addEventListener('click', clearServiceQuote);
+
+  const serviceTypeSelect = document.getElementById('sq-service-type');
+  serviceTypeSelect.addEventListener('change', () => {
+    const selected = sqConfig.serviceTypes.find((t) => t.id === Number(serviceTypeSelect.value));
+    const marginDisplay = document.getElementById('sq-margin-display');
+    marginDisplay.value = selected ? (selected.margin * 100).toFixed(0) + '%' : '';
+  });
+
+  document.getElementById('sq-transport-type').addEventListener('change', (e) => {
+    document.getElementById('sq-transport-vehiculo').classList.toggle('hidden', e.target.value !== 'vehiculo');
+    document.getElementById('sq-transport-aereo').classList.toggle('hidden', e.target.value !== 'aereo');
+  });
+
+  ['sq-prog-mode', 'sq-tech-mode', 'sq-helper-mode'].forEach((id) => {
+    document.getElementById(id).addEventListener('change', (e) => {
+      const prefix = id.replace('-mode', '');
+      document.getElementById(prefix + '-input-label').textContent = e.target.value === 'dias' ? 'Días' : 'Horas';
+    });
+  });
+
+  ['sq-prog-qty', 'sq-tech-qty', 'sq-helper-qty'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', updateTravelRate);
+  });
+}
+
+function roundUpToNearestTen(value) {
+  return Math.ceil(value / 10) * 10;
+}
+
+function updateTravelRate() {
+  const num = (id) => Math.max(0, Number(document.getElementById(id).value) || 0);
+  const progQty = num('sq-prog-qty');
+  const techQty = num('sq-tech-qty');
+  const helperQty = num('sq-helper-qty');
+  const progRate = num('sq-prog-rate');
+  const techRate = num('sq-tech-rate');
+  const helperRate = num('sq-helper-rate');
+
+  const sumaTarifas = (progQty * progRate) + (techQty * techRate) + (helperQty * helperRate);
+  const tarifaBase = sumaTarifas / 3;
+  const tarifaTraslado = sumaTarifas > 0 ? roundUpToNearestTen(tarifaBase) : 0;
+  document.getElementById('sq-travel-rate').value = '$' + tarifaTraslado;
+}
+
+function populateServiceQuoterDefaults(data) {
+  const typeSelect = document.getElementById('sq-service-type');
+  typeSelect.innerHTML = '<option value="">Seleccionar...</option>';
+  for (const st of data.serviceTypes) {
+    typeSelect.innerHTML += `<option value="${st.id}">${st.name} (${(st.margin * 100).toFixed(0)}%)</option>`;
+  }
+
+  const settingsMap = Object.fromEntries(data.settings.map((s) => [s.key, s.value]));
+
+  const progRate = settingsMap['tarifa_programador_hora'] || '300';
+  const techRate = settingsMap['tarifa_tecnico_hora'] || '250';
+  const helperRate = settingsMap['tarifa_ayudante_hora'] || '175';
+  const kmRate = settingsMap['costo_por_kilometro'] || '7.50';
+  const hotelRate = settingsMap['hotel_default'] || '2500';
+  const mealRate = settingsMap['costo_por_comida'] || settingsMap['comida_diaria_default'] || '150';
+  const mealsPerDay = settingsMap['comidas_por_dia'] || '3';
+
+  document.getElementById('sq-prog-rate').value = progRate;
+  document.getElementById('sq-tech-rate').value = techRate;
+  document.getElementById('sq-helper-rate').value = helperRate;
+  document.getElementById('sq-km-rate').value = kmRate;
+  document.getElementById('sq-hotel-rate').value = hotelRate;
+  document.getElementById('sq-meal-rate').value = mealRate;
+  document.getElementById('sq-meals-per-day').value = mealsPerDay;
+  updateTravelRate();
+}
+
+function calculateServiceQuote() {
+  const serviceTypeSelect = document.getElementById('sq-service-type');
+  if (!serviceTypeSelect.value) { alert('Selecciona un tipo de servicio.'); return; }
+  const selectedType = sqConfig.serviceTypes.find((t) => t.id === Number(serviceTypeSelect.value));
+  if (!selectedType) return;
+  const margin = selectedType.margin;
+
+  const settingsMap = Object.fromEntries(sqConfig.settings.map((s) => [s.key, s.value]));
+  const hoursPerDay = Number(settingsMap['horas_por_dia_servicio']) || 9;
+
+  const num = (id) => Math.max(0, Number(document.getElementById(id).value) || 0);
+  const getHours = (prefix) => {
+    const mode = document.getElementById(prefix + '-mode').value;
+    const time = num(prefix + '-time');
+    return mode === 'dias' ? time * hoursPerDay : time;
+  };
+
+  const progQty = num('sq-prog-qty');
+  const progHours = getHours('sq-prog');
+  const progRate = num('sq-prog-rate');
+  const costoProgramador = progQty * progHours * progRate;
+
+  const techQty = num('sq-tech-qty');
+  const techHours = getHours('sq-tech');
+  const techRate = num('sq-tech-rate');
+  const costoTecnico = techQty * techHours * techRate;
+
+  const helperQty = num('sq-helper-qty');
+  const helperHours = getHours('sq-helper');
+  const helperRate = num('sq-helper-rate');
+  const costoAyudante = helperQty * helperHours * helperRate;
+
+  const subtotalManoObra = costoProgramador + costoTecnico + costoAyudante;
+
+  let subtotalTransporte = 0;
+  let sumaTarifas = 0;
+  let tarifaTrasladoHora = 0;
+  let costoHorasTraslado = 0;
+  let costoKm = 0;
+  const transportType = document.getElementById('sq-transport-type').value;
+  if (transportType === 'vehiculo') {
+    sumaTarifas = (progQty * progRate) + (techQty * techRate) + (helperQty * helperRate);
+    const tarifaBase = sumaTarifas / 3;
+    tarifaTrasladoHora = sumaTarifas > 0 ? roundUpToNearestTen(tarifaBase) : 0;
+    const travelHours = num('sq-travel-hours');
+    const km = num('sq-km');
+    const kmRate = num('sq-km-rate');
+    costoHorasTraslado = travelHours * tarifaTrasladoHora;
+    costoKm = km * kmRate;
+    subtotalTransporte = costoHorasTraslado + costoKm;
+  } else {
+    const persons = num('sq-flight-persons');
+    const costPerPerson = num('sq-flight-cost');
+    const otherFlight = num('sq-flight-other');
+    subtotalTransporte = (persons * costPerPerson) + otherFlight;
+  }
+
+  const hotelNights = num('sq-hotel-nights');
+  const hotelRate = num('sq-hotel-rate');
+  const mealDays = num('sq-meal-days');
+  const mealCost = num('sq-meal-rate');
+  const mealsPerDay = num('sq-meals-per-day');
+  const totalPersonas = progQty + techQty + helperQty;
+  const costoHotel = hotelNights * hotelRate;
+  const costoComidas = mealCost * totalPersonas * mealDays * mealsPerDay;
+  const subtotalViaticos = costoHotel + costoComidas;
+
+  const otherCosts = num('sq-other-costs');
+  const subtotalCostos = subtotalManoObra + subtotalTransporte + subtotalViaticos + otherCosts;
+
+  if (subtotalCostos < 0) { alert('El subtotal de costos no puede ser negativo.'); return; }
+
+  const precioAntesIVA = subtotalCostos / (1 - margin);
+  const utilidadGenerada = precioAntesIVA - subtotalCostos;
+  const ivaFinal = precioAntesIVA * 0.16;
+  const totalFinal = precioAntesIVA + ivaFinal;
+
+  const fmt = (v) => money.format(v);
+  document.getElementById('sq-r-labor').textContent = fmt(subtotalManoObra);
+  document.getElementById('sq-r-labor-prog').textContent = fmt(costoProgramador);
+  document.getElementById('sq-r-labor-tech').textContent = fmt(costoTecnico);
+  document.getElementById('sq-r-labor-helper').textContent = fmt(costoAyudante);
+  document.getElementById('sq-r-transport').textContent = fmt(subtotalTransporte);
+  document.getElementById('sq-r-t-sum').textContent = '$' + sumaTarifas;
+  document.getElementById('sq-r-t-rate').textContent = '$' + Math.round(sumaTarifas / 3) + ' → $' + tarifaTrasladoHora;
+  document.getElementById('sq-r-t-hours-cost').textContent = fmt(costoHorasTraslado);
+  document.getElementById('sq-r-t-km-cost').textContent = fmt(costoKm);
+  document.getElementById('sq-r-viaticos').textContent = fmt(subtotalViaticos);
+  document.getElementById('sq-r-v-hotel').textContent = fmt(costoHotel);
+  document.getElementById('sq-r-v-meals').textContent = fmt(costoComidas);
+  document.getElementById('sq-r-v-meals-detail').textContent = `${totalPersonas} pers × $${mealCost} × ${mealDays}d × ${mealsPerDay}c`;
+  document.getElementById('sq-r-other').textContent = fmt(otherCosts);
+  document.getElementById('sq-r-subtotal').textContent = fmt(subtotalCostos);
+  document.getElementById('sq-r-margin').textContent = (margin * 100).toFixed(0) + '%';
+  document.getElementById('sq-r-profit').textContent = fmt(utilidadGenerada);
+  document.getElementById('sq-r-price-no-iva').textContent = fmt(precioAntesIVA);
+  document.getElementById('sq-r-iva').textContent = fmt(ivaFinal);
+  document.getElementById('sq-r-total').textContent = fmt(totalFinal);
+  document.getElementById('sq-results').classList.remove('hidden');
+}
+
+function clearServiceQuote() {
+  document.getElementById('sq-client').value = '';
+  document.getElementById('sq-reference').value = '';
+  document.getElementById('sq-notes').value = '';
+  document.getElementById('sq-service-type').value = '';
+  document.getElementById('sq-margin-display').value = '';
+  document.getElementById('sq-prog-qty').value = '0';
+  document.getElementById('sq-prog-time').value = '0';
+  document.getElementById('sq-prog-mode').value = 'horas';
+  document.getElementById('sq-prog-input-label').textContent = 'Horas';
+  document.getElementById('sq-tech-qty').value = '0';
+  document.getElementById('sq-tech-time').value = '0';
+  document.getElementById('sq-tech-mode').value = 'horas';
+  document.getElementById('sq-tech-input-label').textContent = 'Horas';
+  document.getElementById('sq-helper-qty').value = '0';
+  document.getElementById('sq-helper-time').value = '0';
+  document.getElementById('sq-helper-mode').value = 'horas';
+  document.getElementById('sq-helper-input-label').textContent = 'Horas';
+  document.getElementById('sq-transport-type').value = 'vehiculo';
+  document.getElementById('sq-transport-vehiculo').classList.remove('hidden');
+  document.getElementById('sq-transport-aereo').classList.add('hidden');
+  document.getElementById('sq-travel-hours').value = '0';
+  document.getElementById('sq-km').value = '0';
+  document.getElementById('sq-flight-persons').value = '0';
+  document.getElementById('sq-flight-cost').value = '0';
+  document.getElementById('sq-flight-other').value = '0';
+  document.getElementById('sq-flight-notes').value = '';
+  document.getElementById('sq-hotel-nights').value = '0';
+  document.getElementById('sq-meal-days').value = '0';
+  document.getElementById('sq-other-costs').value = '0';
+  document.getElementById('sq-other-costs-notes').value = '';
+  document.getElementById('sq-results').classList.add('hidden');
+  if (sqConfig) populateServiceQuoterDefaults(sqConfig);
+}
+
+async function openSqConfig() {
+  const modal = document.getElementById('sq-config-modal');
+  modal.classList.remove('hidden');
+  document.getElementById('sq-config-password').value = '';
+  document.getElementById('sq-config-message').textContent = '';
+
+  try {
+    const [types, settings] = await Promise.all([
+      api('/api/service-quoter/service-types'),
+      api('/api/service-quoter/settings'),
+    ]);
+    renderSqConfigTypes(types);
+    renderSqConfigSettings(settings);
+  } catch (e) {
+    document.getElementById('sq-config-message').textContent = 'Error cargando configuración: ' + e.message;
+  }
+
+  document.getElementById('sq-config-close-btn').onclick = () => modal.classList.add('hidden');
+  document.getElementById('sq-config-save-btn').onclick = saveSqConfig;
+  document.getElementById('sq-add-type-btn').onclick = addSqServiceType;
+}
+
+function renderSqConfigTypes(types) {
+  const tbody = document.querySelector('#sq-config-types-table tbody');
+  tbody.innerHTML = '';
+  for (const t of types) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="text" value="${t.name}" data-id="${t.id}" data-field="name" style="width:100%;"></td>
+      <td><input type="number" value="${t.margin}" data-id="${t.id}" data-field="margin" min="0" max="0.99" step="0.01" style="width:70px;"></td>
+      <td><input type="checkbox" data-id="${t.id}" data-field="active" ${t.active ? 'checked' : ''}></td>
+      <td><input type="number" value="${t.sort_order}" data-id="${t.id}" data-field="sort_order" min="0" style="width:50px;"></td>
+      <td><button class="secondary sq-save-type-btn" data-id="${t.id}" type="button" style="font-size:0.75rem;padding:2px 6px;">Guardar</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  tbody.querySelectorAll('.sq-save-type-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const row = btn.closest('tr');
+      const name = row.querySelector('[data-field="name"]').value;
+      const marginVal = Number(row.querySelector('[data-field="margin"]').value);
+      const active = row.querySelector('[data-field="active"]').checked;
+      const sort_order = Number(row.querySelector('[data-field="sort_order"]').value);
+      const adminPassword = document.getElementById('sq-config-password').value;
+      if (!adminPassword) { document.getElementById('sq-config-message').textContent = 'Ingresa contraseña de admin.'; return; }
+
+      try {
+        await api(`/api/service-quoter/service-types/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, margin: marginVal, active, sort_order, adminPassword }),
+        });
+        document.getElementById('sq-config-message').textContent = 'Tipo actualizado.';
+        document.getElementById('sq-config-password').value = '';
+        setTimeout(() => { document.getElementById('sq-config-message').textContent = ''; }, 2000);
+        refreshSqConfig();
+      } catch (e) {
+        document.getElementById('sq-config-message').textContent = e.message || 'Error al actualizar.';
+      }
+    });
+  });
+}
+
+function renderSqConfigSettings(settings) {
+  const container = document.getElementById('sq-config-settings-form');
+  container.innerHTML = '';
+  for (const s of settings) {
+    const label = document.createElement('label');
+    label.style.fontSize = '0.85rem';
+    label.innerHTML = `${s.label || s.key}<input type="text" data-key="${s.key}" value="${s.value}" style="margin-top:2px;">`;
+    if (s.updated_by_name) {
+      label.innerHTML += `<small style="color:var(--muted);">Mod: ${s.updated_by_name} - ${s.updated_at_cdmx || ''}</small>`;
+    }
+    container.appendChild(label);
+  }
+}
+
+async function addSqServiceType() {
+  const name = document.getElementById('sq-new-type-name').value.trim();
+  const marginVal = Number(document.getElementById('sq-new-type-margin').value);
+  const adminPassword = document.getElementById('sq-config-password').value;
+  if (!name) { alert('Ingresa un nombre.'); return; }
+  if (Number.isNaN(marginVal) || marginVal < 0 || marginVal >= 1) { alert('Margen entre 0 y 0.99.'); return; }
+  if (!adminPassword) { document.getElementById('sq-config-message').textContent = 'Ingresa contraseña de admin.'; return; }
+
+  try {
+    await api('/api/service-quoter/service-types', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, margin: marginVal, sort_order: 99, adminPassword }),
+    });
+    document.getElementById('sq-new-type-name').value = '';
+    document.getElementById('sq-new-type-margin').value = '';
+    document.getElementById('sq-config-password').value = '';
+    document.getElementById('sq-config-message').textContent = 'Tipo agregado.';
+    setTimeout(() => { document.getElementById('sq-config-message').textContent = ''; }, 2000);
+    refreshSqConfig();
+    const types = await api('/api/service-quoter/service-types');
+    renderSqConfigTypes(types);
+  } catch (e) {
+    document.getElementById('sq-config-message').textContent = e.message || 'Error al agregar.';
+  }
+}
+
+async function saveSqConfig() {
+  const inputs = document.querySelectorAll('#sq-config-settings-form input[data-key]');
+  const settings = {};
+  inputs.forEach((inp) => { settings[inp.dataset.key] = inp.value; });
+  const adminPassword = document.getElementById('sq-config-password').value;
+  if (!adminPassword) { document.getElementById('sq-config-message').textContent = 'Ingresa contraseña de admin.'; return; }
+
+  try {
+    await api('/api/service-quoter/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings, adminPassword }),
+    });
+    document.getElementById('sq-config-message').textContent = 'Configuración guardada.';
+    document.getElementById('sq-config-password').value = '';
+    setTimeout(() => { document.getElementById('sq-config-message').textContent = ''; }, 2000);
+    refreshSqConfig();
+  } catch (e) {
+    document.getElementById('sq-config-message').textContent = e.message || 'Error al guardar.';
+  }
+}
+
+async function refreshSqConfig() {
+  try {
+    const data = await api('/api/service-quoter/config');
+    sqConfig = data;
+    populateServiceQuoterDefaults(data);
+  } catch (e) { /* ignore */ }
+}
+
+// ===================== END SERVICE QUOTER MODULE =====================
+
 // ===================== END NEW MODULES =====================
 
 api('/api/session')
@@ -4109,6 +4504,7 @@ api('/api/session')
       showVacationsTab();
       showAttendanceTab();
       showEcovisTab();
+      showServiceQuoterTab();
       showApp();
     } else {
       showLogin();
