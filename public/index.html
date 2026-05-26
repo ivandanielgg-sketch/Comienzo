@@ -911,7 +911,8 @@
             <button id="ecovis-subtab-projects" class="secondary active" type="button">Proyectos ECOVIS</button>
             <button id="ecovis-subtab-payments" class="secondary" type="button">Pagos / Abonos</button>
             <button id="ecovis-subtab-loans" class="secondary" type="button">Prestamos</button>
-            <button id="ecovis-subtab-movements" class="secondary" type="button">Historial</button>
+            <button id="ecovis-subtab-movements" class="secondary" type="button">Movimientos</button>
+            <button id="ecovis-subtab-history" class="secondary" type="button">Historial</button>
           </div>
 
           <!-- ECOVIS Projects Section -->
@@ -921,6 +922,7 @@
                 <h2>Proyectos ECOVIS</h2>
                 <button id="ecovis-new-project-btn" type="button">Agregar proyecto</button>
               </div>
+              <p class="text-muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">Los proyectos pagados al 100% se consultan en Historial.</p>
               <div class="search-bar">
                 <input id="ecovis-projects-search" type="text" placeholder="Buscar proyectos ECOVIS..." />
               </div>
@@ -1042,6 +1044,40 @@
                 </table>
               </div>
               <div id="ecovis-movements-pagination"></div>
+            </div>
+          </div>
+
+          <!-- ECOVIS History Section -->
+          <div id="ecovis-history-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Historial de Proyectos Pagados</h2>
+              </div>
+              <div class="search-bar">
+                <select id="ecovis-history-year">
+                  <option value="">-- Selecciona un año --</option>
+                </select>
+                <select id="ecovis-history-month">
+                  <option value="">Todos los meses</option>
+                  <option value="1">Enero</option>
+                  <option value="2">Febrero</option>
+                  <option value="3">Marzo</option>
+                  <option value="4">Abril</option>
+                  <option value="5">Mayo</option>
+                  <option value="6">Junio</option>
+                  <option value="7">Julio</option>
+                  <option value="8">Agosto</option>
+                  <option value="9">Septiembre</option>
+                  <option value="10">Octubre</option>
+                  <option value="11">Noviembre</option>
+                  <option value="12">Diciembre</option>
+                </select>
+                <button id="ecovis-history-search-btn" type="button">Buscar</button>
+              </div>
+              <p class="text-muted" style="margin: 0.5rem 0; font-size: 0.85rem;">Los proyectos pagados al 100% se consultan aquí.</p>
+              <div id="ecovis-history-results">
+                <p class="empty-message">Selecciona un año para consultar el historial.</p>
+              </div>
             </div>
           </div>
 

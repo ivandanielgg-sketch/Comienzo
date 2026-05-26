@@ -351,6 +351,29 @@ function migrate(database) {
   // Link ecovis_projects to purchase orders
   ensureColumn(database, 'ecovis_projects', 'ecovis_purchase_order_id', 'INTEGER');
 
+  // ECOVIS currency snapshot columns
+  ensureColumn(database, 'ecovis_projects', 'exchange_rate_to_mxn', 'REAL NOT NULL DEFAULT 1');
+  ensureColumn(database, 'ecovis_projects', 'amount_mxn', 'REAL');
+  ensureColumn(database, 'ecovis_projects', 'paid_amount_mxn', 'REAL NOT NULL DEFAULT 0');
+  ensureColumn(database, 'ecovis_projects', 'pending_amount_mxn', 'REAL');
+  ensureColumn(database, 'ecovis_projects', 'fully_paid_at', 'TEXT');
+
+  ensureColumn(database, 'ecovis_payments', 'exchange_rate_to_mxn', 'REAL NOT NULL DEFAULT 1');
+  ensureColumn(database, 'ecovis_payments', 'amount_mxn', 'REAL');
+
+  ensureColumn(database, 'ecovis_payment_allocations', 'currency', "TEXT NOT NULL DEFAULT 'MXN'");
+  ensureColumn(database, 'ecovis_payment_allocations', 'exchange_rate_to_mxn', 'REAL NOT NULL DEFAULT 1');
+  ensureColumn(database, 'ecovis_payment_allocations', 'amount_mxn', 'REAL');
+
+  ensureColumn(database, 'ecovis_purchase_orders', 'exchange_rate_to_mxn', 'REAL NOT NULL DEFAULT 1');
+  ensureColumn(database, 'ecovis_purchase_orders', 'amount_mxn', 'REAL');
+  ensureColumn(database, 'ecovis_purchase_orders', 'paid_amount_mxn', 'REAL NOT NULL DEFAULT 0');
+  ensureColumn(database, 'ecovis_purchase_orders', 'pending_amount_mxn', 'REAL');
+  ensureColumn(database, 'ecovis_purchase_orders', 'fully_paid_at', 'TEXT');
+
+  ensureColumn(database, 'ecovis_movements', 'exchange_rate_to_mxn', 'REAL NOT NULL DEFAULT 1');
+  ensureColumn(database, 'ecovis_movements', 'amount_mxn', 'REAL');
+
   // Audit columns for ecovis_movements (created_by/updated_by already exist)
   ensureColumn(database, 'ecovis_movements', 'created_by_user_id', 'INTEGER');
   ensureColumn(database, 'ecovis_movements', 'updated_by_user_id', 'INTEGER');
@@ -542,6 +565,8 @@ function migrate(database) {
 
   seedServiceTypes(database);
   seedServiceQuoteSettings(database);
+
+  migrateEcovisCurrencyFields(database);
 }
 
 function ensureColumn(database, tableName, columnName, definition) {
@@ -757,6 +782,94 @@ function seedServiceQuoteSettings(database) {
   for (const s of defaults) {
     stmt.run(s.key, s.value, s.label, s.category);
   }
+}
+
+function migrateEcovisCurrencyFields(database) {
+  const rates = {};
+  const rateRows = database.prepare('SELECT currency, rate_to_mxn FROM exchange_rates').all();
+  for (const r of rateRows) {
+    rates[r.currency] = r.rate_to_mxn;
+  }
+  rates.MXN = 1;
+
+  const needsMigration = database.prepare(
+    'SELECT COUNT(*) as cnt FROM ecovis_projects WHERE amount_mxn IS NULL',
+  ).get().cnt;
+  if (needsMigration === 0) return;
+
+  const migrateAll = database.transaction(() => {
+    const projects = database.prepare('SELECT id, total_amount, currency, exchange_rate_to_mxn FROM ecovis_projects WHERE amount_mxn IS NULL').all();
+    for (const p of projects) {
+      const cur = p.currency || 'MXN';
+      const rate = p.exchange_rate_to_mxn && p.exchange_rate_to_mxn !== 1 ? p.exchange_rate_to_mxn : (rates[cur] || 1);
+      const amountMxn = Math.round((Number(p.total_amount) * rate + Number.EPSILON) * 100) / 100;
+      database.prepare('UPDATE ecovis_projects SET exchange_rate_to_mxn = ?, amount_mxn = ?, pending_amount_mxn = amount_mxn - paid_amount_mxn WHERE id = ?').run(rate, amountMxn, p.id);
+    }
+
+    const payments = database.prepare('SELECT id, amount, currency, exchange_rate_to_mxn FROM ecovis_payments WHERE amount_mxn IS NULL').all();
+    for (const p of payments) {
+      const cur = p.currency || 'MXN';
+      const rate = p.exchange_rate_to_mxn && p.exchange_rate_to_mxn !== 1 ? p.exchange_rate_to_mxn : (rates[cur] || 1);
+      const amountMxn = Math.round((Number(p.amount) * rate + Number.EPSILON) * 100) / 100;
+      database.prepare('UPDATE ecovis_payments SET exchange_rate_to_mxn = ?, amount_mxn = ? WHERE id = ?').run(rate, amountMxn, p.id);
+    }
+
+    const allocations = database.prepare('SELECT a.id, a.amount, a.exchange_rate_to_mxn, p.currency FROM ecovis_payment_allocations a JOIN ecovis_payments p ON p.id = a.payment_id WHERE a.amount_mxn IS NULL').all();
+    for (const a of allocations) {
+      const cur = a.currency || 'MXN';
+      const rate = a.exchange_rate_to_mxn && a.exchange_rate_to_mxn !== 1 ? a.exchange_rate_to_mxn : (rates[cur] || 1);
+      const amountMxn = Math.round((Number(a.amount) * rate + Number.EPSILON) * 100) / 100;
+      database.prepare('UPDATE ecovis_payment_allocations SET currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ? WHERE id = ?').run(cur, rate, amountMxn, a.id);
+    }
+
+    const pos = database.prepare('SELECT id, total_amount, currency, exchange_rate_to_mxn FROM ecovis_purchase_orders WHERE amount_mxn IS NULL').all();
+    for (const po of pos) {
+      const cur = po.currency || 'MXN';
+      const rate = po.exchange_rate_to_mxn && po.exchange_rate_to_mxn !== 1 ? po.exchange_rate_to_mxn : (rates[cur] || 1);
+      const amountMxn = Math.round((Number(po.total_amount) * rate + Number.EPSILON) * 100) / 100;
+      database.prepare('UPDATE ecovis_purchase_orders SET exchange_rate_to_mxn = ?, amount_mxn = ?, pending_amount_mxn = amount_mxn - paid_amount_mxn WHERE id = ?').run(rate, amountMxn, po.id);
+    }
+
+    const movements = database.prepare('SELECT id, amount, currency, exchange_rate_to_mxn FROM ecovis_movements WHERE amount_mxn IS NULL').all();
+    for (const m of movements) {
+      const cur = m.currency || 'MXN';
+      const rate = m.exchange_rate_to_mxn && m.exchange_rate_to_mxn !== 1 ? m.exchange_rate_to_mxn : (rates[cur] || 1);
+      const amountMxn = Math.round((Number(m.amount) * rate + Number.EPSILON) * 100) / 100;
+      database.prepare('UPDATE ecovis_movements SET exchange_rate_to_mxn = ?, amount_mxn = ? WHERE id = ?').run(rate, amountMxn, m.id);
+    }
+
+    // Recalculate paid/pending amounts for projects using MXN values
+    const allProjects = database.prepare('SELECT id, amount_mxn FROM ecovis_projects WHERE is_cancelled = 0').all();
+    for (const p of allProjects) {
+      const paidMxn = database.prepare(
+        'SELECT COALESCE(SUM(amount_mxn), 0) as total FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND allocation_type = \'proyecto\' AND is_cancelled = 0',
+      ).get(p.id).total;
+      const pendingMxn = Math.round(((p.amount_mxn || 0) - paidMxn + Number.EPSILON) * 100) / 100;
+      const fullyPaid = pendingMxn <= 0.01 && paidMxn > 0 ? database.prepare(
+        'SELECT MAX(created_at) as last_alloc FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND allocation_type = \'proyecto\' AND is_cancelled = 0',
+      ).get(p.id).last_alloc : null;
+      database.prepare('UPDATE ecovis_projects SET paid_amount_mxn = ?, pending_amount_mxn = ?, fully_paid_at = ? WHERE id = ?').run(
+        Math.round((paidMxn + Number.EPSILON) * 100) / 100, Math.max(0, pendingMxn), fullyPaid, p.id,
+      );
+    }
+
+    // Recalculate paid/pending amounts for purchase orders
+    const allPOs = database.prepare('SELECT id, amount_mxn FROM ecovis_purchase_orders WHERE is_cancelled = 0').all();
+    for (const po of allPOs) {
+      const paidMxn = database.prepare(
+        'SELECT COALESCE(SUM(amount_mxn), 0) as total FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND allocation_type = \'orden_compra\' AND is_cancelled = 0',
+      ).get(po.id).total;
+      const pendingMxn = Math.round(((po.amount_mxn || 0) - paidMxn + Number.EPSILON) * 100) / 100;
+      const fullyPaid = pendingMxn <= 0.01 && paidMxn > 0 ? database.prepare(
+        'SELECT MAX(created_at) as last_alloc FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND allocation_type = \'orden_compra\' AND is_cancelled = 0',
+      ).get(po.id).last_alloc : null;
+      database.prepare('UPDATE ecovis_purchase_orders SET paid_amount_mxn = ?, pending_amount_mxn = ?, fully_paid_at = ? WHERE id = ?').run(
+        Math.round((paidMxn + Number.EPSILON) * 100) / 100, Math.max(0, pendingMxn), fullyPaid, po.id,
+      );
+    }
+  });
+
+  migrateAll();
 }
 
 module.exports = {

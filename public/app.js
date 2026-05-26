@@ -453,9 +453,10 @@ const ecovisProjectColumns = [
   { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true, render: (p) => escapeHtml(p.quote_number || '') },
   { key: 'purchase_order_number', label: 'OC', type: 'text', sortable: true, render: (p) => escapeHtml(p.purchase_order_number || '') },
   { key: 'invoice_number', label: 'Factura', type: 'text', sortable: true, render: (p) => escapeHtml(p.invoice_number || '') },
-  { key: 'total_amount', label: 'Monto total', type: 'currency', sortable: true, render: (p) => money.format(Number(p.total_amount || 0)) },
-  { key: 'paid_amount', label: 'Pagado', type: 'currency', sortable: true, render: (p) => money.format(Number(p.paid_amount || 0)) },
-  { key: 'pending_amount', label: 'Pendiente', type: 'currency', sortable: true, render: (p) => money.format(Number(p.pending_amount || 0)) },
+  { key: 'total_amount', label: 'Monto original', type: 'currency', sortable: true, render: (p) => `${money.format(Number(p.total_amount || 0))} ${escapeHtml(p.currency || 'MXN')}` },
+  { key: 'amount_mxn', label: 'Equiv. MXN', type: 'currency', sortable: true, render: (p) => money.format(Number(p.amount_mxn || p.total_amount || 0)) },
+  { key: 'paid_amount_mxn', label: 'Pagado MXN', type: 'currency', sortable: true, render: (p) => money.format(Number(p.paid_amount_mxn || p.paid_amount || 0)) },
+  { key: 'pending_amount_mxn', label: 'Pendiente MXN', type: 'currency', sortable: true, render: (p) => money.format(Number(p.pending_amount_mxn || p.pending_amount || 0)) },
   { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterOptions: ecovisStatusOptions, render: (p) => `<span class="badge ecovis-status-${escapeHtml(p.status || 'pendiente')}">${escapeHtml(p.status || 'pendiente')}</span>` },
 ];
 
@@ -2419,7 +2420,7 @@ function showEcovisTab() {
 }
 
 function switchEcovisSubtab(name) {
-  const sections = ['projects', 'payments', 'loans', 'movements'];
+  const sections = ['projects', 'payments', 'loans', 'movements', 'history'];
   sections.forEach((s) => {
     const section = document.getElementById('ecovis-' + s + '-section');
     const btn = document.getElementById('ecovis-subtab-' + s);
@@ -2444,13 +2445,19 @@ document.getElementById('ecovis-subtab-movements').addEventListener('click', () 
   switchEcovisSubtab('movements');
   loadEcovisMovements();
 });
+if (document.getElementById('ecovis-subtab-history')) {
+  document.getElementById('ecovis-subtab-history').addEventListener('click', () => {
+    switchEcovisSubtab('history');
+    loadEcovisHistoryYears();
+  });
+}
 
 async function loadEcovisSummary() {
   try {
     const summary = await api('/api/ecovis/summary');
-    document.getElementById('ecovis-stat-projects').textContent = money.format(summary.total_projected || 0);
-    document.getElementById('ecovis-stat-paid').textContent = money.format(summary.total_paid_to_projects || 0);
-    document.getElementById('ecovis-stat-pending').textContent = money.format(summary.pending_project_amount || 0);
+    document.getElementById('ecovis-stat-projects').textContent = money.format(summary.active_projects_total_mxn || summary.total_projected || 0);
+    document.getElementById('ecovis-stat-paid').textContent = money.format(summary.active_projects_paid_mxn || summary.total_paid_to_projects || 0);
+    document.getElementById('ecovis-stat-pending').textContent = money.format(summary.active_projects_pending_mxn || summary.pending_project_amount || 0);
     document.getElementById('ecovis-stat-loans').textContent = money.format(summary.outstanding_loans || 0);
     document.getElementById('ecovis-stat-credit').textContent = money.format(summary.credit_balance || 0);
     const unallocated = (summary.total_payments_received || 0) - (summary.total_allocated || 0);
@@ -2467,6 +2474,7 @@ async function loadEcovisProjects() {
     page: state.ecovisProjectsPag.page,
     limit: state.ecovisProjectsPag.limit,
     search: state.ecovisProjectsSearch,
+    exclude_paid: '1',
     ...buildTableParams('ecovisProjects'),
   });
   const result = await api('/api/ecovis/projects?' + params);
@@ -2579,6 +2587,86 @@ function renderEcovisMovements(movements, pagination) {
     onRefresh: loadEcovisMovements,
     pageState: state.ecovisMovementsPag,
   });
+}
+
+// --- ECOVIS History ---
+
+async function loadEcovisHistoryYears() {
+  try {
+    const years = await api('/api/ecovis/projects/history/years');
+    const sel = document.getElementById('ecovis-history-year');
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">-- Selecciona un año --</option>';
+    (years || []).forEach((y) => {
+      const opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = y;
+      if (String(y) === current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    console.error('Error loading history years', e);
+  }
+}
+
+async function loadEcovisHistory() {
+  const yearSel = document.getElementById('ecovis-history-year');
+  const monthSel = document.getElementById('ecovis-history-month');
+  const container = document.getElementById('ecovis-history-results');
+  if (!yearSel || !container) return;
+
+  const year = yearSel.value;
+  if (!year) {
+    container.innerHTML = '<p class="empty-message">Selecciona un año para consultar el historial.</p>';
+    return;
+  }
+
+  const params = new URLSearchParams({ year });
+  const month = monthSel ? monthSel.value : '';
+  if (month) params.set('month', month);
+
+  try {
+    const result = await api('/api/ecovis/projects/history?' + params);
+    const { data, summary } = result;
+
+    let html = '<div class="ecovis-cards">';
+    html += '<div class="ecovis-card"><div class="ecovis-card-label">Total Proyectos MXN</div><div class="ecovis-card-value">' + money.format(summary.total_projects_mxn || 0) + '</div></div>';
+    html += '<div class="ecovis-card"><div class="ecovis-card-label">Total Cobrado MXN</div><div class="ecovis-card-value">' + money.format(summary.total_paid_mxn || 0) + '</div></div>';
+    html += '<div class="ecovis-card"><div class="ecovis-card-label">Pendiente MXN</div><div class="ecovis-card-value">' + money.format(summary.total_pending_mxn || 0) + '</div></div>';
+    html += '<div class="ecovis-card"><div class="ecovis-card-label">Proyectos Pagados</div><div class="ecovis-card-value">' + (summary.project_count || 0) + '</div></div>';
+    html += '</div>';
+
+    if (!data || data.length === 0) {
+      html += '<p class="empty-message">No se encontraron proyectos pagados para el periodo seleccionado.</p>';
+    } else {
+      html += '<table class="data-table"><thead><tr>';
+      html += '<th>Fecha pagado</th><th>Proyecto</th><th>Cotización</th><th>Monto original</th><th>Equiv. MXN</th><th>Pagado MXN</th><th>Estatus</th>';
+      html += '</tr></thead><tbody>';
+      data.forEach((p) => {
+        const paidAt = p.fully_paid_at ? new Date(p.fully_paid_at).toLocaleDateString('es-MX') : '-';
+        html += '<tr>';
+        html += '<td>' + escapeHtml(paidAt) + '</td>';
+        html += '<td>' + escapeHtml(p.project_name || '') + '</td>';
+        html += '<td>' + escapeHtml(p.quote_number || '') + '</td>';
+        html += '<td>' + money.format(Number(p.total_amount || 0)) + ' ' + escapeHtml(p.currency || 'MXN') + '</td>';
+        html += '<td>' + money.format(Number(p.amount_mxn || p.total_amount || 0)) + '</td>';
+        html += '<td>' + money.format(Number(p.paid_amount_mxn || 0)) + '</td>';
+        html += '<td><span class="badge ecovis-status-pagado">pagado</span></td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<p class="empty-message">Error al cargar historial.</p>';
+    console.error('Error loading history', e);
+  }
+}
+
+if (document.getElementById('ecovis-history-search-btn')) {
+  document.getElementById('ecovis-history-search-btn').addEventListener('click', loadEcovisHistory);
 }
 
 ecovisTab.addEventListener('click', async () => {
