@@ -15,7 +15,7 @@ const {
   addSqlFilters,
   buildListResponse,
 } = require('./pagination');
-const { calculateEcovisAccountSummary, calculateProjectPaidAmount, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance } = require('./ecovis');
+const { calculateEcovisAccountSummary, calculateProjectPaidAmountMXN, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance, convertToMXN, roundMoney: roundMoneyEcovis, calculateEcovisProjectPaymentStatus } = require('./ecovis');
 const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { formatDateTimeCDMX } = require('./dateHelper');
 const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES } = require('./permissions');
@@ -2558,10 +2558,10 @@ function recalculateProjectStatus(projectId) {
   const allocations = db.prepare(
     'SELECT * FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND is_cancelled = 0',
   ).all(projectId);
-  const paidAmount = calculateProjectPaidAmount(allocations);
-  const status = calculateProjectStatus(project, paidAmount);
-  db.prepare('UPDATE ecovis_projects SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-    .run(status, projectId);
+  const result = calculateEcovisProjectPaymentStatus(project, allocations);
+  const fullyPaidAt = result.is_fully_paid ? (project.fully_paid_at || nowUtc()) : null;
+  db.prepare('UPDATE ecovis_projects SET status = ?, paid_amount_mxn = ?, pending_amount_mxn = ?, fully_paid_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(result.status, result.paid_amount_mxn, result.pending_amount_mxn, fullyPaidAt, projectId);
 }
 
 function recalculatePaymentUnallocated(paymentId) {
@@ -2573,6 +2573,28 @@ function recalculatePaymentUnallocated(paymentId) {
   const unallocated = calculatePaymentUnallocated(payment, allocations);
   db.prepare('UPDATE ecovis_payments SET unallocated_amount = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(unallocated, paymentId);
+}
+
+function recalculatePurchaseOrderStatus(poId) {
+  const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(poId);
+  if (!po) return;
+  const allocations = db.prepare(
+    'SELECT * FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND allocation_type = \'orden_compra\' AND is_cancelled = 0',
+  ).all(poId);
+  const totalMxn = Number(po.amount_mxn || po.total_amount || 0);
+  const paidMxn = roundMoneyEcovis(allocations.reduce((sum, a) => sum + Number(a.amount_mxn || a.amount || 0), 0));
+  const pendingMxn = roundMoneyEcovis(Math.max(0, totalMxn - paidMxn));
+  let status = 'pendiente';
+  if (po.is_cancelled) {
+    status = 'cancelada';
+  } else if (paidMxn >= totalMxn - 0.01 && paidMxn > 0) {
+    status = 'pagada';
+  } else if (paidMxn > 0) {
+    status = 'parcialmente_pagada';
+  }
+  const fullyPaidAt = status === 'pagada' ? (po.fully_paid_at || nowUtc()) : null;
+  db.prepare('UPDATE ecovis_purchase_orders SET status = ?, paid_amount_mxn = ?, pending_amount_mxn = ?, fully_paid_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(status, paidMxn, pendingMxn, fullyPaidAt, poId);
 }
 
 app.get('/api/ecovis/summary', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
@@ -2587,7 +2609,11 @@ app.get('/api/ecovis/summary', requireAuth, requirePermission('ecovisAccount', '
 app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const paidSql = `(SELECT COALESCE(SUM(a.amount), 0) FROM ecovis_payment_allocations a WHERE a.ecovis_project_id = ep.id AND a.is_cancelled = 0)`;
-  const pendingSql = `(ep.total_amount - ${paidSql})`;
+  const paidMxnSql = `(SELECT COALESCE(SUM(a.amount_mxn), 0) FROM ecovis_payment_allocations a WHERE a.ecovis_project_id = ep.id AND a.allocation_type = 'proyecto' AND a.is_cancelled = 0)`;
+  const pendingMxnSql = `(COALESCE(ep.amount_mxn, ep.total_amount) - ${paidMxnSql})`;
+
+  const excludePaid = req.query.exclude_paid === '1' || req.query.exclude_paid === 'true';
+
   const sorting = normalizeSort(req.query, {
     id: 'ep.id',
     project_date: 'ep.project_date',
@@ -2597,8 +2623,11 @@ app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 
     purchase_order_number: 'ep.purchase_order_number',
     invoice_number: 'ep.invoice_number',
     total_amount: 'ep.total_amount',
+    amount_mxn: 'ep.amount_mxn',
     paid_amount: paidSql,
-    pending_amount: pendingSql,
+    paid_amount_mxn: paidMxnSql,
+    pending_amount: `(ep.total_amount - ${paidSql})`,
+    pending_amount_mxn: pendingMxnSql,
     status: 'ep.status',
   }, 'ep.project_date DESC, ep.id DESC');
   const { whereClause, params, filters } = buildWhere({
@@ -2613,7 +2642,7 @@ app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 
       invoice_number: { type: 'text', column: 'ep.invoice_number' },
       total_amount: { type: 'currency', column: 'ep.total_amount' },
       paid_amount: { type: 'currency', column: paidSql },
-      pending_amount: { type: 'currency', column: pendingSql },
+      pending_amount: { type: 'currency', column: `(ep.total_amount - ${paidSql})` },
       status: { type: 'select', column: 'ep.status', options: VALID_ECOVIS_STATUSES },
     },
     search: {
@@ -2622,20 +2651,28 @@ app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 
     },
   });
 
-  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM ecovis_projects ep WHERE ${whereClause}`).get(...params).count;
+  let extraWhere = '';
+  if (excludePaid) {
+    extraWhere = " AND ep.status != 'pagado' AND ep.is_cancelled = 0";
+  }
+
+  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM ecovis_projects ep WHERE ${whereClause}${extraWhere}`).get(...params).count;
   const pag = buildPaginationMeta(page, limit, totalRecords);
 
   const projects = db.prepare(
-    `SELECT ep.* FROM ecovis_projects ep WHERE ${whereClause} ORDER BY ${sorting.orderBy} LIMIT ? OFFSET ?`,
+    `SELECT ep.* FROM ecovis_projects ep WHERE ${whereClause}${extraWhere} ORDER BY ${sorting.orderBy} LIMIT ? OFFSET ?`,
   ).all(...params, pag.limit, pag.offset);
 
   const data = projects.map((project) => {
     const allocations = db.prepare(
       'SELECT * FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND is_cancelled = 0',
     ).all(project.id);
-    const paid_amount = calculateProjectPaidAmount(allocations);
+    const paid_amount = roundMoneyEcovis(allocations.filter((a) => a.allocation_type === 'proyecto').reduce((sum, a) => sum + Number(a.amount || 0), 0));
+    const paid_amount_mxn = roundMoneyEcovis(allocations.filter((a) => a.allocation_type === 'proyecto').reduce((sum, a) => sum + Number(a.amount_mxn || a.amount || 0), 0));
+    const amount_mxn = Number(project.amount_mxn || project.total_amount || 0);
     const pending_amount = Math.max(0, Number(project.total_amount) - paid_amount);
-    return { ...project, paid_amount, pending_amount };
+    const pending_amount_mxn = roundMoneyEcovis(Math.max(0, amount_mxn - paid_amount_mxn));
+    return { ...project, paid_amount, pending_amount, amount_mxn, paid_amount_mxn, pending_amount_mxn };
   });
 
   res.json(buildListResponse(data, pag, sorting, filters));
@@ -2655,32 +2692,36 @@ app.post('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount',
 
     const ecovisPurchaseOrderId = req.body.ecovis_purchase_order_id || null;
 
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
+
     const audit = createdByFields(req);
     const createProject = db.transaction(() => {
       const result = db.prepare(
         `INSERT INTO ecovis_projects (
-          project_name, project_date, total_amount, currency,
+          project_name, project_date, total_amount, currency, exchange_rate_to_mxn, amount_mxn, pending_amount_mxn,
           quote_number, purchase_order_number, invoice_number,
           description, notes, status, created_by, created_by_user_id, created_at, updated_at, ecovis_purchase_order_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?)`,
       ).run(
-        projectName, projectDate, totalAmount, currency,
+        projectName, projectDate, totalAmount, currency, exchangeRate, amountMxn, amountMxn,
         quoteNumber, purchaseOrderNumber, invoiceNumber,
         description, notes, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at, ecovisPurchaseOrderId,
       );
 
       db.prepare(
         `INSERT INTO ecovis_movements (
-          movement_type, movement_date, amount, currency, direction,
+          movement_type, movement_date, amount, currency, exchange_rate_to_mxn, amount_mxn, direction,
           description, related_project_id, created_by, created_by_user_id, created_at, updated_at
-        ) VALUES ('proyecto', ?, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?, ?, ?)`,
-      ).run(projectDate, totalAmount, currency, projectName, result.lastInsertRowid, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
+        ) VALUES ('proyecto', ?, ?, ?, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?, ?, ?)`,
+      ).run(projectDate, totalAmount, currency, exchangeRate, amountMxn, projectName, result.lastInsertRowid, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
 
       return result.lastInsertRowid;
     });
 
     const projectId = createProject();
-    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_project', entityId: projectId, entityLabel: projectName });
+    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_project', entityId: projectId, entityLabel: projectName, metadata: { currency, exchange_rate_to_mxn: exchangeRate, amount_mxn: amountMxn } });
     res.status(201).json(getEcovisProjectOrFail(projectId));
   } catch (error) {
     next(error);
@@ -2704,21 +2745,27 @@ app.put('/api/ecovis/projects/:id', requireAuth, requirePermission('ecovisAccoun
     const description = optionalText(req.body, 'description');
     const notes = optionalText(req.body, 'notes');
 
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
+
     const audit = updatedByFields(req);
     db.prepare(
       `UPDATE ecovis_projects SET
         project_name = ?, project_date = ?, total_amount = ?, currency = ?,
+        exchange_rate_to_mxn = ?, amount_mxn = ?,
         quote_number = ?, purchase_order_number = ?, invoice_number = ?,
         description = ?, notes = ?, updated_at = ?, updated_by = ?, updated_by_user_id = ?
       WHERE id = ?`,
     ).run(
       projectName, projectDate, totalAmount, currency,
+      exchangeRate, amountMxn,
       quoteNumber, purchaseOrderNumber, invoiceNumber,
       description, notes, audit.updated_at, audit.updated_by_name, audit.updated_by_user_id, req.params.id,
     );
 
     recalculateProjectStatus(req.params.id);
-    logAuditEvent(db, { req, action: 'update', module: 'ecovis', entityType: 'ecovis_project', entityId: Number(req.params.id), entityLabel: projectName, before: project });
+    logAuditEvent(db, { req, action: 'update', module: 'ecovis', entityType: 'ecovis_project', entityId: Number(req.params.id), entityLabel: projectName, before: project, metadata: { currency, exchange_rate_to_mxn: exchangeRate, amount_mxn: amountMxn } });
     res.json(getEcovisProjectOrFail(req.params.id));
   } catch (error) {
     next(error);
@@ -2833,28 +2880,32 @@ app.post('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount',
     const sourceDescription = optionalText(req.body, 'source_description');
     const notes = optionalText(req.body, 'notes');
 
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyEcovis(amount * exchangeRate);
+
     const audit = createdByFields(req);
     const createPayment = db.transaction(() => {
       const result = db.prepare(
         `INSERT INTO ecovis_payments (
-          payment_date, amount, currency, payment_method,
+          payment_date, amount, currency, exchange_rate_to_mxn, amount_mxn, payment_method,
           bank_reference, source_description, notes,
           unallocated_amount, created_by, created_by_user_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(paymentDate, amount, currency, paymentMethod, bankReference, sourceDescription, notes, amount, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(paymentDate, amount, currency, exchangeRate, amountMxn, paymentMethod, bankReference, sourceDescription, notes, amount, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
 
       db.prepare(
         `INSERT INTO ecovis_movements (
-          movement_type, movement_date, amount, currency, direction,
+          movement_type, movement_date, amount, currency, exchange_rate_to_mxn, amount_mxn, direction,
           description, related_payment_id, created_by, created_by_user_id, created_at, updated_at
-        ) VALUES ('pago_recibido', ?, ?, ?, 'neutral', ?, ?, ?, ?, ?, ?)`,
-      ).run(paymentDate, amount, currency, sourceDescription || 'Pago recibido', result.lastInsertRowid, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
+        ) VALUES ('pago_recibido', ?, ?, ?, ?, ?, 'neutral', ?, ?, ?, ?, ?, ?)`,
+      ).run(paymentDate, amount, currency, exchangeRate, amountMxn, sourceDescription || 'Pago recibido', result.lastInsertRowid, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
 
       return result.lastInsertRowid;
     });
 
     const paymentId = createPayment();
-    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_payment', entityId: paymentId, entityLabel: `Pago ${amount} ${currency}` });
+    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_payment', entityId: paymentId, entityLabel: `Pago ${amount} ${currency}`, metadata: { currency, exchange_rate_to_mxn: exchangeRate, amount_mxn: amountMxn } });
     res.status(201).json(getEcovisPaymentOrFail(paymentId));
   } catch (error) {
     next(error);
@@ -2869,7 +2920,7 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
     }
 
     const allocationType = requiredText(req.body, 'allocation_type', 'Tipo de asignacion');
-    if (!['proyecto', 'saldo_a_favor', 'prestamo', 'ajuste'].includes(allocationType)) {
+    if (!['proyecto', 'orden_compra', 'saldo_a_favor', 'prestamo', 'ajuste'].includes(allocationType)) {
       throw badRequest('Tipo de asignacion no valido.');
     }
 
@@ -2887,17 +2938,30 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
     }
 
     let ecovisProjectId = null;
+    let ecovisPurchaseOrderId = null;
     if (allocationType === 'proyecto') {
       if (!req.body.ecovis_project_id) {
         throw badRequest('El proyecto es obligatorio para asignaciones de tipo proyecto.');
       }
       ecovisProjectId = req.body.ecovis_project_id;
       getEcovisProjectOrFail(ecovisProjectId);
+    } else if (allocationType === 'orden_compra') {
+      if (!req.body.ecovis_purchase_order_id) {
+        throw badRequest('La orden de compra es obligatoria para asignaciones de tipo orden_compra.');
+      }
+      ecovisPurchaseOrderId = req.body.ecovis_purchase_order_id;
     }
+
+    const allocationCurrency = payment.currency || 'MXN';
+    const allocationRate = Number(payment.exchange_rate_to_mxn || 1);
+    const allocationAmountMxn = roundMoneyEcovis(amount * allocationRate);
 
     let movementType;
     let direction;
     if (allocationType === 'proyecto') {
+      movementType = 'aplicacion_a_proyecto';
+      direction = 'ecovis_debe_a_revram';
+    } else if (allocationType === 'orden_compra') {
       movementType = 'aplicacion_a_proyecto';
       direction = 'ecovis_debe_a_revram';
     } else if (allocationType === 'saldo_a_favor') {
@@ -2914,17 +2978,17 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
     const createAllocation = db.transaction(() => {
       const result = db.prepare(
         `INSERT INTO ecovis_payment_allocations (
-          payment_id, ecovis_project_id, allocation_type, amount, notes, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(payment.id, ecovisProjectId, allocationType, amount, notes, req.session.username);
+          payment_id, ecovis_project_id, ecovis_purchase_order_id, allocation_type, amount, currency, exchange_rate_to_mxn, amount_mxn, notes, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(payment.id, ecovisProjectId, ecovisPurchaseOrderId, allocationType, amount, allocationCurrency, allocationRate, allocationAmountMxn, notes, req.session.username);
 
       db.prepare(
         `INSERT INTO ecovis_movements (
-          movement_type, movement_date, amount, currency, direction,
+          movement_type, movement_date, amount, currency, exchange_rate_to_mxn, amount_mxn, direction,
           description, related_payment_id, related_project_id, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
-        movementType, payment.payment_date, amount, payment.currency, direction,
+        movementType, payment.payment_date, amount, allocationCurrency, allocationRate, allocationAmountMxn, direction,
         notes || allocationType, payment.id, ecovisProjectId, req.session.username,
       );
 
@@ -2932,6 +2996,9 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
 
       if (allocationType === 'proyecto' && ecovisProjectId) {
         recalculateProjectStatus(ecovisProjectId);
+      }
+      if (allocationType === 'orden_compra' && ecovisPurchaseOrderId) {
+        recalculatePurchaseOrderStatus(ecovisPurchaseOrderId);
       }
 
       return result.lastInsertRowid;
@@ -3010,12 +3077,16 @@ app.post('/api/ecovis/loans', requireAuth, requirePermission('ecovisAccount', 'c
     const description = optionalText(req.body, 'description') || 'Prestamo ECOVIS a RevRam';
     const notes = optionalText(req.body, 'notes');
 
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyEcovis(amount * exchangeRate);
+
     const result = db.prepare(
       `INSERT INTO ecovis_movements (
-        movement_type, movement_date, amount, currency, direction,
+        movement_type, movement_date, amount, currency, exchange_rate_to_mxn, amount_mxn, direction,
         description, reference, notes, created_by
-      ) VALUES ('prestamo_ecovis_a_revram', ?, ?, ?, 'revram_debe_a_ecovis', ?, ?, ?, ?)`,
-    ).run(movementDate, amount, currency, description, reference, notes, req.session.username);
+      ) VALUES ('prestamo_ecovis_a_revram', ?, ?, ?, ?, ?, 'revram_debe_a_ecovis', ?, ?, ?, ?)`,
+    ).run(movementDate, amount, currency, exchangeRate, amountMxn, description, reference, notes, req.session.username);
 
     const movement = db.prepare('SELECT * FROM ecovis_movements WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(movement);
@@ -3040,12 +3111,16 @@ app.post('/api/ecovis/loans/:id/repayment', requireAuth, requirePermission('ecov
     const reference = optionalText(req.body, 'reference');
     const notes = optionalText(req.body, 'notes');
 
+    const loanCurrency = loan.currency || 'MXN';
+    const loanRate = Number(loan.exchange_rate_to_mxn || 1);
+    const repaymentAmountMxn = roundMoneyEcovis(amount * loanRate);
+
     const result = db.prepare(
       `INSERT INTO ecovis_movements (
-        movement_type, movement_date, amount, currency, direction,
+        movement_type, movement_date, amount, currency, exchange_rate_to_mxn, amount_mxn, direction,
         description, reference, notes, created_by
-      ) VALUES ('devolucion', ?, ?, ?, 'neutral', ?, ?, ?, ?)`,
-    ).run(movementDate, amount, loan.currency, `Devolucion de prestamo #${loan.id}`, String(loan.id), notes, req.session.username);
+      ) VALUES ('devolucion', ?, ?, ?, ?, ?, 'neutral', ?, ?, ?, ?)`,
+    ).run(movementDate, amount, loanCurrency, loanRate, repaymentAmountMxn, `Devolucion de prestamo #${loan.id}`, String(loan.id), notes, req.session.username);
 
     const movement = db.prepare('SELECT * FROM ecovis_movements WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(movement);
@@ -3124,10 +3199,10 @@ app.post('/api/ecovis/adjustments', requireAuth, requirePermission('ecovisAccoun
 
     const result = db.prepare(
       `INSERT INTO ecovis_movements (
-        movement_type, movement_date, amount, currency, direction,
+        movement_type, movement_date, amount, currency, exchange_rate_to_mxn, amount_mxn, direction,
         description, reference, notes, created_by
-      ) VALUES ('ajuste', ?, ?, 'MXN', ?, ?, ?, ?, ?)`,
-    ).run(movementDate, amount, direction, description, reference, notes, req.session.username);
+      ) VALUES ('ajuste', ?, ?, 'MXN', 1, ?, ?, ?, ?, ?, ?)`,
+    ).run(movementDate, amount, amount, direction, description, reference, notes, req.session.username);
 
     const movement = db.prepare('SELECT * FROM ecovis_movements WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(movement);
@@ -3162,12 +3237,16 @@ app.post('/api/ecovis/apply-credit', requireAuth, requirePermission('ecovisAccou
     }
 
     const applyCredit = db.transaction(() => {
+      const creditCurrency = project.currency || 'MXN';
+      const creditRate = Number(project.exchange_rate_to_mxn || 1);
+      const creditAmountMxn = roundMoneyEcovis(amount * creditRate);
+
       const result = db.prepare(
         `INSERT INTO ecovis_movements (
-          movement_type, movement_date, amount, currency, direction,
+          movement_type, movement_date, amount, currency, exchange_rate_to_mxn, amount_mxn, direction,
           description, related_project_id, notes, created_by
-        ) VALUES ('saldo_a_favor', ?, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?)`,
-      ).run(movementDate, amount, project.currency, `Aplicacion de saldo a favor a ${project.project_name}`, ecovisProjectId, notes, req.session.username);
+        ) VALUES ('saldo_a_favor', ?, ?, ?, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?)`,
+      ).run(movementDate, amount, creditCurrency, creditRate, creditAmountMxn, `Aplicacion de saldo a favor a ${project.project_name}`, ecovisProjectId, notes, req.session.username);
 
       recalculateProjectStatus(ecovisProjectId);
       return result.lastInsertRowid;
@@ -3179,6 +3258,88 @@ app.post('/api/ecovis/apply-credit', requireAuth, requirePermission('ecovisAccou
   } catch (error) {
     next(error);
   }
+});
+
+// ===================== ECOVIS HISTORY =====================
+
+app.get('/api/ecovis/projects/history/years', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
+  const years = db.prepare(
+    `SELECT DISTINCT CAST(strftime('%Y', fully_paid_at) AS INTEGER) as year
+     FROM ecovis_projects
+     WHERE status = 'pagado' AND fully_paid_at IS NOT NULL AND is_cancelled = 0
+     ORDER BY year DESC`,
+  ).all().map((r) => r.year).filter((y) => y > 0);
+  res.json(years);
+});
+
+app.get('/api/ecovis/projects/history', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const year = req.query.year ? Number(req.query.year) : null;
+  const month = req.query.month ? Number(req.query.month) : null;
+
+  if (!year) {
+    return res.json({
+      data: [],
+      summary: { total_projects_mxn: 0, total_paid_mxn: 0, total_pending_mxn: 0, project_count: 0 },
+      pagination: buildPaginationMeta(1, limit, 0),
+    });
+  }
+
+  let dateFilter = "AND strftime('%Y', ep.fully_paid_at) = ?";
+  const dateParams = [String(year)];
+  if (month && month >= 1 && month <= 12) {
+    dateFilter += " AND CAST(strftime('%m', ep.fully_paid_at) AS INTEGER) = ?";
+    dateParams.push(month);
+  }
+
+  const baseWhere = `ep.status = 'pagado' AND ep.fully_paid_at IS NOT NULL AND ep.is_cancelled = 0 ${dateFilter}`;
+
+  let searchWhere = '';
+  const searchParams = [];
+  if (search) {
+    searchWhere = " AND (ep.project_name LIKE ? OR ep.quote_number LIKE ? OR ep.purchase_order_number LIKE ? OR ep.invoice_number LIKE ?)";
+    const term = `%${search}%`;
+    searchParams.push(term, term, term, term);
+  }
+
+  const allParams = [...dateParams, ...searchParams];
+
+  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM ecovis_projects ep WHERE ${baseWhere}${searchWhere}`).get(...allParams).count;
+  const pag = buildPaginationMeta(page, limit, totalRecords);
+
+  const projects = db.prepare(
+    `SELECT ep.* FROM ecovis_projects ep WHERE ${baseWhere}${searchWhere} ORDER BY ep.fully_paid_at DESC, ep.id DESC LIMIT ? OFFSET ?`,
+  ).all(...allParams, pag.limit, pag.offset);
+
+  const data = projects.map((project) => {
+    const allocations = db.prepare(
+      'SELECT * FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND allocation_type = \'proyecto\' AND is_cancelled = 0',
+    ).all(project.id);
+    const paid_amount_mxn = roundMoneyEcovis(allocations.reduce((sum, a) => sum + Number(a.amount_mxn || a.amount || 0), 0));
+    const amount_mxn = Number(project.amount_mxn || project.total_amount || 0);
+    const pending_amount_mxn = roundMoneyEcovis(Math.max(0, amount_mxn - paid_amount_mxn));
+    return { ...project, amount_mxn, paid_amount_mxn, pending_amount_mxn };
+  });
+
+  const summaryRow = db.prepare(
+    `SELECT
+      COALESCE(SUM(ep.amount_mxn), 0) as total_projects_mxn,
+      COALESCE(SUM(ep.paid_amount_mxn), 0) as total_paid_mxn,
+      COALESCE(SUM(CASE WHEN ep.pending_amount_mxn > 0 THEN ep.pending_amount_mxn ELSE 0 END), 0) as total_pending_mxn,
+      COUNT(*) as project_count
+    FROM ecovis_projects ep WHERE ${baseWhere}${searchWhere}`,
+  ).get(...allParams);
+
+  res.json({
+    data,
+    summary: {
+      total_projects_mxn: roundMoneyEcovis(summaryRow.total_projects_mxn),
+      total_paid_mxn: roundMoneyEcovis(summaryRow.total_paid_mxn),
+      total_pending_mxn: roundMoneyEcovis(summaryRow.total_pending_mxn),
+      project_count: summaryRow.project_count,
+    },
+    pagination: pag,
+  });
 });
 
 // ===================== ECOVIS PURCHASE ORDERS =====================
@@ -3250,15 +3411,19 @@ app.post('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAc
     const notes = optionalText(req.body, 'notes');
     const audit = createdByFields(req);
 
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
+
     const existing = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0').get(purchaseOrderNumber);
     if (existing) throw badRequest('Ya existe una OC activa con ese numero.');
 
     const result = db.prepare(
-      `INSERT INTO ecovis_purchase_orders (purchase_order_number, project_name, order_date, total_amount, currency, notes, created_by, created_by_user_id, created_by_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, notes, req.session.username, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+      `INSERT INTO ecovis_purchase_orders (purchase_order_number, project_name, order_date, total_amount, currency, exchange_rate_to_mxn, amount_mxn, pending_amount_mxn, notes, created_by, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, exchangeRate, amountMxn, amountMxn, notes, req.session.username, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
 
-    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: result.lastInsertRowid, entityLabel: purchaseOrderNumber });
+    logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: result.lastInsertRowid, entityLabel: purchaseOrderNumber, metadata: { currency, exchange_rate_to_mxn: exchangeRate, amount_mxn: amountMxn } });
     const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(po);
   } catch (error) {
@@ -3280,13 +3445,18 @@ app.put('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovi
     const notes = optionalText(req.body, 'notes');
     const audit = updatedByFields(req);
 
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
+
     const dup = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0 AND id != ?').get(purchaseOrderNumber, req.params.id);
     if (dup) throw badRequest('Ya existe otra OC activa con ese numero.');
 
     db.prepare(
-      `UPDATE ecovis_purchase_orders SET purchase_order_number = ?, project_name = ?, order_date = ?, total_amount = ?, currency = ?, notes = ?, updated_by = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`,
-    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, notes, req.session.username, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
+      `UPDATE ecovis_purchase_orders SET purchase_order_number = ?, project_name = ?, order_date = ?, total_amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, notes = ?, updated_by = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`,
+    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, exchangeRate, amountMxn, notes, req.session.username, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
 
+    recalculatePurchaseOrderStatus(Number(req.params.id));
     logAuditEvent(db, { req, action: 'update', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: Number(req.params.id), entityLabel: purchaseOrderNumber, before: po });
     res.json(db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id));
   } catch (error) {
