@@ -563,6 +563,195 @@ function migrate(database) {
     );
   `);
 
+  // Financial Statements module tables
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS financial_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      estimated_isr_rate REAL NOT NULL DEFAULT 0.10,
+      ivan_commission_rate REAL NOT NULL DEFAULT 0.10,
+      project_income_recognition TEXT NOT NULL DEFAULT 'project_created_date',
+      accounts_payable_recognition TEXT NOT NULL DEFAULT 'invoice_date',
+      base_currency TEXT NOT NULL DEFAULT 'MXN',
+      include_vat_in_sales INTEGER NOT NULL DEFAULT 0,
+      include_pending_accounts_payable INTEGER NOT NULL DEFAULT 1,
+      include_classified_bank_movements INTEGER NOT NULL DEFAULT 1,
+      include_manual_payroll INTEGER NOT NULL DEFAULT 1,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    INSERT OR IGNORE INTO financial_settings (id) VALUES (1);
+
+    CREATE TABLE IF NOT EXISTS financial_statements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      status TEXT NOT NULL DEFAULT 'borrador' CHECK (status IN ('borrador', 'cerrado', 'cancelado')),
+      revenue_net_mxn REAL NOT NULL DEFAULT 0,
+      cost_of_sales_mxn REAL NOT NULL DEFAULT 0,
+      gross_profit_mxn REAL NOT NULL DEFAULT 0,
+      operating_expenses_mxn REAL NOT NULL DEFAULT 0,
+      net_administrative_profit_mxn REAL NOT NULL DEFAULT 0,
+      estimated_isr_mxn REAL NOT NULL DEFAULT 0,
+      profit_after_isr_mxn REAL NOT NULL DEFAULT 0,
+      ivan_commission_mxn REAL NOT NULL DEFAULT 0,
+      real_administrative_profit_mxn REAL NOT NULL DEFAULT 0,
+      accounts_receivable_mxn REAL NOT NULL DEFAULT 0,
+      accounts_payable_mxn REAL NOT NULL DEFAULT 0,
+      bank_initial_balance_mxn REAL NOT NULL DEFAULT 0,
+      bank_deposits_mxn REAL NOT NULL DEFAULT 0,
+      bank_withdrawals_mxn REAL NOT NULL DEFAULT 0,
+      bank_final_balance_mxn REAL NOT NULL DEFAULT 0,
+      unclassified_movements_count INTEGER NOT NULL DEFAULT 0,
+      configuration_snapshot_json TEXT,
+      data_snapshot_json TEXT,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      closed_by_user_id INTEGER,
+      closed_by_name TEXT,
+      closed_at TEXT,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_statements_unique
+      ON financial_statements (year, month)
+      WHERE status != 'cancelado' AND deleted_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS accounts_payable (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier_name TEXT NOT NULL,
+      invoice_number TEXT NOT NULL,
+      invoice_date TEXT NOT NULL,
+      due_date TEXT,
+      amount_original REAL NOT NULL CHECK (amount_original > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      amount_mxn REAL NOT NULL,
+      category TEXT NOT NULL DEFAULT 'Otros',
+      related_project_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'pagada', 'cancelada')),
+      paid_at TEXT,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS bank_statement_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bank_name TEXT NOT NULL,
+      account_number_masked TEXT,
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      initial_balance_original REAL NOT NULL DEFAULT 0,
+      deposits_original REAL NOT NULL DEFAULT 0,
+      withdrawals_original REAL NOT NULL DEFAULT 0,
+      commissions_original REAL NOT NULL DEFAULT 0,
+      commissions_vat_original REAL NOT NULL DEFAULT 0,
+      final_balance_original REAL NOT NULL DEFAULT 0,
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      initial_balance_mxn REAL NOT NULL DEFAULT 0,
+      deposits_mxn REAL NOT NULL DEFAULT 0,
+      withdrawals_mxn REAL NOT NULL DEFAULT 0,
+      commissions_mxn REAL NOT NULL DEFAULT 0,
+      commissions_vat_mxn REAL NOT NULL DEFAULT 0,
+      final_balance_mxn REAL NOT NULL DEFAULT 0,
+      source_file_name TEXT,
+      source_file_type TEXT,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS bank_statement_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bank_statement_summary_id INTEGER NOT NULL,
+      transaction_date TEXT NOT NULL,
+      description TEXT,
+      reference TEXT,
+      deposit_original REAL NOT NULL DEFAULT 0,
+      withdrawal_original REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      deposit_mxn REAL NOT NULL DEFAULT 0,
+      withdrawal_mxn REAL NOT NULL DEFAULT 0,
+      balance_original REAL,
+      balance_mxn REAL,
+      classification_status TEXT NOT NULL DEFAULT 'sin_clasificar' CHECK (classification_status IN ('sin_clasificar', 'clasificado', 'ignorado')),
+      classification_type TEXT,
+      related_project_id INTEGER,
+      related_account_payable_id INTEGER,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (bank_statement_summary_id) REFERENCES bank_statement_summaries(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS manual_payroll_expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      concept TEXT NOT NULL,
+      amount_original REAL NOT NULL CHECK (amount_original > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      amount_mxn REAL NOT NULL,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS financial_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('ingreso', 'costo_de_venta', 'gasto_operativo', 'impuesto', 'comision_ivan', 'banco', 'otro')),
+      concept TEXT NOT NULL,
+      amount_original REAL NOT NULL CHECK (amount_original > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      amount_mxn REAL NOT NULL,
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'activo' CHECK (status IN ('activo', 'cancelado')),
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
+    );
+  `);
+
   seedServiceTypes(database);
   seedServiceQuoteSettings(database);
 
