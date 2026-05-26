@@ -2944,7 +2944,10 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
         throw badRequest('El proyecto es obligatorio para asignaciones de tipo proyecto.');
       }
       ecovisProjectId = req.body.ecovis_project_id;
-      getEcovisProjectOrFail(ecovisProjectId);
+      const targetProject = getEcovisProjectOrFail(ecovisProjectId);
+      if (targetProject.is_cancelled) {
+        throw badRequest('No se puede asignar pago a un proyecto cancelado.');
+      }
     } else if (allocationType === 'orden_compra') {
       if (!req.body.ecovis_purchase_order_id) {
         throw badRequest('La orden de compra es obligatoria para asignaciones de tipo orden_compra.');
@@ -3519,16 +3522,7 @@ app.post('/api/ecovis/purchase-orders/:id/allocate', requireAuth, requirePermiss
   }
 });
 
-function recalculatePurchaseOrderStatus(poId) {
-  const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(poId);
-  if (!po || po.is_cancelled) return;
-  const allocs = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND is_cancelled = 0').all(poId);
-  const totalApplied = allocs.reduce((s, a) => s + Number(a.amount), 0);
-  let newStatus = 'pendiente';
-  if (totalApplied >= Number(po.total_amount)) newStatus = 'pagada';
-  else if (totalApplied > 0) newStatus = 'parcialmente_pagada';
-  db.prepare('UPDATE ecovis_purchase_orders SET status = ? WHERE id = ?').run(newStatus, poId);
-}
+// recalculatePurchaseOrderStatus defined earlier with MXN-aware logic
 
 // ===================== END ECOVIS MODULE =====================
 
