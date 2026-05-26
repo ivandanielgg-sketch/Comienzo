@@ -47,6 +47,7 @@
             <button id="attendance-tab" class="secondary hidden" type="button">Asistencias</button>
             <button id="ecovis-tab" class="secondary hidden" type="button">Cuenta ECOVIS</button>
             <button id="service-quoter-tab" class="secondary hidden" type="button">Cotizador</button>
+            <button id="financial-tab" class="secondary hidden" type="button">Estados Financieros</button>
             <button id="backup-create-btn" class="secondary hidden" type="button">Crear respaldo</button>
             <button id="backup-import-btn" class="secondary hidden" type="button">Importar respaldo</button>
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
@@ -1419,6 +1420,115 @@
                 <button id="sq-config-close-btn" class="secondary" type="button">Cerrar</button>
               </div>
               <p id="sq-config-message" class="message" style="margin-top:8px;"></p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Financial Statements View -->
+        <section id="financial-view" class="hidden">
+          <div class="ecovis-subtabs">
+            <button id="fin-subtab-statement" class="secondary active" type="button">Estado de Resultados</button>
+            <button id="fin-subtab-payable" class="secondary" type="button">Cuentas por Pagar</button>
+            <button id="fin-subtab-receivable" class="secondary" type="button">Cuentas por Cobrar</button>
+            <button id="fin-subtab-bank" class="secondary" type="button">Bancos</button>
+            <button id="fin-subtab-payroll" class="secondary" type="button">Nómina</button>
+            <button id="fin-subtab-adjustments" class="secondary" type="button">Ajustes</button>
+            <button id="fin-subtab-archive" class="secondary" type="button">Archivo</button>
+            <button id="fin-subtab-config" class="secondary" type="button">Configuración</button>
+          </div>
+
+          <div id="fin-statement-section">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Generar Estado Financiero Mensual</h2>
+              </div>
+              <div class="search-bar">
+                <select id="fin-stmt-year"></select>
+                <select id="fin-stmt-month">
+                  <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option>
+                  <option value="4">Abril</option><option value="5">Mayo</option><option value="6">Junio</option>
+                  <option value="7">Julio</option><option value="8">Agosto</option><option value="9">Septiembre</option>
+                  <option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
+                </select>
+                <button id="fin-generate-btn" type="button">Generar / Actualizar</button>
+              </div>
+              <div id="fin-statement-result"></div>
+            </div>
+          </div>
+
+          <div id="fin-payable-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Cuentas por Pagar</h2>
+                <button id="fin-new-ap-btn" type="button">Nueva cuenta por pagar</button>
+              </div>
+              <div id="fin-ap-list"></div>
+            </div>
+          </div>
+
+          <div id="fin-receivable-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header"><h2>Cuentas por Cobrar</h2></div>
+              <div id="fin-ar-list"></div>
+            </div>
+          </div>
+
+          <div id="fin-bank-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Bancos / Estado de Cuenta</h2>
+                <button id="fin-new-bank-btn" type="button">Agregar resumen bancario</button>
+              </div>
+              <div id="fin-bank-list"></div>
+            </div>
+          </div>
+
+          <div id="fin-payroll-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Nómina Manual</h2>
+                <button id="fin-new-payroll-btn" type="button">Agregar nómina</button>
+              </div>
+              <div id="fin-payroll-list"></div>
+            </div>
+          </div>
+
+          <div id="fin-adjustments-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Ajustes Manuales</h2>
+                <button id="fin-new-adj-btn" type="button">Nuevo ajuste</button>
+              </div>
+              <div id="fin-adj-list"></div>
+            </div>
+          </div>
+
+          <div id="fin-archive-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header"><h2>Archivo de Estados Financieros</h2></div>
+              <div id="fin-archive-list"></div>
+            </div>
+          </div>
+
+          <div id="fin-config-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header"><h2>Configuración Financiera</h2></div>
+              <form id="fin-config-form">
+                <div class="form-group">
+                  <label>ISR Estimado Administrativo (%)</label>
+                  <input type="number" name="estimated_isr_rate" step="0.01" min="0" max="1" />
+                </div>
+                <div class="form-group">
+                  <label>Comisión IVAN (%)</label>
+                  <input type="number" name="ivan_commission_rate" step="0.01" min="0" max="1" />
+                </div>
+                <div class="form-group">
+                  <label>Contraseña admin (requerida para guardar)</label>
+                  <input type="password" name="admin_password" autocomplete="off" />
+                </div>
+                <button type="submit">Guardar configuración</button>
+                <p id="fin-config-message"></p>
+              </form>
             </div>
           </div>
         </section>

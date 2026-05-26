@@ -683,6 +683,7 @@ function switchView(viewName) {
   const showingEcovis = viewName === 'ecovis';
   const showingArchive = viewName === 'report-archive';
   const showingServiceQuoter = viewName === 'service-quoter';
+  const showingFinancial = viewName === 'financial';
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
@@ -694,6 +695,8 @@ function switchView(viewName) {
   if (archiveView) archiveView.classList.toggle('hidden', !showingArchive);
   const sqView = document.getElementById('service-quoter-view');
   if (sqView) sqView.classList.toggle('hidden', !showingServiceQuoter);
+  const finView = document.getElementById('financial-view');
+  if (finView) finView.classList.toggle('hidden', !showingFinancial);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
@@ -3166,6 +3169,8 @@ function applyRoleVisibility() {
   if (ecovisTab) ecovisTab.classList.toggle('hidden', !canAccess('ecovisAccount', 'view'));
   const sqTab = document.getElementById('service-quoter-tab');
   if (sqTab) sqTab.classList.toggle('hidden', !canAccess('serviceQuoter', 'view'));
+  const finTab = document.getElementById('financial-tab');
+  if (finTab) finTab.classList.toggle('hidden', state.userRole !== 'admin');
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('hidden', !canAccess('reportsArchive', 'view'));
   const reportsTab = document.getElementById('reports-tab');
@@ -4582,6 +4587,254 @@ async function refreshSqConfig() {
 
 // ===================== END SERVICE QUOTER MODULE =====================
 
+// ===================== FINANCIAL STATEMENTS MODULE =====================
+
+const financialTab = document.getElementById('financial-tab');
+
+function showFinancialTab() {
+  if (state.userRole === 'admin') {
+    financialTab.classList.remove('hidden');
+  }
+}
+
+function switchFinSubtab(name) {
+  const sections = ['statement', 'payable', 'receivable', 'bank', 'payroll', 'adjustments', 'archive', 'config'];
+  sections.forEach((s) => {
+    const section = document.getElementById('fin-' + s + '-section');
+    const btn = document.getElementById('fin-subtab-' + s);
+    if (section) section.classList.toggle('hidden', s !== name);
+    if (btn) btn.classList.toggle('active', s === name);
+  });
+}
+
+['statement', 'payable', 'receivable', 'bank', 'payroll', 'adjustments', 'archive', 'config'].forEach((tab) => {
+  const btn = document.getElementById('fin-subtab-' + tab);
+  if (btn) btn.addEventListener('click', () => { switchFinSubtab(tab); loadFinSection(tab); });
+});
+
+async function loadFinSection(section) {
+  if (section === 'receivable') await loadFinReceivable();
+  if (section === 'payable') await loadFinPayable();
+  if (section === 'bank') await loadFinBank();
+  if (section === 'payroll') await loadFinPayroll();
+  if (section === 'adjustments') await loadFinAdjustments();
+  if (section === 'archive') await loadFinArchive();
+  if (section === 'config') await loadFinConfig();
+}
+
+function initFinYearSelector() {
+  const sel = document.getElementById('fin-stmt-year');
+  if (!sel) return;
+  const currentYear = new Date().getFullYear();
+  sel.innerHTML = '';
+  for (let y = currentYear; y >= currentYear - 3; y--) {
+    sel.innerHTML += `<option value="${y}">${y}</option>`;
+  }
+  const monthSel = document.getElementById('fin-stmt-month');
+  if (monthSel) monthSel.value = String(new Date().getMonth() + 1);
+}
+
+async function generateFinStatement() {
+  const year = document.getElementById('fin-stmt-year').value;
+  const month = document.getElementById('fin-stmt-month').value;
+  try {
+    const result = await api('/api/financial/statements/generate', { method: 'POST', body: JSON.stringify({ year: Number(year), month: Number(month) }), headers: { 'Content-Type': 'application/json' } });
+    renderFinStatement(result);
+  } catch (e) {
+    document.getElementById('fin-statement-result').innerHTML = `<p class="error">${escapeHtml(e.message || 'Error al generar')}</p>`;
+  }
+}
+
+function renderFinStatement(s) {
+  const container = document.getElementById('fin-statement-result');
+  const warn = s.unclassified_movements_count > 0 ? `<p class="text-muted" style="color:orange;">⚠ ${s.unclassified_movements_count} movimientos bancarios sin clasificar</p>` : '';
+  container.innerHTML = `
+    ${warn}
+    <table class="data-table">
+      <tbody>
+        <tr><th colspan="2" style="text-align:left;background:#f0f0f0">VENTAS NETAS</th></tr>
+        <tr><td>Ingresos de proyectos</td><td style="text-align:right">${money.format(s.revenue_net_mxn)}</td></tr>
+        <tr><th colspan="2" style="text-align:left;background:#f0f0f0">COSTO DE VENTAS</th></tr>
+        <tr><td>Costos directos</td><td style="text-align:right">${money.format(s.cost_of_sales_mxn)}</td></tr>
+        <tr style="font-weight:bold"><td>UTILIDAD BRUTA</td><td style="text-align:right">${money.format(s.gross_profit_mxn)}</td></tr>
+        <tr><th colspan="2" style="text-align:left;background:#f0f0f0">GASTOS DE OPERACIÓN</th></tr>
+        <tr><td>Gastos operativos</td><td style="text-align:right">${money.format(s.operating_expenses_mxn)}</td></tr>
+        <tr style="font-weight:bold"><td>UTILIDAD NETA ADMINISTRATIVA</td><td style="text-align:right">${money.format(s.net_administrative_profit_mxn)}</td></tr>
+        <tr><td>ISR Estimado Administrativo (10%)</td><td style="text-align:right">${money.format(s.estimated_isr_mxn)}</td></tr>
+        <tr><td>Utilidad después de ISR estimado</td><td style="text-align:right">${money.format(s.profit_after_isr_mxn)}</td></tr>
+        <tr><td>Comisión IVAN 10%</td><td style="text-align:right">${money.format(s.ivan_commission_mxn)}</td></tr>
+        <tr style="font-weight:bold;background:#e8f5e9"><td>UTILIDAD REAL ADMINISTRATIVA</td><td style="text-align:right">${money.format(s.real_administrative_profit_mxn)}</td></tr>
+        <tr><td colspan="2" style="height:10px"></td></tr>
+        <tr><td>Cuentas por cobrar</td><td style="text-align:right">${money.format(s.accounts_receivable_mxn)}</td></tr>
+        <tr><td>Cuentas por pagar</td><td style="text-align:right">${money.format(s.accounts_payable_mxn)}</td></tr>
+        <tr><td>Saldo bancario final</td><td style="text-align:right">${money.format(s.bank_final_balance_mxn)}</td></tr>
+      </tbody>
+    </table>
+    <p class="text-muted" style="font-size:0.8rem;margin-top:0.5rem">Estado: ${escapeHtml(s.status || 'borrador')} | Todos los montos en MXN</p>
+  `;
+}
+
+async function loadFinPayable() {
+  try {
+    const result = await api('/api/financial/accounts-payable');
+    const container = document.getElementById('fin-ap-list');
+    if (!result.data || result.data.length === 0) {
+      container.innerHTML = '<p class="empty-message">No hay cuentas por pagar registradas.</p>';
+      return;
+    }
+    let html = '<table class="data-table"><thead><tr><th>Proveedor</th><th>Factura</th><th>Fecha</th><th>Monto</th><th>Moneda</th><th>MXN</th><th>Categoría</th><th>Estado</th></tr></thead><tbody>';
+    result.data.forEach((ap) => {
+      html += `<tr><td>${escapeHtml(ap.supplier_name)}</td><td>${escapeHtml(ap.invoice_number)}</td><td>${escapeHtml(ap.invoice_date)}</td><td>${money.format(ap.amount_original)}</td><td>${escapeHtml(ap.currency)}</td><td>${money.format(ap.amount_mxn)}</td><td>${escapeHtml(ap.category)}</td><td><span class="badge">${escapeHtml(ap.status)}</span></td></tr>`;
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) { console.error(e); }
+}
+
+async function loadFinReceivable() {
+  try {
+    const result = await api('/api/financial/accounts-receivable');
+    const container = document.getElementById('fin-ar-list');
+    let html = '<div class="ecovis-cards">';
+    html += `<div class="ecovis-card"><div class="ecovis-card-label">Total CxC MXN</div><div class="ecovis-card-value">${money.format(result.summary.total_mxn)}</div></div>`;
+    html += `<div class="ecovis-card"><div class="ecovis-card-label">Corriente</div><div class="ecovis-card-value">${money.format(result.summary.current)}</div></div>`;
+    html += `<div class="ecovis-card"><div class="ecovis-card-label">1-30 días</div><div class="ecovis-card-value">${money.format(result.summary.d1_30)}</div></div>`;
+    html += `<div class="ecovis-card"><div class="ecovis-card-label">31-60 días</div><div class="ecovis-card-value">${money.format(result.summary.d31_60)}</div></div>`;
+    html += `<div class="ecovis-card"><div class="ecovis-card-label">61-90 días</div><div class="ecovis-card-value">${money.format(result.summary.d61_90)}</div></div>`;
+    html += `<div class="ecovis-card"><div class="ecovis-card-label">>90 días</div><div class="ecovis-card-value">${money.format(result.summary.d90plus)}</div></div>`;
+    html += '</div>';
+    if (result.data.length > 0) {
+      html += '<table class="data-table"><thead><tr><th>Cliente</th><th>Proyecto</th><th>Cotización</th><th>Facturado</th><th>Cobrado MXN</th><th>Pendiente MXN</th><th>Días</th></tr></thead><tbody>';
+      result.data.forEach((ar) => {
+        html += `<tr><td>${escapeHtml(ar.client_name || '')}</td><td>${escapeHtml(ar.project_description || '')}</td><td>${escapeHtml(ar.quote_number || '')}</td><td>${money.format(ar.total_invoiced)} ${escapeHtml(ar.total_invoiced_currency)}</td><td>${money.format(ar.total_charged_mxn)}</td><td>${money.format(ar.pending_mxn)}</td><td>${ar.days_overdue}</td></tr>`;
+      });
+      html += '</tbody></table>';
+    }
+    container.innerHTML = html;
+  } catch (e) { console.error(e); }
+}
+
+async function loadFinBank() {
+  try {
+    const result = await api('/api/financial/bank-summaries');
+    const container = document.getElementById('fin-bank-list');
+    if (!result.data || result.data.length === 0) {
+      container.innerHTML = '<p class="empty-message">No hay estados de cuenta registrados.</p>';
+      return;
+    }
+    let html = '<table class="data-table"><thead><tr><th>Banco</th><th>Cuenta</th><th>Moneda</th><th>Mes</th><th>Saldo Inicial</th><th>Depósitos</th><th>Retiros</th><th>Saldo Final</th></tr></thead><tbody>';
+    result.data.forEach((b) => {
+      html += `<tr><td>${escapeHtml(b.bank_name)}</td><td>${escapeHtml(b.account_number_masked || '')}</td><td>${escapeHtml(b.currency)}</td><td>${b.year}-${String(b.month).padStart(2,'0')}</td><td>${money.format(b.initial_balance_mxn)}</td><td>${money.format(b.deposits_mxn)}</td><td>${money.format(b.withdrawals_mxn)}</td><td>${money.format(b.final_balance_mxn)}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) { console.error(e); }
+}
+
+async function loadFinPayroll() {
+  try {
+    const result = await api('/api/financial/payroll?year=' + new Date().getFullYear());
+    const container = document.getElementById('fin-payroll-list');
+    if (!result.data || result.data.length === 0) {
+      container.innerHTML = '<p class="empty-message">No hay registros de nómina manual.</p>';
+      return;
+    }
+    let html = `<p><strong>Total MXN: ${money.format(result.total_mxn)}</strong></p>`;
+    html += '<table class="data-table"><thead><tr><th>Mes</th><th>Concepto</th><th>Monto</th><th>Moneda</th><th>MXN</th></tr></thead><tbody>';
+    result.data.forEach((p) => {
+      html += `<tr><td>${p.year}-${String(p.month).padStart(2,'0')}</td><td>${escapeHtml(p.concept)}</td><td>${money.format(p.amount_original)}</td><td>${escapeHtml(p.currency)}</td><td>${money.format(p.amount_mxn)}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) { console.error(e); }
+}
+
+async function loadFinAdjustments() {
+  try {
+    const result = await api('/api/financial/adjustments?year=' + new Date().getFullYear());
+    const container = document.getElementById('fin-adj-list');
+    if (!result.data || result.data.length === 0) {
+      container.innerHTML = '<p class="empty-message">No hay ajustes registrados.</p>';
+      return;
+    }
+    let html = '<table class="data-table"><thead><tr><th>Mes</th><th>Tipo</th><th>Concepto</th><th>Monto MXN</th><th>Estado</th></tr></thead><tbody>';
+    result.data.forEach((a) => {
+      html += `<tr><td>${a.year}-${String(a.month).padStart(2,'0')}</td><td>${escapeHtml(a.adjustment_type)}</td><td>${escapeHtml(a.concept)}</td><td>${money.format(a.amount_mxn)}</td><td><span class="badge">${escapeHtml(a.status)}</span></td></tr>`;
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) { console.error(e); }
+}
+
+async function loadFinArchive() {
+  try {
+    const { data } = await api('/api/financial/statements');
+    const container = document.getElementById('fin-archive-list');
+    if (!data || data.length === 0) {
+      container.innerHTML = '<p class="empty-message">No hay estados financieros generados.</p>';
+      return;
+    }
+    let html = '<table class="data-table"><thead><tr><th>Periodo</th><th>Ventas</th><th>Costo</th><th>Utilidad Bruta</th><th>Gastos Op.</th><th>Utilidad Neta</th><th>ISR Est.</th><th>Com. IVAN</th><th>Utilidad Real</th><th>Estado</th></tr></thead><tbody>';
+    data.forEach((s) => {
+      html += `<tr><td>${s.year}-${String(s.month).padStart(2,'0')}</td><td>${money.format(s.revenue_net_mxn)}</td><td>${money.format(s.cost_of_sales_mxn)}</td><td>${money.format(s.gross_profit_mxn)}</td><td>${money.format(s.operating_expenses_mxn)}</td><td>${money.format(s.net_administrative_profit_mxn)}</td><td>${money.format(s.estimated_isr_mxn)}</td><td>${money.format(s.ivan_commission_mxn)}</td><td>${money.format(s.real_administrative_profit_mxn)}</td><td><span class="badge">${escapeHtml(s.status)}</span></td></tr>`;
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) { console.error(e); }
+}
+
+async function loadFinConfig() {
+  try {
+    const settings = await api('/api/financial/settings');
+    const form = document.getElementById('fin-config-form');
+    form.elements.estimated_isr_rate.value = settings.estimated_isr_rate;
+    form.elements.ivan_commission_rate.value = settings.ivan_commission_rate;
+  } catch (e) { console.error(e); }
+}
+
+if (financialTab) {
+  financialTab.addEventListener('click', () => {
+    if (state.userRole !== 'admin') {
+      window.alert('Acceso restringido. Solo el administrador puede consultar Estados Financieros.');
+      return;
+    }
+    switchView('financial');
+    switchFinSubtab('statement');
+    initFinYearSelector();
+  });
+}
+
+if (document.getElementById('fin-generate-btn')) {
+  document.getElementById('fin-generate-btn').addEventListener('click', generateFinStatement);
+}
+
+if (document.getElementById('fin-config-form')) {
+  document.getElementById('fin-config-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const msg = document.getElementById('fin-config-message');
+    try {
+      const result = await api('/api/financial/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          estimated_isr_rate: Number(form.elements.estimated_isr_rate.value),
+          ivan_commission_rate: Number(form.elements.ivan_commission_rate.value),
+          admin_password: form.elements.admin_password.value,
+        }),
+      });
+      msg.textContent = 'Configuración guardada.';
+      msg.style.color = 'green';
+      form.elements.admin_password.value = '';
+    } catch (err) {
+      msg.textContent = err.message || 'Error al guardar.';
+      msg.style.color = 'red';
+    }
+  });
+}
+
+// ===================== END FINANCIAL STATEMENTS MODULE =====================
+
 // ===================== END NEW MODULES =====================
 
 api('/api/session')
@@ -4593,6 +4846,7 @@ api('/api/session')
       showAttendanceTab();
       showEcovisTab();
       showServiceQuoterTab();
+      showFinancialTab();
       showApp();
     } else {
       showLogin();

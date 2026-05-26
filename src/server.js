@@ -4136,6 +4136,579 @@ app.get('/api/admin/audit-logs', requireAuth, requirePermission('backups', 'view
 
 // ===================== END BACKUP MODULE =====================
 
+// ===================== FINANCIAL STATEMENTS MODULE =====================
+
+const { calculateFinancialStatement, AP_CATEGORIES, CLASSIFICATION_TYPES, ADJUSTMENT_TYPES, roundMoney: roundMoneyFin } = require('./financial');
+
+function requireAdminOnly(req, res, next) {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ message: 'Necesitas iniciar sesion.' });
+  }
+  if (req.session.role !== 'admin') {
+    logAuditEvent(db, { req, action: 'access_denied', module: 'financial', metadata: { reason: 'admin_only', endpoint: req.originalUrl } });
+    return res.status(403).json({ message: 'Acceso restringido. Solo el administrador puede consultar Estados Financieros.' });
+  }
+  return next();
+}
+
+// --- Financial Settings ---
+
+app.get('/api/financial/settings', requireAuth, requireAdminOnly, (req, res) => {
+  const settings = db.prepare('SELECT * FROM financial_settings WHERE id = 1').get();
+  res.json(settings);
+});
+
+app.put('/api/financial/settings', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const { admin_password, estimated_isr_rate, ivan_commission_rate } = req.body;
+    if (!admin_password) throw badRequest('Contrasena admin requerida.');
+    const admin = db.prepare("SELECT * FROM users WHERE role = 'admin' AND is_active = 1").get();
+    if (!admin || !bcrypt.compareSync(admin_password, admin.password_hash)) {
+      throw badRequest('Contrasena incorrecta.');
+    }
+    const isr = Number(estimated_isr_rate);
+    const ivan = Number(ivan_commission_rate);
+    if (isNaN(isr) || isr < 0) throw badRequest('ISR estimado debe ser >= 0.');
+    if (isNaN(ivan) || ivan < 0) throw badRequest('Comision IVAN debe ser >= 0.');
+
+    const audit = updatedByFields(req);
+    db.prepare(
+      `UPDATE financial_settings SET estimated_isr_rate = ?, ivan_commission_rate = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = 1`,
+    ).run(isr, ivan, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at);
+
+    logAuditEvent(db, { req, action: 'update', module: 'financial', entityType: 'financial_settings', entityId: 1, entityLabel: 'Configuracion financiera', metadata: { estimated_isr_rate: isr, ivan_commission_rate: ivan } });
+    res.json(db.prepare('SELECT * FROM financial_settings WHERE id = 1').get());
+  } catch (error) { next(error); }
+});
+
+// --- Accounts Payable ---
+
+app.get('/api/financial/accounts-payable', requireAuth, requireAdminOnly, (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const status = req.query.status || '';
+  const year = req.query.year ? Number(req.query.year) : null;
+  const month = req.query.month ? Number(req.query.month) : null;
+
+  let where = 'deleted_at IS NULL';
+  const params = [];
+  if (status && ['pendiente', 'pagada', 'cancelada'].includes(status)) {
+    where += ' AND status = ?';
+    params.push(status);
+  }
+  if (year) {
+    where += " AND CAST(strftime('%Y', invoice_date) AS INTEGER) = ?";
+    params.push(year);
+  }
+  if (month) {
+    where += " AND CAST(strftime('%m', invoice_date) AS INTEGER) = ?";
+    params.push(month);
+  }
+  if (search) {
+    where += ' AND (supplier_name LIKE ? OR invoice_number LIKE ? OR category LIKE ? OR notes LIKE ?)';
+    const term = `%${search}%`;
+    params.push(term, term, term, term);
+  }
+
+  const total = db.prepare(`SELECT COUNT(*) as count FROM accounts_payable WHERE ${where}`).get(...params).count;
+  const pag = buildPaginationMeta(page, limit, total);
+  const data = db.prepare(`SELECT * FROM accounts_payable WHERE ${where} ORDER BY invoice_date DESC, id DESC LIMIT ? OFFSET ?`).all(...params, pag.limit, pag.offset);
+  res.json({ data, pagination: pag, categories: AP_CATEGORIES });
+});
+
+app.post('/api/financial/accounts-payable', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const supplierName = requiredText(req.body, 'supplier_name', 'Proveedor');
+    const invoiceNumber = requiredText(req.body, 'invoice_number', 'Numero de factura');
+    const invoiceDate = requiredText(req.body, 'invoice_date', 'Fecha de factura');
+    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const category = req.body.category || 'Otros';
+    const dueDate = optionalText(req.body, 'due_date');
+    const relatedProjectId = req.body.related_project_id || null;
+    const notes = optionalText(req.body, 'notes');
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+
+    const audit = createdByFields(req);
+    const result = db.prepare(
+      `INSERT INTO accounts_payable (supplier_name, invoice_number, invoice_date, due_date, amount_original, currency, exchange_rate_to_mxn, amount_mxn, category, related_project_id, notes, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(supplierName, invoiceNumber, invoiceDate, dueDate, amountOriginal, currency, exchangeRate, amountMxn, category, relatedProjectId, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+
+    logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'accounts_payable', entityId: result.lastInsertRowid, entityLabel: `${supplierName} - ${invoiceNumber}` });
+    res.status(201).json(db.prepare('SELECT * FROM accounts_payable WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) { next(error); }
+});
+
+app.put('/api/financial/accounts-payable/:id', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const ap = db.prepare('SELECT * FROM accounts_payable WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!ap) throw badRequest('Cuenta por pagar no encontrada.');
+    const supplierName = requiredText(req.body, 'supplier_name', 'Proveedor');
+    const invoiceNumber = requiredText(req.body, 'invoice_number', 'Numero de factura');
+    const invoiceDate = requiredText(req.body, 'invoice_date', 'Fecha de factura');
+    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const category = req.body.category || 'Otros';
+    const dueDate = optionalText(req.body, 'due_date');
+    const relatedProjectId = req.body.related_project_id || null;
+    const notes = optionalText(req.body, 'notes');
+    const status = req.body.status || ap.status;
+    const paidAt = req.body.paid_at || ap.paid_at;
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+
+    const audit = updatedByFields(req);
+    db.prepare(
+      `UPDATE accounts_payable SET supplier_name=?, invoice_number=?, invoice_date=?, due_date=?, amount_original=?, currency=?, exchange_rate_to_mxn=?, amount_mxn=?, category=?, related_project_id=?, notes=?, status=?, paid_at=?, updated_by_user_id=?, updated_by_name=?, updated_at=? WHERE id=?`,
+    ).run(supplierName, invoiceNumber, invoiceDate, dueDate, amountOriginal, currency, exchangeRate, amountMxn, category, relatedProjectId, notes, status, paidAt, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
+
+    logAuditEvent(db, { req, action: 'update', module: 'financial', entityType: 'accounts_payable', entityId: Number(req.params.id), entityLabel: `${supplierName} - ${invoiceNumber}`, before: ap });
+    res.json(db.prepare('SELECT * FROM accounts_payable WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+app.post('/api/financial/accounts-payable/:id/cancel', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const ap = db.prepare('SELECT * FROM accounts_payable WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!ap) throw badRequest('Cuenta por pagar no encontrada.');
+    const reason = requiredText(req.body, 'reason', 'Motivo de cancelacion');
+    const audit = updatedByFields(req);
+    db.prepare(`UPDATE accounts_payable SET status='cancelada', deleted_at=?, deleted_by_user_id=?, deleted_by_name=?, delete_reason=?, updated_at=? WHERE id=?`)
+      .run(audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, reason, audit.updated_at, req.params.id);
+    logAuditEvent(db, { req, action: 'cancel', module: 'financial', entityType: 'accounts_payable', entityId: Number(req.params.id), entityLabel: `${ap.supplier_name} - ${ap.invoice_number}`, metadata: { reason } });
+    res.json(db.prepare('SELECT * FROM accounts_payable WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+// --- Manual Payroll ---
+
+app.get('/api/financial/payroll', requireAuth, requireAdminOnly, (req, res) => {
+  const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+  const month = req.query.month ? Number(req.query.month) : null;
+  let where = 'year = ?';
+  const params = [year];
+  if (month) { where += ' AND month = ?'; params.push(month); }
+  const data = db.prepare(`SELECT * FROM manual_payroll_expenses WHERE ${where} ORDER BY month, id`).all(...params);
+  const total = roundMoneyFin(data.reduce((s, r) => s + Number(r.amount_mxn || 0), 0));
+  res.json({ data, total_mxn: total });
+});
+
+app.post('/api/financial/payroll', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
+    const concept = requiredText(req.body, 'concept', 'Concepto');
+    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const notes = optionalText(req.body, 'notes');
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+
+    const audit = createdByFields(req);
+    const result = db.prepare(
+      `INSERT INTO manual_payroll_expenses (year, month, concept, amount_original, currency, exchange_rate_to_mxn, amount_mxn, notes, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(year, month, concept, amountOriginal, currency, exchangeRate, amountMxn, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+
+    logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'manual_payroll', entityId: result.lastInsertRowid, entityLabel: concept });
+    res.status(201).json(db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) { next(error); }
+});
+
+// --- Financial Adjustments ---
+
+app.get('/api/financial/adjustments', requireAuth, requireAdminOnly, (req, res) => {
+  const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+  const month = req.query.month ? Number(req.query.month) : null;
+  let where = 'year = ? AND deleted_at IS NULL';
+  const params = [year];
+  if (month) { where += ' AND month = ?'; params.push(month); }
+  const data = db.prepare(`SELECT * FROM financial_adjustments WHERE ${where} ORDER BY month, id`).all(...params);
+  res.json({ data, types: ADJUSTMENT_TYPES });
+});
+
+app.post('/api/financial/adjustments', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
+    const adjustmentType = requiredText(req.body, 'adjustment_type', 'Tipo de ajuste');
+    if (!ADJUSTMENT_TYPES.includes(adjustmentType)) throw badRequest('Tipo de ajuste no valido.');
+    const concept = requiredText(req.body, 'concept', 'Concepto');
+    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const notes = optionalText(req.body, 'notes');
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+
+    const audit = createdByFields(req);
+    const result = db.prepare(
+      `INSERT INTO financial_adjustments (year, month, adjustment_type, concept, amount_original, currency, exchange_rate_to_mxn, amount_mxn, notes, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(year, month, adjustmentType, concept, amountOriginal, currency, exchangeRate, amountMxn, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+
+    logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'financial_adjustment', entityId: result.lastInsertRowid, entityLabel: concept });
+    res.status(201).json(db.prepare('SELECT * FROM financial_adjustments WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) { next(error); }
+});
+
+app.post('/api/financial/adjustments/:id/cancel', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const adj = db.prepare('SELECT * FROM financial_adjustments WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!adj) throw badRequest('Ajuste no encontrado.');
+    const reason = requiredText(req.body, 'reason', 'Motivo de cancelacion');
+    const audit = updatedByFields(req);
+    db.prepare(`UPDATE financial_adjustments SET status='cancelado', deleted_at=?, deleted_by_user_id=?, deleted_by_name=?, delete_reason=?, updated_at=? WHERE id=?`)
+      .run(audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, reason, audit.updated_at, req.params.id);
+    logAuditEvent(db, { req, action: 'cancel', module: 'financial', entityType: 'financial_adjustment', entityId: Number(req.params.id), entityLabel: adj.concept, metadata: { reason } });
+    res.json(db.prepare('SELECT * FROM financial_adjustments WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+// --- Bank Statement Summaries ---
+
+app.get('/api/financial/bank-summaries', requireAuth, requireAdminOnly, (req, res) => {
+  const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+  const month = req.query.month ? Number(req.query.month) : null;
+  let where = 'year = ?';
+  const params = [year];
+  if (month) { where += ' AND month = ?'; params.push(month); }
+  const data = db.prepare(`SELECT * FROM bank_statement_summaries WHERE ${where} ORDER BY month, bank_name`).all(...params);
+  res.json({ data });
+});
+
+app.post('/api/financial/bank-summaries', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const bankName = requiredText(req.body, 'bank_name', 'Banco');
+    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const accountMasked = optionalText(req.body, 'account_number_masked');
+    const initialBalance = Number(req.body.initial_balance_original || 0);
+    const deposits = Number(req.body.deposits_original || 0);
+    const withdrawals = Number(req.body.withdrawals_original || 0);
+    const commissions = Number(req.body.commissions_original || 0);
+    const commissionsVat = Number(req.body.commissions_vat_original || 0);
+    const finalBalance = Number(req.body.final_balance_original || 0);
+    const notes = optionalText(req.body, 'notes');
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+
+    const audit = createdByFields(req);
+    const result = db.prepare(
+      `INSERT INTO bank_statement_summaries (bank_name, account_number_masked, currency, year, month,
+        initial_balance_original, deposits_original, withdrawals_original, commissions_original, commissions_vat_original, final_balance_original,
+        exchange_rate_to_mxn, initial_balance_mxn, deposits_mxn, withdrawals_mxn, commissions_mxn, commissions_vat_mxn, final_balance_mxn,
+        notes, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(bankName, accountMasked, currency, year, month,
+      initialBalance, deposits, withdrawals, commissions, commissionsVat, finalBalance,
+      exchangeRate,
+      roundMoneyFin(initialBalance * exchangeRate), roundMoneyFin(deposits * exchangeRate), roundMoneyFin(withdrawals * exchangeRate),
+      roundMoneyFin(commissions * exchangeRate), roundMoneyFin(commissionsVat * exchangeRate), roundMoneyFin(finalBalance * exchangeRate),
+      notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+
+    logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'bank_statement_summary', entityId: result.lastInsertRowid, entityLabel: `${bankName} ${year}-${month}` });
+    res.status(201).json(db.prepare('SELECT * FROM bank_statement_summaries WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) { next(error); }
+});
+
+// --- Bank Statement Movements ---
+
+app.get('/api/financial/bank-movements', requireAuth, requireAdminOnly, (req, res) => {
+  const summaryId = req.query.bank_statement_summary_id;
+  const year = req.query.year ? Number(req.query.year) : null;
+  const month = req.query.month ? Number(req.query.month) : null;
+  const classificationStatus = req.query.classification_status || '';
+  const { page, limit } = parsePaginationParams(req.query);
+
+  let where = '1=1';
+  const params = [];
+
+  if (summaryId) {
+    where += ' AND m.bank_statement_summary_id = ?';
+    params.push(summaryId);
+  }
+  if (year || month) {
+    where += ' AND EXISTS (SELECT 1 FROM bank_statement_summaries s WHERE s.id = m.bank_statement_summary_id';
+    if (year) { where += ' AND s.year = ?'; params.push(year); }
+    if (month) { where += ' AND s.month = ?'; params.push(month); }
+    where += ')';
+  }
+  if (classificationStatus && ['sin_clasificar', 'clasificado', 'ignorado'].includes(classificationStatus)) {
+    where += ' AND m.classification_status = ?';
+    params.push(classificationStatus);
+  }
+
+  const total = db.prepare(`SELECT COUNT(*) as count FROM bank_statement_movements m WHERE ${where}`).get(...params).count;
+  const pag = buildPaginationMeta(page, limit, total);
+  const data = db.prepare(`SELECT m.* FROM bank_statement_movements m WHERE ${where} ORDER BY m.transaction_date DESC, m.id DESC LIMIT ? OFFSET ?`).all(...params, pag.limit, pag.offset);
+  res.json({ data, pagination: pag, classification_types: CLASSIFICATION_TYPES });
+});
+
+app.post('/api/financial/bank-movements', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const summaryId = numberValue(req.body, 'bank_statement_summary_id', 'Estado de cuenta', { min: 1 });
+    const summary = db.prepare('SELECT * FROM bank_statement_summaries WHERE id = ?').get(summaryId);
+    if (!summary) throw badRequest('Estado de cuenta no encontrado.');
+
+    const transactionDate = requiredText(req.body, 'transaction_date', 'Fecha de transaccion');
+    const description = optionalText(req.body, 'description');
+    const reference = optionalText(req.body, 'reference');
+    const depositOriginal = Number(req.body.deposit_original || 0);
+    const withdrawalOriginal = Number(req.body.withdrawal_original || 0);
+    const balanceOriginal = req.body.balance_original != null ? Number(req.body.balance_original) : null;
+    const notes = optionalText(req.body, 'notes');
+
+    const rate = Number(summary.exchange_rate_to_mxn || 1);
+    const result = db.prepare(
+      `INSERT INTO bank_statement_movements (bank_statement_summary_id, transaction_date, description, reference,
+        deposit_original, withdrawal_original, currency, exchange_rate_to_mxn, deposit_mxn, withdrawal_mxn,
+        balance_original, balance_mxn, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(summaryId, transactionDate, description, reference,
+      depositOriginal, withdrawalOriginal, summary.currency, rate,
+      roundMoneyFin(depositOriginal * rate), roundMoneyFin(withdrawalOriginal * rate),
+      balanceOriginal, balanceOriginal != null ? roundMoneyFin(balanceOriginal * rate) : null, notes);
+
+    res.status(201).json(db.prepare('SELECT * FROM bank_statement_movements WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) { next(error); }
+});
+
+app.put('/api/financial/bank-movements/:id/classify', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const mov = db.prepare('SELECT * FROM bank_statement_movements WHERE id = ?').get(req.params.id);
+    if (!mov) throw badRequest('Movimiento no encontrado.');
+
+    const classificationType = req.body.classification_type || null;
+    const classificationStatus = req.body.classification_status || 'clasificado';
+    if (!['sin_clasificar', 'clasificado', 'ignorado'].includes(classificationStatus)) {
+      throw badRequest('Estado de clasificacion no valido.');
+    }
+    if (classificationStatus === 'clasificado' && (!classificationType || !CLASSIFICATION_TYPES.includes(classificationType))) {
+      throw badRequest('Tipo de clasificacion requerido.');
+    }
+
+    const relatedProjectId = req.body.related_project_id || null;
+    const relatedAccountPayableId = req.body.related_account_payable_id || null;
+    const notes = req.body.notes !== undefined ? req.body.notes : mov.notes;
+
+    db.prepare(
+      `UPDATE bank_statement_movements SET classification_status=?, classification_type=?, related_project_id=?, related_account_payable_id=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+    ).run(classificationStatus, classificationType, relatedProjectId, relatedAccountPayableId, notes, req.params.id);
+
+    logAuditEvent(db, { req, action: 'classify', module: 'financial', entityType: 'bank_movement', entityId: Number(req.params.id), metadata: { classification_type: classificationType, classification_status: classificationStatus } });
+    res.json(db.prepare('SELECT * FROM bank_statement_movements WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+// --- Accounts Receivable (from projects) ---
+
+app.get('/api/financial/accounts-receivable', requireAuth, requireAdminOnly, (req, res) => {
+  const exchangeRates = getExchangeRates();
+  const rateMap = getExchangeRateMap();
+  const projects = db.prepare("SELECT * FROM projects WHERE closed_at IS NULL AND deleted_at IS NULL").all();
+  const data = [];
+  for (const p of projects) {
+    const payments = db.prepare('SELECT * FROM project_payments WHERE project_id = ?').all(p.id);
+    const totalCharged = payments.reduce((sum, pay) => {
+      const rate = rateMap[pay.currency || 'MXN'] || 1;
+      return sum + Number(pay.amount || 0) * rate;
+    }, 0);
+    const invoicedMxn = Number(p.total_invoiced || 0) * (rateMap[p.total_invoiced_currency || 'MXN'] || 1);
+    const pendingMxn = roundMoneyFin(invoicedMxn - totalCharged);
+    if (pendingMxn > 0.01) {
+      const projectDate = p.promised_delivery_date || p.created_at;
+      const daysOverdue = projectDate ? Math.max(0, Math.floor((Date.now() - new Date(projectDate).getTime()) / 86400000)) : 0;
+      data.push({
+        project_id: p.id,
+        client_name: p.client_name,
+        project_description: p.project_description,
+        quote_number: p.quote_number,
+        order_number: p.order_number,
+        invoice_number: p.invoice_number || null,
+        project_date: p.created_at,
+        total_invoiced: p.total_invoiced,
+        total_invoiced_currency: p.total_invoiced_currency || 'MXN',
+        total_charged_mxn: roundMoneyFin(totalCharged),
+        pending_mxn: pendingMxn,
+        days_overdue: daysOverdue,
+      });
+    }
+  }
+  const totalMxn = roundMoneyFin(data.reduce((s, r) => s + r.pending_mxn, 0));
+  const current = roundMoneyFin(data.filter((r) => r.days_overdue <= 0).reduce((s, r) => s + r.pending_mxn, 0));
+  const d1_30 = roundMoneyFin(data.filter((r) => r.days_overdue >= 1 && r.days_overdue <= 30).reduce((s, r) => s + r.pending_mxn, 0));
+  const d31_60 = roundMoneyFin(data.filter((r) => r.days_overdue >= 31 && r.days_overdue <= 60).reduce((s, r) => s + r.pending_mxn, 0));
+  const d61_90 = roundMoneyFin(data.filter((r) => r.days_overdue >= 61 && r.days_overdue <= 90).reduce((s, r) => s + r.pending_mxn, 0));
+  const d90plus = roundMoneyFin(data.filter((r) => r.days_overdue > 90).reduce((s, r) => s + r.pending_mxn, 0));
+
+  res.json({ data, summary: { total_mxn: totalMxn, current, d1_30, d31_60, d61_90, d90plus } });
+});
+
+// --- Financial Statement Generation ---
+
+app.get('/api/financial/statements', requireAuth, requireAdminOnly, (req, res) => {
+  const data = db.prepare("SELECT * FROM financial_statements WHERE deleted_at IS NULL ORDER BY year DESC, month DESC").all();
+  res.json({ data });
+});
+
+app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
+
+    const existing = db.prepare("SELECT * FROM financial_statements WHERE year = ? AND month = ? AND status != 'cancelado' AND deleted_at IS NULL").get(year, month);
+    if (existing && existing.status === 'cerrado') {
+      throw badRequest('El estado financiero de este mes esta cerrado. Reabrelo primero para actualizar.');
+    }
+
+    const settings = db.prepare('SELECT * FROM financial_settings WHERE id = 1').get();
+    const rateMap = getExchangeRateMap();
+
+    // Gather data for the month
+    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+    const nextMonth = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+
+    const projects = db.prepare("SELECT * FROM projects WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL").all(monthStart, nextMonth);
+    const projectsWithMxn = projects.map((p) => ({
+      ...p,
+      amount_mxn: roundMoneyFin(Number(p.total_invoiced || 0) * (rateMap[p.total_invoiced_currency || 'MXN'] || 1)),
+    }));
+
+    const projectCosts = db.prepare("SELECT * FROM project_costs WHERE cost_date >= ? AND cost_date < ?").all(monthStart, nextMonth);
+
+    const accountsPayable = db.prepare("SELECT * FROM accounts_payable WHERE invoice_date >= ? AND invoice_date < ? AND deleted_at IS NULL AND status != 'cancelada'").all(monthStart, nextMonth);
+
+    const bankSummaries = db.prepare('SELECT * FROM bank_statement_summaries WHERE year = ? AND month = ?').all(year, month);
+    const bankSummaryIds = bankSummaries.map((s) => s.id);
+    let bankMovements = [];
+    if (bankSummaryIds.length > 0) {
+      bankMovements = db.prepare(`SELECT * FROM bank_statement_movements WHERE bank_statement_summary_id IN (${bankSummaryIds.map(() => '?').join(',')}) AND classification_status != 'ignorado'`).all(...bankSummaryIds);
+    }
+
+    const manualPayroll = db.prepare('SELECT * FROM manual_payroll_expenses WHERE year = ? AND month = ?').all(year, month);
+    const adjustments = db.prepare("SELECT * FROM financial_adjustments WHERE year = ? AND month = ? AND status = 'activo' AND deleted_at IS NULL").all(year, month);
+
+    // Accounts receivable
+    const allProjects = db.prepare("SELECT * FROM projects WHERE closed_at IS NULL AND deleted_at IS NULL").all();
+    const accountsReceivable = [];
+    for (const p of allProjects) {
+      const payments = db.prepare('SELECT * FROM project_payments WHERE project_id = ?').all(p.id);
+      const totalCharged = payments.reduce((sum, pay) => sum + Number(pay.amount || 0) * (rateMap[pay.currency || 'MXN'] || 1), 0);
+      const invoicedMxn = Number(p.total_invoiced || 0) * (rateMap[p.total_invoiced_currency || 'MXN'] || 1);
+      const pendingMxn = roundMoneyFin(invoicedMxn - totalCharged);
+      if (pendingMxn > 0.01) accountsReceivable.push({ pending_mxn: pendingMxn });
+    }
+
+    const calcData = {
+      projects: projectsWithMxn,
+      projectCosts,
+      accountsPayable,
+      bankSummaries,
+      bankMovements,
+      manualPayroll,
+      adjustments,
+      accountsReceivable,
+    };
+
+    const result = calculateFinancialStatement(calcData, settings);
+    const unclassified = bankMovements.filter((m) => m.classification_status === 'sin_clasificar').length;
+    result.unclassified_movements_count = unclassified;
+
+    const audit = existing ? updatedByFields(req) : createdByFields(req);
+
+    if (existing) {
+      db.prepare(
+        `UPDATE financial_statements SET
+          revenue_net_mxn=?, cost_of_sales_mxn=?, gross_profit_mxn=?, operating_expenses_mxn=?,
+          net_administrative_profit_mxn=?, estimated_isr_mxn=?, profit_after_isr_mxn=?,
+          ivan_commission_mxn=?, real_administrative_profit_mxn=?,
+          accounts_receivable_mxn=?, accounts_payable_mxn=?,
+          bank_initial_balance_mxn=?, bank_deposits_mxn=?, bank_withdrawals_mxn=?, bank_final_balance_mxn=?,
+          unclassified_movements_count=?,
+          configuration_snapshot_json=?,
+          updated_by_user_id=?, updated_by_name=?, updated_at=?
+        WHERE id=?`,
+      ).run(
+        result.revenue_net_mxn, result.cost_of_sales_mxn, result.gross_profit_mxn, result.operating_expenses_mxn,
+        result.net_administrative_profit_mxn, result.estimated_isr_mxn, result.profit_after_isr_mxn,
+        result.ivan_commission_mxn, result.real_administrative_profit_mxn,
+        result.accounts_receivable_mxn, result.accounts_payable_mxn,
+        result.bank_initial_balance_mxn, result.bank_deposits_mxn, result.bank_withdrawals_mxn, result.bank_final_balance_mxn,
+        result.unclassified_movements_count,
+        JSON.stringify(settings),
+        audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, existing.id,
+      );
+      logAuditEvent(db, { req, action: 'update', module: 'financial', entityType: 'financial_statement', entityId: existing.id, entityLabel: `${year}-${month}` });
+      res.json(db.prepare('SELECT * FROM financial_statements WHERE id = ?').get(existing.id));
+    } else {
+      const ins = db.prepare(
+        `INSERT INTO financial_statements (year, month, status,
+          revenue_net_mxn, cost_of_sales_mxn, gross_profit_mxn, operating_expenses_mxn,
+          net_administrative_profit_mxn, estimated_isr_mxn, profit_after_isr_mxn,
+          ivan_commission_mxn, real_administrative_profit_mxn,
+          accounts_receivable_mxn, accounts_payable_mxn,
+          bank_initial_balance_mxn, bank_deposits_mxn, bank_withdrawals_mxn, bank_final_balance_mxn,
+          unclassified_movements_count, configuration_snapshot_json,
+          created_by_user_id, created_by_name, created_at, updated_at)
+        VALUES (?, ?, 'borrador', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(year, month,
+        result.revenue_net_mxn, result.cost_of_sales_mxn, result.gross_profit_mxn, result.operating_expenses_mxn,
+        result.net_administrative_profit_mxn, result.estimated_isr_mxn, result.profit_after_isr_mxn,
+        result.ivan_commission_mxn, result.real_administrative_profit_mxn,
+        result.accounts_receivable_mxn, result.accounts_payable_mxn,
+        result.bank_initial_balance_mxn, result.bank_deposits_mxn, result.bank_withdrawals_mxn, result.bank_final_balance_mxn,
+        result.unclassified_movements_count, JSON.stringify(settings),
+        audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+      logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'financial_statement', entityId: ins.lastInsertRowid, entityLabel: `${year}-${month}` });
+      res.status(201).json(db.prepare('SELECT * FROM financial_statements WHERE id = ?').get(ins.lastInsertRowid));
+    }
+  } catch (error) { next(error); }
+});
+
+app.post('/api/financial/statements/:id/close', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const fs = db.prepare("SELECT * FROM financial_statements WHERE id = ? AND deleted_at IS NULL").get(req.params.id);
+    if (!fs) throw badRequest('Estado financiero no encontrado.');
+    if (fs.status === 'cerrado') throw badRequest('Ya esta cerrado.');
+    if (fs.status === 'cancelado') throw badRequest('No se puede cerrar un estado cancelado.');
+
+    const audit = updatedByFields(req);
+    db.prepare(`UPDATE financial_statements SET status='cerrado', data_snapshot_json=?, closed_by_user_id=?, closed_by_name=?, closed_at=?, updated_at=? WHERE id=?`)
+      .run(JSON.stringify({ closed_with_data: true }), audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, audit.updated_at, req.params.id);
+
+    logAuditEvent(db, { req, action: 'close', module: 'financial', entityType: 'financial_statement', entityId: Number(req.params.id), entityLabel: `${fs.year}-${fs.month}` });
+    res.json(db.prepare('SELECT * FROM financial_statements WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+app.post('/api/financial/statements/:id/reopen', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const fs = db.prepare("SELECT * FROM financial_statements WHERE id = ? AND deleted_at IS NULL").get(req.params.id);
+    if (!fs) throw badRequest('Estado financiero no encontrado.');
+    if (fs.status !== 'cerrado') throw badRequest('Solo se puede reabrir un estado cerrado.');
+
+    const audit = updatedByFields(req);
+    db.prepare(`UPDATE financial_statements SET status='borrador', updated_by_user_id=?, updated_by_name=?, updated_at=? WHERE id=?`)
+      .run(audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
+
+    logAuditEvent(db, { req, action: 'reopen', module: 'financial', entityType: 'financial_statement', entityId: Number(req.params.id), entityLabel: `${fs.year}-${fs.month}` });
+    res.json(db.prepare('SELECT * FROM financial_statements WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+// ===================== END FINANCIAL STATEMENTS MODULE =====================
+
 app.use((err, req, res, next) => {
   if (res.headersSent) {
     return next(err);
