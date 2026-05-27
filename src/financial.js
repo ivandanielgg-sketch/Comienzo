@@ -10,6 +10,12 @@ function convertToMXN(amount, currency, exchangeRateToMXN) {
   return roundMoney(Number(amount) * rate);
 }
 
+function getFinancialWeekOfMonth(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  const dayOfMonth = d.getDate();
+  return Math.ceil(dayOfMonth / 7);
+}
+
 function calculateFinancialStatement(data, settings) {
   const {
     projects = [],
@@ -18,22 +24,29 @@ function calculateFinancialStatement(data, settings) {
     bankMovements = [],
     manualPayroll = [],
     adjustments = [],
+    omittedProjectIds = [],
   } = data;
 
   const isrRate = Number(settings.estimated_isr_rate || 0.10);
   const ivanRate = Number(settings.ivan_commission_rate || 0.10);
 
-  // Revenue: sum of project amounts in MXN
+  // Filter out omitted projects
+  const includedProjects = projects.filter((p) => !omittedProjectIds.includes(p.id));
+
+  // Revenue: sum of included project amounts in MXN
   const revenueNetMXN = roundMoney(
-    projects.reduce((sum, p) => {
+    includedProjects.reduce((sum, p) => {
       const mxn = Number(p.amount_mxn || p.total_invoiced_mxn || p.total_invoiced || 0);
       return sum + mxn;
     }, 0),
   );
 
-  // Cost of sales: direct project costs + classified bank egress to projects + AP classified as direct cost
+  // Cost of sales: direct project costs (for included projects only) + AP direct + bank egress to projects
+  const includedProjectIds = new Set(includedProjects.map((p) => p.id));
   const directProjectCosts = roundMoney(
-    projectCosts.reduce((sum, c) => sum + convertToMXN(c.amount, c.currency, c.exchange_rate_to_mxn || 1), 0),
+    projectCosts
+      .filter((c) => !c.project_id || includedProjectIds.has(c.project_id))
+      .reduce((sum, c) => sum + convertToMXN(c.amount, c.currency, c.exchange_rate_to_mxn || 1), 0),
   );
 
   const directCostCategories = ['Compra de materiales', 'Refacciones', 'Herramientas', 'Servicios externos', 'Fletes', 'Aduanales'];
@@ -45,7 +58,7 @@ function calculateFinancialStatement(data, settings) {
 
   const bankEgressToProjects = roundMoney(
     bankMovements
-      .filter((m) => m.classification_status === 'clasificado' && (m.classification_type === 'egreso_proyecto') && m.withdrawal_mxn > 0)
+      .filter((m) => m.classification_status === 'clasificado' && m.classification_type === 'egreso_proyecto' && m.withdrawal_mxn > 0 && !m.related_account_payable_id)
       .reduce((sum, m) => sum + Number(m.withdrawal_mxn || 0), 0),
   );
 
@@ -74,7 +87,7 @@ function calculateFinancialStatement(data, settings) {
 
   const bankOperatingExpenses = roundMoney(
     bankMovements
-      .filter((m) => m.classification_status === 'clasificado' && ['nomina', 'gasto_operativo', 'gasto_bancario', 'impuesto'].includes(m.classification_type))
+      .filter((m) => m.classification_status === 'clasificado' && ['nomina', 'gasto_operativo', 'gasto_bancario', 'impuesto'].includes(m.classification_type) && !m.related_account_payable_id)
       .reduce((sum, m) => sum + Number(m.withdrawal_mxn || 0), 0),
   );
 
@@ -212,6 +225,7 @@ const ADJUSTMENT_TYPES = [
 module.exports = {
   calculateFinancialStatement,
   convertToMXN,
+  getFinancialWeekOfMonth,
   roundMoney,
   AP_CATEGORIES,
   CLASSIFICATION_TYPES,

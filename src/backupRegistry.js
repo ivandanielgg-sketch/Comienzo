@@ -266,6 +266,22 @@ const BACKUP_ENTITIES = [
     module: 'financial',
   },
   {
+    key: 'accountsPayablePayments',
+    table: 'accounts_payable_payments',
+    query: 'SELECT * FROM accounts_payable_payments ORDER BY id',
+    stableKeys: ['accounts_payable_id', 'payment_date', 'amount_original'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'financial',
+  },
+  {
+    key: 'financialProjectOmissions',
+    table: 'financial_project_omissions',
+    query: 'SELECT * FROM financial_project_omissions ORDER BY year, month, project_id',
+    stableKeys: ['year', 'month', 'project_id'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'financial',
+  },
+  {
     key: 'financialSettings',
     table: 'financial_settings',
     query: 'SELECT * FROM financial_settings',

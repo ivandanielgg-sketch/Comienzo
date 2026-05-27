@@ -1426,6 +1426,26 @@
 
         <!-- Financial Statements View -->
         <section id="financial-view" class="hidden">
+          <!-- Re-auth Modal -->
+          <div id="fin-reauth-modal" class="modal-overlay hidden">
+            <div class="modal-content panel" style="max-width:400px">
+              <div class="panel-header">
+                <h2>Acceso a Estados Financieros</h2>
+              </div>
+              <form id="fin-reauth-form">
+                <p style="margin:1rem 0">Ingresa tu contraseña de administrador para acceder.</p>
+                <div class="form-group">
+                  <label>Contraseña admin</label>
+                  <input id="fin-reauth-password" type="password" autocomplete="current-password" required />
+                </div>
+                <p id="fin-reauth-message" style="min-height:1.2em"></p>
+                <div class="row-actions" style="margin-top:1rem">
+                  <button type="submit">Ingresar</button>
+                  <button type="button" id="fin-reauth-cancel" class="secondary">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          </div>
           <div class="ecovis-subtabs">
             <button id="fin-subtab-statement" class="secondary active" type="button">Estado de Resultados</button>
             <button id="fin-subtab-payable" class="secondary" type="button">Cuentas por Pagar</button>
@@ -1516,11 +1536,11 @@
               <form id="fin-config-form">
                 <div class="form-group">
                   <label>ISR Estimado Administrativo (%)</label>
-                  <input type="number" name="estimated_isr_rate" step="0.01" min="0" max="1" />
+                  <input type="number" name="estimated_isr_rate" step="1" min="0" max="100" />
                 </div>
                 <div class="form-group">
                   <label>Comisión IVAN (%)</label>
-                  <input type="number" name="ivan_commission_rate" step="0.01" min="0" max="1" />
+                  <input type="number" name="ivan_commission_rate" step="1" min="0" max="100" />
                 </div>
                 <div class="form-group">
                   <label>Contraseña admin (requerida para guardar)</label>
