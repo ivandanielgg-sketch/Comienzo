@@ -27,11 +27,20 @@ body {
   margin: 0;
   min-height: 100vh;
   min-height: 100dvh;
-  background: linear-gradient(135deg, #eef4ff 0%, var(--bg) 45%, #ffffff 100%);
+  background: var(--bg);
   color: var(--text);
   overflow-x: hidden;
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
+}
+
+[data-theme="default"] body,
+:root body {
+  background: linear-gradient(135deg, #eef4ff 0%, var(--bg) 45%, #ffffff 100%);
+}
+
+@media print {
+  [data-theme] { --bg: #fff; --card: #fff; --text: #000; --border: #ccc; }
 }
 
 main {

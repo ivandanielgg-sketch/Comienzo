@@ -1664,6 +1664,68 @@
             </div>
           </div>
         </div>
+        <section id="commissions-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Modulo Comisiones</p>
+                <h2>Comisiones de Vendedoras</h2>
+              </div>
+            </div>
+            <div class="cards-row" id="commissions-summary-cards"></div>
+            <h3>Vendedoras</h3>
+            <form id="agent-form" class="stack inline-form">
+              <input type="hidden" name="id" />
+              <input name="name" placeholder="Nombre vendedora" required />
+              <input name="start_date" type="date" required />
+              <button type="submit">Guardar vendedora</button>
+            </form>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Nombre</th><th>Activa</th><th>Inicio</th><th>Comisiones Devengadas</th><th>Pagado</th><th>Saldo</th><th></th></tr></thead><tbody id="agents-table"></tbody></table>
+            </div>
+            <h3>Proyectos Disponibles para Comision</h3>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Venta MXN</th><th>Costo MXN</th><th>Utilidad Bruta</th><th>Margen</th><th></th></tr></thead><tbody id="available-projects-table"></tbody></table>
+            </div>
+            <h3>Comisiones Asignadas</h3>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Vendedora</th><th>Base</th><th>%</th><th>Monto MXN</th><th>Status</th><th></th></tr></thead><tbody id="commissions-table"></tbody></table>
+            </div>
+            <h3>Pagos de Comisiones</h3>
+            <form id="commission-payment-form" class="stack inline-form">
+              <select name="sales_agent_id" required><option value="">Vendedora...</option></select>
+              <input name="payment_date" type="date" required />
+              <input name="amount_original" type="text" inputmode="decimal" placeholder="Monto" required />
+              <select name="currency"><option value="MXN">MXN</option><option value="USD">USD</option><option value="EUR">EUR</option></select>
+              <input name="reference" placeholder="Referencia" />
+              <button type="submit">Registrar pago</button>
+            </form>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Vendedora</th><th>Fecha</th><th>Monto</th><th>Moneda</th><th>Referencia</th></tr></thead><tbody id="commission-payments-table"></tbody></table>
+            </div>
+          </div>
+        </section>
+
+        <section id="activity-monitor-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Auditoria de uso</p>
+                <h2>Monitor de Actividad</h2>
+                <p class="muted">Registro de actividad de usuarios en el sistema. No es una medicion directa de productividad.</p>
+              </div>
+            </div>
+            <h3>Sesiones Activas</h3>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Usuario</th><th>Rol</th><th>Inicio Sesion</th><th>Ultima Actividad</th><th>Duracion</th><th>IP</th></tr></thead><tbody id="active-sessions-table"></tbody></table>
+            </div>
+            <h3>Reporte Semanal de Actividad</h3>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Usuario</th><th>Rol</th><th>Sesiones</th><th>Tiempo Conectado</th><th>Promedio/Dia</th><th>Ultima Actividad</th></tr></thead><tbody id="weekly-report-table"></tbody></table>
+            </div>
+          </div>
+        </section>
+
       </section>
     </main>
 

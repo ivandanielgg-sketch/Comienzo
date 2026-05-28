@@ -12,7 +12,11 @@ const MODULES = {
   users: ['view', 'create', 'edit', 'managePermissions'],
   backups: ['view', 'backup', 'import'],
   settings: ['view', 'edit'],
+  commissions: ['view', 'create', 'edit', 'delete', 'pay', 'configure'],
+  activityMonitor: ['view'],
 };
+
+const ADMIN_ONLY_MODULES = ['backups', 'users', 'activityMonitor'];
 
 const DEFAULT_PERMISSIONS = {
   admin: buildFullPermissions(),
@@ -28,6 +32,8 @@ const DEFAULT_PERMISSIONS = {
     users: [],
     backups: [],
     settings: ['view'],
+    commissions: [],
+    activityMonitor: [],
   },
   tecnico: {
     projects: [],
@@ -41,6 +47,8 @@ const DEFAULT_PERMISSIONS = {
     users: [],
     backups: [],
     settings: [],
+    commissions: [],
+    activityMonitor: [],
   },
 };
 
@@ -83,12 +91,18 @@ function saveUserPermissions(db, userId, permissions) {
   }
 }
 
+function isAdminOnlyModule(moduleName) {
+  return ADMIN_ONLY_MODULES.includes(moduleName);
+}
+
 module.exports = {
   MODULES,
   DEFAULT_PERMISSIONS,
+  ADMIN_ONLY_MODULES,
   buildFullPermissions,
   getDefaultPermissionsForRole,
   hasPermission,
   loadUserPermissions,
   saveUserPermissions,
+  isAdminOnlyModule,
 };

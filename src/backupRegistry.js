@@ -341,6 +341,9 @@ const DETECTED_ROUTES = [
   '/financial',
   '/users',
   '/admin/backup',
+  '/commissions',
+  '/activity-monitor',
+  '/preferences',
 ];
 
 const DETECTED_MODULES = [
@@ -361,6 +364,9 @@ const DETECTED_MODULES = [
   'auth',
   'backup',
   'audit',
+  'commissions',
+  'activityMonitor',
+  'preferences',
 ];
 
 function getIncludedEntities() {

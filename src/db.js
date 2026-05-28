@@ -806,6 +806,114 @@ function migrate(database) {
   ensureColumn(database, 'bank_statement_movements', 'financial_week_of_month', 'INTEGER');
 
   migrateEcovisCurrencyFields(database);
+
+  // ===================== COMMISSIONS MODULE =====================
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS sales_commission_agents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      related_user_id INTEGER,
+      active INTEGER NOT NULL DEFAULT 1,
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
+    );
+    CREATE TABLE IF NOT EXISTS sales_commissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      closed_project_id INTEGER,
+      sales_agent_id INTEGER NOT NULL,
+      commission_calculation_base_type TEXT NOT NULL CHECK (commission_calculation_base_type IN ('total_sale_mxn', 'gross_profit_mxn', 'net_profit_mxn', 'no_aplica')),
+      commission_base_mxn REAL NOT NULL DEFAULT 0,
+      total_sale_mxn_snapshot REAL,
+      gross_profit_mxn_snapshot REAL,
+      net_profit_mxn_snapshot REAL,
+      commission_percentage REAL NOT NULL DEFAULT 0,
+      commission_amount_mxn REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'parcial', 'pagada', 'no_aplica', 'cancelada')),
+      no_apply_reason TEXT,
+      notes TEXT,
+      assigned_by_user_id INTEGER,
+      assigned_by_name TEXT,
+      assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT,
+      FOREIGN KEY (project_id) REFERENCES projects(id),
+      FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_commissions_project_active ON sales_commissions (project_id) WHERE deleted_at IS NULL AND status != 'cancelada';
+    CREATE TABLE IF NOT EXISTS sales_commission_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sales_agent_id INTEGER NOT NULL,
+      payment_date TEXT NOT NULL,
+      amount_original REAL NOT NULL CHECK (amount_original > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      amount_mxn REAL NOT NULL,
+      payment_method TEXT,
+      reference TEXT,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT,
+      FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
+    );
+    CREATE TABLE IF NOT EXISTS user_session_activities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      user_name TEXT NOT NULL,
+      role TEXT,
+      session_id_hash TEXT NOT NULL,
+      login_at TEXT NOT NULL,
+      logout_at TEXT,
+      last_activity_at TEXT NOT NULL,
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+      ip_address TEXT,
+      user_agent TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_active ON user_session_activities (is_active);
+    CREATE TABLE IF NOT EXISTS user_preferences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL UNIQUE,
+      theme_name TEXT NOT NULL DEFAULT 'default',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      role TEXT NOT NULL UNIQUE,
+      permissions_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  seedRolePermissions(database);
 }
 
 function ensureColumn(database, tableName, columnName, definition) {
@@ -1109,6 +1217,18 @@ function migrateEcovisCurrencyFields(database) {
   });
 
   migrateAll();
+}
+
+function seedRolePermissions(database) {
+  const { DEFAULT_PERMISSIONS } = require('./permissions');
+  const stmt = database.prepare(
+    `INSERT INTO role_permissions (role, permissions_json)
+     VALUES (?, ?)
+     ON CONFLICT(role) DO NOTHING`,
+  );
+  for (const [role, perms] of Object.entries(DEFAULT_PERMISSIONS)) {
+    stmt.run(role, JSON.stringify(perms));
+  }
 }
 
 module.exports = {

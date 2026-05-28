@@ -18,7 +18,8 @@ const {
 const { calculateEcovisAccountSummary, calculateProjectPaidAmountMXN, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance, convertToMXN, roundMoney: roundMoneyEcovis, calculateEcovisProjectPaymentStatus } = require('./ecovis');
 const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { formatDateTimeCDMX } = require('./dateHelper');
-const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES } = require('./permissions');
+const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES, isAdminOnlyModule } = require('./permissions');
+const { registerNewModules, updateSessionActivity, closeSessionActivity } = require("./newModules");
 const { ATTENDANCE_STATUSES, VALID_STATUS_CODES, VALID_WEEK_STATUSES, DAY_COLUMNS, calculateWeekRange, calculateAttendanceSummary, generateDefaultAttendance, validateStatusCode, employeeHasOutsideWork } = require('./attendance');
 
 const app = express();
@@ -636,11 +637,14 @@ app.get('/api/session', (req, res) => {
     return res.json({ authenticated: false });
   }
 
+  try { updateSessionActivity(db, req); } catch(e) { /* non-critical */ }
+  const pref = db.prepare("SELECT theme_name FROM user_preferences WHERE user_id = ?").get(req.session.userId);
   const perms = loadUserPermissions(db, req.session.userId, req.session.role);
   return res.json({
     authenticated: true,
     user: { id: req.session.userId, username: req.session.username, role: req.session.role || 'user' },
     permissions: perms,
+    theme: pref ? pref.theme_name : "default",
   });
 });
 
@@ -696,6 +700,7 @@ app.post('/api/login', (req, res, next) => {
     req.session.username = user.username;
     req.session.role = user.role || 'user';
     logAuditEvent(db, { req, action: 'login_success', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: user.username });
+    try { updateSessionActivity(db, req); } catch(e) { /* non-critical */ }
     return res.json({ username: user.username, role: user.role || 'user' });
   } catch (error) {
     return next(error);
@@ -715,6 +720,7 @@ function recordLoginAttempt(userIdentifier, userId, ipAddress, userAgent, succes
 
 app.post('/api/logout', requireAuth, (req, res) => {
   logAuditEvent(db, { req, action: 'logout', module: 'auth', entityType: 'user', entityId: req.session.userId, entityLabel: req.session.username });
+  closeSessionActivity(db, req);
   req.session.destroy(() => {
     res.clearCookie('proyectos.sid');
     res.status(204).end();
@@ -4846,6 +4852,7 @@ app.post('/api/financial/statements/:id/reopen', requireAuth, requireAdminOnly, 
 
 // ===================== END FINANCIAL STATEMENTS MODULE =====================
 
+registerNewModules(app, db, { requireAuth, requirePermission, badRequest, requiredText, optionalText, numberValue, enumValue, currencyValue, booleanValue, trim });
 app.use((err, req, res, next) => {
   if (res.headersSent) {
     return next(err);

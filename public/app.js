@@ -58,6 +58,8 @@ function applyPermissionVisibility() {
     'ecovis-tab': canAccess('ecovisAccount', 'view'),
     'service-quoter-tab': canAccess('serviceQuoter', 'view'),
     'users-tab': canAccess('users', 'view'),
+    'commissions-tab': canAccess('commissions', 'view'),
+    'activity-monitor-tab': canAccess('activityMonitor', 'view'),
   };
 
   for (const [tabId, allowed] of Object.entries(tabs)) {
