@@ -28,3 +28,5 @@ This is a Node.js/Express project management application ("Control de Proyectos"
 - The `ecovis_payment_allocations` table uses `payment_id` (not `ecovis_payment_id`) as the foreign key to `ecovis_payments`.
 - ECOVIS project status values are `pendiente`, `parcialmente_pagado`, `pagado`, `cancelado` (note: `parcialmente_pagado`, not `parcial`).
 - The `ecovis_movements.description` column is `NOT NULL`; always provide a description when inserting movements.
+- Integration tests (e.g. `attendance.test.js`, `ecovis-currency.test.js`, `financial-integration.test.js`) require the server running on port 3000 (`npm start`) before executing `npm test`. Without the server, those tests fail with `ECONNREFUSED` but unit tests still pass.
+- There is one pre-existing test failure (`backup import preview handles attendance entities` — 413 payload too large); this is not caused by environment setup.
