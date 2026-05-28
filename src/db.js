@@ -394,6 +394,13 @@ function migrate(database) {
   ensureColumn(database, 'users', 'mfa_secret', 'TEXT');
   ensureColumn(database, 'users', 'mfa_verified_at', 'TEXT');
 
+  // Project credit/invoice fields for accounts receivable
+  ensureColumn(database, 'projects', 'credit_days', 'INTEGER');
+  ensureColumn(database, 'projects', 'credit_days_na', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'projects', 'invoice_date', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_date_na', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'projects', 'due_date', 'TEXT');
+
   // Create audit_logs table
   database.exec(`
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -750,10 +757,53 @@ function migrate(database) {
       deleted_by_name TEXT,
       delete_reason TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS accounts_payable_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      accounts_payable_id INTEGER NOT NULL,
+      payment_date TEXT NOT NULL,
+      amount_original REAL NOT NULL CHECK (amount_original > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      amount_mxn REAL NOT NULL,
+      payment_method TEXT,
+      bank_movement_id INTEGER,
+      reference TEXT,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (accounts_payable_id) REFERENCES accounts_payable(id),
+      FOREIGN KEY (bank_movement_id) REFERENCES bank_statement_movements(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS financial_project_omissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      project_id INTEGER NOT NULL,
+      omit INTEGER NOT NULL DEFAULT 1,
+      reason TEXT NOT NULL,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_fin_project_omission_unique
+      ON financial_project_omissions (year, month, project_id);
   `);
 
   seedServiceTypes(database);
   seedServiceQuoteSettings(database);
+
+  // Bank movement week of month (after financial tables created)
+  ensureColumn(database, 'bank_statement_movements', 'financial_week_of_month', 'INTEGER');
 
   migrateEcovisCurrencyFields(database);
 }

@@ -4138,7 +4138,7 @@ app.get('/api/admin/audit-logs', requireAuth, requirePermission('backups', 'view
 
 // ===================== FINANCIAL STATEMENTS MODULE =====================
 
-const { calculateFinancialStatement, AP_CATEGORIES, CLASSIFICATION_TYPES, ADJUSTMENT_TYPES, roundMoney: roundMoneyFin } = require('./financial');
+const { calculateFinancialStatement, AP_CATEGORIES, CLASSIFICATION_TYPES, ADJUSTMENT_TYPES, roundMoney: roundMoneyFin, getFinancialWeekOfMonth } = require('./financial');
 
 function requireAdminOnly(req, res, next) {
   if (!req.session || !req.session.userId) {
@@ -4150,6 +4150,29 @@ function requireAdminOnly(req, res, next) {
   }
   return next();
 }
+
+// --- Admin Re-authentication ---
+
+app.post('/api/financial/admin-reauth', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const { password } = req.body;
+    if (!password) throw badRequest('Contrasena requerida.');
+    const admin = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'admin' AND is_active = 1").get(req.session.userId);
+    if (!admin || !bcrypt.compareSync(password, admin.password_hash)) {
+      logAuditEvent(db, { req, action: 'financial_reauth_failed', module: 'financial' });
+      throw badRequest('Contrasena incorrecta o acceso no autorizado.');
+    }
+    req.session.financialReauthAt = Date.now();
+    logAuditEvent(db, { req, action: 'financial_reauth_success', module: 'financial' });
+    res.json({ success: true, expires_in_ms: 15 * 60 * 1000 });
+  } catch (error) { next(error); }
+});
+
+app.get('/api/financial/reauth-status', requireAuth, requireAdminOnly, (req, res) => {
+  const reauthAt = req.session.financialReauthAt || 0;
+  const isValid = Date.now() - reauthAt < 15 * 60 * 1000;
+  res.json({ authenticated: isValid });
+});
 
 // --- Financial Settings ---
 
@@ -4282,6 +4305,95 @@ app.post('/api/financial/accounts-payable/:id/cancel', requireAuth, requireAdmin
       .run(audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, reason, audit.updated_at, req.params.id);
     logAuditEvent(db, { req, action: 'cancel', module: 'financial', entityType: 'accounts_payable', entityId: Number(req.params.id), entityLabel: `${ap.supplier_name} - ${ap.invoice_number}`, metadata: { reason } });
     res.json(db.prepare('SELECT * FROM accounts_payable WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+// --- Accounts Payable Payments ---
+
+app.get('/api/financial/accounts-payable/:id/payments', requireAuth, requireAdminOnly, (req, res) => {
+  const payments = db.prepare('SELECT * FROM accounts_payable_payments WHERE accounts_payable_id = ? ORDER BY payment_date DESC').all(req.params.id);
+  const totalPaid = roundMoneyFin(payments.reduce((s, p) => s + Number(p.amount_mxn || 0), 0));
+  res.json({ data: payments, total_paid_mxn: totalPaid });
+});
+
+app.post('/api/financial/accounts-payable/:id/payments', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const ap = db.prepare('SELECT * FROM accounts_payable WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!ap) throw badRequest('Cuenta por pagar no encontrada.');
+
+    const paymentDate = requiredText(req.body, 'payment_date', 'Fecha de pago');
+    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const paymentMethod = optionalText(req.body, 'payment_method');
+    const bankMovementId = req.body.bank_movement_id || null;
+    const reference = optionalText(req.body, 'reference');
+    const notes = optionalText(req.body, 'notes');
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+
+    const audit = createdByFields(req);
+    const result = db.prepare(
+      `INSERT INTO accounts_payable_payments (accounts_payable_id, payment_date, amount_original, currency, exchange_rate_to_mxn, amount_mxn, payment_method, bank_movement_id, reference, notes, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(ap.id, paymentDate, amountOriginal, currency, exchangeRate, amountMxn, paymentMethod, bankMovementId, reference, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+
+    // Recalculate AP status
+    const allPayments = db.prepare('SELECT * FROM accounts_payable_payments WHERE accounts_payable_id = ?').all(ap.id);
+    const totalPaidMxn = roundMoneyFin(allPayments.reduce((s, p) => s + Number(p.amount_mxn || 0), 0));
+    let newStatus = 'pendiente';
+    if (totalPaidMxn >= Number(ap.amount_mxn) - 0.01) newStatus = 'pagada';
+    else if (totalPaidMxn > 0) newStatus = 'parcial';
+    const paidAt = newStatus === 'pagada' ? paymentDate : null;
+    db.prepare('UPDATE accounts_payable SET status = ?, paid_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newStatus, paidAt, ap.id);
+
+    logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'accounts_payable_payment', entityId: result.lastInsertRowid, entityLabel: `Pago a ${ap.supplier_name}` });
+    res.status(201).json(db.prepare('SELECT * FROM accounts_payable_payments WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) { next(error); }
+});
+
+// --- Project Omissions ---
+
+app.get('/api/financial/project-omissions', requireAuth, requireAdminOnly, (req, res) => {
+  const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+  const month = req.query.month ? Number(req.query.month) : new Date().getMonth() + 1;
+  const omissions = db.prepare('SELECT * FROM financial_project_omissions WHERE year = ? AND month = ?').all(year, month);
+  res.json({ data: omissions });
+});
+
+app.post('/api/financial/project-omissions', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
+    const projectId = numberValue(req.body, 'project_id', 'Proyecto', { min: 1 });
+    const reason = requiredText(req.body, 'reason', 'Motivo de omision');
+
+    const audit = createdByFields(req);
+    const existing = db.prepare('SELECT id FROM financial_project_omissions WHERE year = ? AND month = ? AND project_id = ?').get(year, month, projectId);
+    if (existing) {
+      db.prepare('UPDATE financial_project_omissions SET omit = 1, reason = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?')
+        .run(reason, audit.created_by_user_id, audit.created_by_name, audit.created_at, existing.id);
+      logAuditEvent(db, { req, action: 'update', module: 'financial', entityType: 'financial_project_omission', entityId: existing.id, metadata: { project_id: projectId, reason } });
+      res.json(db.prepare('SELECT * FROM financial_project_omissions WHERE id = ?').get(existing.id));
+    } else {
+      const result = db.prepare(
+        `INSERT INTO financial_project_omissions (year, month, project_id, omit, reason, created_by_user_id, created_by_name, created_at, updated_at)
+         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+      ).run(year, month, projectId, reason, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+      logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'financial_project_omission', entityId: result.lastInsertRowid, metadata: { project_id: projectId, reason } });
+      res.status(201).json(db.prepare('SELECT * FROM financial_project_omissions WHERE id = ?').get(result.lastInsertRowid));
+    }
+  } catch (error) { next(error); }
+});
+
+app.delete('/api/financial/project-omissions/:id', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const omission = db.prepare('SELECT * FROM financial_project_omissions WHERE id = ?').get(req.params.id);
+    if (!omission) throw badRequest('Omision no encontrada.');
+    db.prepare('DELETE FROM financial_project_omissions WHERE id = ?').run(req.params.id);
+    logAuditEvent(db, { req, action: 'delete', module: 'financial', entityType: 'financial_project_omission', entityId: Number(req.params.id), metadata: { project_id: omission.project_id } });
+    res.json({ success: true });
   } catch (error) { next(error); }
 });
 
@@ -4514,9 +4626,9 @@ app.put('/api/financial/bank-movements/:id/classify', requireAuth, requireAdminO
 // --- Accounts Receivable (from projects) ---
 
 app.get('/api/financial/accounts-receivable', requireAuth, requireAdminOnly, (req, res) => {
-  const exchangeRates = getExchangeRates();
   const rateMap = getExchangeRateMap();
   const projects = db.prepare("SELECT * FROM projects WHERE closed_at IS NULL AND deleted_at IS NULL").all();
+  const today = new Date();
   const data = [];
   for (const p of projects) {
     const payments = db.prepare('SELECT * FROM project_payments WHERE project_id = ?').all(p.id);
@@ -4527,8 +4639,21 @@ app.get('/api/financial/accounts-receivable', requireAuth, requireAdminOnly, (re
     const invoicedMxn = Number(p.total_invoiced || 0) * (rateMap[p.total_invoiced_currency || 'MXN'] || 1);
     const pendingMxn = roundMoneyFin(invoicedMxn - totalCharged);
     if (pendingMxn > 0.01) {
-      const projectDate = p.promised_delivery_date || p.created_at;
-      const daysOverdue = projectDate ? Math.max(0, Math.floor((Date.now() - new Date(projectDate).getTime()) / 86400000)) : 0;
+      const creditDays = p.credit_days_na ? null : (p.credit_days || null);
+      const invoiceDate = p.invoice_date_na ? null : (p.invoice_date || null);
+      let dueDate = p.due_date || null;
+      if (!dueDate && invoiceDate && creditDays) {
+        const d = new Date(invoiceDate + 'T12:00:00');
+        d.setDate(d.getDate() + creditDays);
+        dueDate = d.toISOString().split('T')[0];
+      }
+      let daysOverdue = 0;
+      let status_color = 'gray';
+      if (dueDate) {
+        const due = new Date(dueDate + 'T23:59:59');
+        daysOverdue = Math.max(0, Math.floor((today.getTime() - due.getTime()) / 86400000));
+        status_color = daysOverdue > 0 ? 'red' : 'green';
+      }
       data.push({
         project_id: p.id,
         client_name: p.client_name,
@@ -4541,18 +4666,25 @@ app.get('/api/financial/accounts-receivable', requireAuth, requireAdminOnly, (re
         total_invoiced_currency: p.total_invoiced_currency || 'MXN',
         total_charged_mxn: roundMoneyFin(totalCharged),
         pending_mxn: pendingMxn,
+        credit_days: creditDays,
+        credit_days_na: !!p.credit_days_na,
+        invoice_date: invoiceDate,
+        invoice_date_na: !!p.invoice_date_na,
+        due_date: dueDate,
         days_overdue: daysOverdue,
+        status_color,
       });
     }
   }
   const totalMxn = roundMoneyFin(data.reduce((s, r) => s + r.pending_mxn, 0));
-  const current = roundMoneyFin(data.filter((r) => r.days_overdue <= 0).reduce((s, r) => s + r.pending_mxn, 0));
+  const notOverdue = roundMoneyFin(data.filter((r) => r.status_color === 'green' || r.status_color === 'gray').reduce((s, r) => s + r.pending_mxn, 0));
+  const overdue = roundMoneyFin(data.filter((r) => r.status_color === 'red').reduce((s, r) => s + r.pending_mxn, 0));
   const d1_30 = roundMoneyFin(data.filter((r) => r.days_overdue >= 1 && r.days_overdue <= 30).reduce((s, r) => s + r.pending_mxn, 0));
   const d31_60 = roundMoneyFin(data.filter((r) => r.days_overdue >= 31 && r.days_overdue <= 60).reduce((s, r) => s + r.pending_mxn, 0));
   const d61_90 = roundMoneyFin(data.filter((r) => r.days_overdue >= 61 && r.days_overdue <= 90).reduce((s, r) => s + r.pending_mxn, 0));
   const d90plus = roundMoneyFin(data.filter((r) => r.days_overdue > 90).reduce((s, r) => s + r.pending_mxn, 0));
 
-  res.json({ data, summary: { total_mxn: totalMxn, current, d1_30, d31_60, d61_90, d90plus } });
+  res.json({ data, summary: { total_mxn: totalMxn, not_overdue: notOverdue, overdue, d1_30, d31_60, d61_90, d90plus } });
 });
 
 // --- Financial Statement Generation ---
@@ -4578,6 +4710,10 @@ app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (r
     // Gather data for the month
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const nextMonth = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+
+    // Project omissions
+    const omissions = db.prepare('SELECT project_id FROM financial_project_omissions WHERE year = ? AND month = ? AND omit = 1').all(year, month);
+    const omittedProjectIds = omissions.map((o) => o.project_id);
 
     const projects = db.prepare("SELECT * FROM projects WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL").all(monthStart, nextMonth);
     const projectsWithMxn = projects.map((p) => ({
@@ -4619,6 +4755,7 @@ app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (r
       manualPayroll,
       adjustments,
       accountsReceivable,
+      omittedProjectIds,
     };
 
     const result = calculateFinancialStatement(calcData, settings);

@@ -4696,19 +4696,25 @@ async function loadFinReceivable() {
     const result = await api('/api/financial/accounts-receivable');
     const container = document.getElementById('fin-ar-list');
     let html = '<div class="ecovis-cards">';
-    html += `<div class="ecovis-card"><div class="ecovis-card-label">Total CxC MXN</div><div class="ecovis-card-value">${money.format(result.summary.total_mxn)}</div></div>`;
-    html += `<div class="ecovis-card"><div class="ecovis-card-label">Corriente</div><div class="ecovis-card-value">${money.format(result.summary.current)}</div></div>`;
+    html += `<div class="ecovis-card"><div class="ecovis-card-label">Total CxC</div><div class="ecovis-card-value">${money.format(result.summary.total_mxn)}</div></div>`;
+    html += `<div class="ecovis-card" style="border-left:3px solid #4caf50"><div class="ecovis-card-label">No vencido</div><div class="ecovis-card-value">${money.format(result.summary.not_overdue || 0)}</div></div>`;
+    html += `<div class="ecovis-card" style="border-left:3px solid #f44336"><div class="ecovis-card-label">Vencido</div><div class="ecovis-card-value">${money.format(result.summary.overdue || 0)}</div></div>`;
     html += `<div class="ecovis-card"><div class="ecovis-card-label">1-30 días</div><div class="ecovis-card-value">${money.format(result.summary.d1_30)}</div></div>`;
     html += `<div class="ecovis-card"><div class="ecovis-card-label">31-60 días</div><div class="ecovis-card-value">${money.format(result.summary.d31_60)}</div></div>`;
     html += `<div class="ecovis-card"><div class="ecovis-card-label">61-90 días</div><div class="ecovis-card-value">${money.format(result.summary.d61_90)}</div></div>`;
     html += `<div class="ecovis-card"><div class="ecovis-card-label">>90 días</div><div class="ecovis-card-value">${money.format(result.summary.d90plus)}</div></div>`;
     html += '</div>';
     if (result.data.length > 0) {
-      html += '<table class="data-table"><thead><tr><th>Cliente</th><th>Proyecto</th><th>Cotización</th><th>Facturado</th><th>Cobrado MXN</th><th>Pendiente MXN</th><th>Días</th></tr></thead><tbody>';
+      html += '<table class="data-table"><thead><tr><th>Cliente</th><th>Proyecto</th><th>Facturado</th><th>Cobrado</th><th>Pendiente MXN</th><th>Días crédito</th><th>Vencimiento</th><th>Días vencido</th><th>Estado</th></tr></thead><tbody>';
       result.data.forEach((ar) => {
-        html += `<tr><td>${escapeHtml(ar.client_name || '')}</td><td>${escapeHtml(ar.project_description || '')}</td><td>${escapeHtml(ar.quote_number || '')}</td><td>${money.format(ar.total_invoiced)} ${escapeHtml(ar.total_invoiced_currency)}</td><td>${money.format(ar.total_charged_mxn)}</td><td>${money.format(ar.pending_mxn)}</td><td>${ar.days_overdue}</td></tr>`;
+        const colorStyle = ar.status_color === 'red' ? 'color:#f44336;font-weight:bold' : ar.status_color === 'green' ? 'color:#4caf50' : 'color:#9e9e9e';
+        const dot = ar.status_color === 'red' ? '🔴' : ar.status_color === 'green' ? '🟢' : '⚪';
+        const dueDisplay = ar.due_date || (ar.credit_days_na || ar.invoice_date_na ? 'N/A' : '-');
+        html += `<tr><td>${escapeHtml(ar.client_name || '')}</td><td>${escapeHtml(ar.project_description || '')}</td><td>${money.format(ar.total_invoiced)} ${escapeHtml(ar.total_invoiced_currency)}</td><td>${money.format(ar.total_charged_mxn)}</td><td style="${colorStyle}">${money.format(ar.pending_mxn)}</td><td>${ar.credit_days != null ? ar.credit_days : 'N/A'}</td><td>${escapeHtml(dueDisplay)}</td><td>${ar.days_overdue || 0}</td><td>${dot}</td></tr>`;
       });
       html += '</tbody></table>';
+    } else {
+      html += '<p class="empty-message">No hay cuentas por cobrar pendientes.</p>';
     }
     container.innerHTML = html;
   } catch (e) { console.error(e); }
@@ -4787,20 +4793,64 @@ async function loadFinConfig() {
   try {
     const settings = await api('/api/financial/settings');
     const form = document.getElementById('fin-config-form');
-    form.elements.estimated_isr_rate.value = settings.estimated_isr_rate;
-    form.elements.ivan_commission_rate.value = settings.ivan_commission_rate;
+    form.elements.estimated_isr_rate.value = Math.round(settings.estimated_isr_rate * 100);
+    form.elements.ivan_commission_rate.value = Math.round(settings.ivan_commission_rate * 100);
   } catch (e) { console.error(e); }
 }
 
 if (financialTab) {
-  financialTab.addEventListener('click', () => {
+  financialTab.addEventListener('click', async () => {
     if (state.userRole !== 'admin') {
       window.alert('Acceso restringido. Solo el administrador puede consultar Estados Financieros.');
       return;
     }
-    switchView('financial');
-    switchFinSubtab('statement');
-    initFinYearSelector();
+    // Check re-auth status
+    try {
+      const status = await api('/api/financial/reauth-status');
+      if (status.authenticated) {
+        switchView('financial');
+        switchFinSubtab('statement');
+        initFinYearSelector();
+        return;
+      }
+    } catch (e) { /* need reauth */ }
+    // Show re-auth modal
+    const modal = document.getElementById('fin-reauth-modal');
+    if (modal) {
+      modal.classList.remove('hidden');
+      const input = document.getElementById('fin-reauth-password');
+      if (input) { input.value = ''; input.focus(); }
+    }
+  });
+}
+
+if (document.getElementById('fin-reauth-form')) {
+  document.getElementById('fin-reauth-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('fin-reauth-password');
+    const msg = document.getElementById('fin-reauth-message');
+    const password = input.value;
+    if (!password) { msg.textContent = 'Ingresa tu contraseña.'; return; }
+    try {
+      await api('/api/financial/admin-reauth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+      input.value = '';
+      msg.textContent = '';
+      document.getElementById('fin-reauth-modal').classList.add('hidden');
+      switchView('financial');
+      switchFinSubtab('statement');
+      initFinYearSelector();
+    } catch (err) {
+      msg.textContent = err.message || 'Contrasena incorrecta o acceso no autorizado.';
+      msg.style.color = 'red';
+      input.value = '';
+    }
+  });
+}
+
+if (document.getElementById('fin-reauth-cancel')) {
+  document.getElementById('fin-reauth-cancel').addEventListener('click', () => {
+    document.getElementById('fin-reauth-modal').classList.add('hidden');
+    document.getElementById('fin-reauth-password').value = '';
   });
 }
 
@@ -4818,8 +4868,8 @@ if (document.getElementById('fin-config-form')) {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          estimated_isr_rate: Number(form.elements.estimated_isr_rate.value),
-          ivan_commission_rate: Number(form.elements.ivan_commission_rate.value),
+          estimated_isr_rate: Number(form.elements.estimated_isr_rate.value) / 100,
+          ivan_commission_rate: Number(form.elements.ivan_commission_rate.value) / 100,
           admin_password: form.elements.admin_password.value,
         }),
       });
