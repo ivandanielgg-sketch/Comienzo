@@ -3195,6 +3195,10 @@ function applyRoleVisibility() {
   const backupImportBtn = document.getElementById('backup-import-btn');
   if (backupCreateBtn) backupCreateBtn.classList.toggle('hidden', !canAccess('backups', 'backup'));
   if (backupImportBtn) backupImportBtn.classList.toggle('hidden', !canAccess('backups', 'import'));
+  var comTab = document.getElementById("commissions-tab");
+  if (comTab) comTab.classList.toggle("hidden", !canAccess("commissions", "view"));
+  var amTab = document.getElementById("activity-monitor-tab");
+  if (amTab) amTab.classList.toggle("hidden", !canAccess("activityMonitor", "view"));
   const exchangePanel = document.querySelector('.exchange-panel');
   if (exchangePanel) exchangePanel.classList.toggle('hidden', !canAccess('settings', 'view'));
 }
