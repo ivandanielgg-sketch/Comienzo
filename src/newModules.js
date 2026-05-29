@@ -231,6 +231,22 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
     } catch (error) { next(error); }
   });
 
+  app.get('/api/activity-monitor/recent-sessions', requireAuth, requirePermission('activityMonitor', 'view'), (req, res, next) => {
+    try {
+      if (req.session.role !== 'admin') return res.status(403).json({ message: 'Solo admin puede ver el monitor.' });
+      const sessions = db.prepare('SELECT * FROM user_session_activities ORDER BY login_at DESC LIMIT 50').all();
+      res.json({ data: sessions });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/activity-monitor/recent-events', requireAuth, requirePermission('activityMonitor', 'view'), (req, res, next) => {
+    try {
+      if (req.session.role !== 'admin') return res.status(403).json({ message: 'Solo admin puede ver el monitor.' });
+      const events = db.prepare('SELECT id, user_id, user_name, action, module, entity_type, entity_id, entity_label, timestamp_utc, metadata_json FROM audit_logs ORDER BY id DESC LIMIT 50').all();
+      res.json({ data: events });
+    } catch (error) { next(error); }
+  });
+
   // ===================== SKINS / USER PREFERENCES =====================
 
   const VALID_THEMES = ['default', 'dark', 'corporate', 'high_contrast'];
