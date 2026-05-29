@@ -1718,17 +1718,28 @@
                 <p class="muted">Registro de actividad de usuarios en el sistema. No es una medicion directa de productividad.</p>
               </div>
             </div>
-            <h3>Sesiones Activas</h3>
-            <div class="table-wrapper">
-              <table><thead><tr><th>Usuario</th><th>Rol</th><th>Inicio Sesion</th><th>Ultima Actividad</th><th>Duracion</th><th>IP</th></tr></thead><tbody id="active-sessions-table"></tbody></table>
-            </div>
-            <h3>Reporte Semanal de Actividad</h3>
-            <div class="table-wrapper">
-              <table><thead><tr><th>Usuario</th><th>Rol</th><th>Sesiones</th><th>Tiempo Conectado</th><th>Promedio/Dia</th><th>Ultima Actividad</th></tr></thead><tbody id="weekly-report-table"></tbody></table>
+            <div id="activity-monitor-loading" class="muted" style="padding:16px;">Cargando monitor de actividad...</div>
+            <div id="activity-monitor-error" class="hidden" style="padding:16px;color:var(--danger);"></div>
+            <div id="activity-monitor-content" class="hidden">
+              <h3>Usuarios Conectados Actualmente</h3>
+              <div class="table-wrapper">
+                <table><thead><tr><th>Usuario</th><th>Rol</th><th>Inicio Sesion</th><th>Ultima Actividad</th><th>Duracion</th><th>IP</th></tr></thead><tbody id="active-sessions-table"></tbody></table>
+              </div>
+              <h3>Ultimas Sesiones</h3>
+              <div class="table-wrapper">
+                <table><thead><tr><th>Usuario</th><th>Rol</th><th>Inicio</th><th>Fin</th><th>Duracion</th><th>IP</th></tr></thead><tbody id="recent-sessions-table"></tbody></table>
+              </div>
+              <h3>Reporte Semanal de Actividad</h3>
+              <div class="table-wrapper">
+                <table><thead><tr><th>Usuario</th><th>Rol</th><th>Sesiones</th><th>Tiempo Conectado</th><th>Promedio/Dia</th><th>Ultima Actividad</th></tr></thead><tbody id="weekly-report-table"></tbody></table>
+              </div>
+              <h3>Eventos Recientes</h3>
+              <div class="table-wrapper">
+                <table><thead><tr><th>Fecha/Hora</th><th>Usuario</th><th>Accion</th><th>Modulo</th><th>Detalle</th></tr></thead><tbody id="recent-events-table"></tbody></table>
+              </div>
             </div>
           </div>
         </section>
-
       </section>
     </main>
 

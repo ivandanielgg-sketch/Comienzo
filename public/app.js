@@ -683,6 +683,8 @@ function switchView(viewName) {
     ecovis: ['ecovisAccount', 'view'],
     'service-quoter': ['serviceQuoter', 'view'],
     users: ['users', 'view'],
+    commissions: ['commissions', 'view'],
+    'activity-monitor': ['activityMonitor', 'view'],
   };
   const perm = viewPermMap[viewName];
   if (perm && !canAccess(perm[0], perm[1])) {
@@ -702,6 +704,8 @@ function switchView(viewName) {
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
+  const showingCommissions = viewName === "commissions";
+  const showingActivityMonitor = viewName === "activity-monitor";
   if (vacationsView) vacationsView.classList.toggle('hidden', !showingVacations);
   if (attendanceView) attendanceView.classList.toggle('hidden', !showingAttendance);
   if (reportsView) reportsView.classList.toggle('hidden', !showingReports);
@@ -712,6 +716,10 @@ function switchView(viewName) {
   if (sqView) sqView.classList.toggle('hidden', !showingServiceQuoter);
   const finView = document.getElementById('financial-view');
   if (finView) finView.classList.toggle('hidden', !showingFinancial);
+  var comView2 = document.getElementById("commissions-view");
+  if (comView2) comView2.classList.toggle("hidden", !showingCommissions);
+  var amView2 = document.getElementById("activity-monitor-view");
+  if (amView2) amView2.classList.toggle("hidden", !showingActivityMonitor);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
@@ -723,6 +731,10 @@ function switchView(viewName) {
   if (archiveTab) archiveTab.classList.toggle('active', showingArchive);
   const sqTab = document.getElementById('service-quoter-tab');
   if (sqTab) sqTab.classList.toggle('active', showingServiceQuoter);
+  var comTabA = document.getElementById("commissions-tab");
+  if (comTabA) comTabA.classList.toggle("active", showingCommissions);
+  var amTabA = document.getElementById("activity-monitor-tab");
+  if (amTabA) amTabA.classList.toggle("active", showingActivityMonitor);
   if (showingServiceQuoter) initServiceQuoter();
 }
 
@@ -5068,34 +5080,66 @@ if (activityMonitorTab) {
 }
 
 async function loadActivityMonitor() {
-  if (!activityMonitorView) return;
+  var loadingEl = document.getElementById("activity-monitor-loading");
+  var errorEl = document.getElementById("activity-monitor-error");
+  var contentEl = document.getElementById("activity-monitor-content");
+  if (loadingEl) loadingEl.classList.remove("hidden");
+  if (errorEl) errorEl.classList.add("hidden");
+  if (contentEl) contentEl.classList.add("hidden");
   try {
-    var sessions = await api('/api/activity-monitor/sessions');
-    var report = await api('/api/activity-monitor/weekly-report');
-    renderActiveSessions(sessions);
-    renderWeeklyReport(report);
-  } catch (e) { console.error('Error loading activity monitor:', e); }
+    var results = await Promise.all([
+      api("/api/activity-monitor/sessions"),
+      api("/api/activity-monitor/recent-sessions"),
+      api("/api/activity-monitor/weekly-report"),
+      api("/api/activity-monitor/recent-events"),
+    ]);
+    renderActiveSessions(results[0]);
+    renderRecentSessions((results[1] && results[1].data) || []);
+    renderWeeklyReport(results[2]);
+    renderRecentEvents((results[3] && results[3].data) || []);
+    if (loadingEl) loadingEl.classList.add("hidden");
+    if (contentEl) contentEl.classList.remove("hidden");
+  } catch (e) {
+    if (loadingEl) loadingEl.classList.add("hidden");
+    if (errorEl) { errorEl.textContent = "No se pudo cargar el Monitor de Actividad: " + e.message; errorEl.classList.remove("hidden"); }
+  }
 }
-
 function formatDuration(seconds) {
-  if (!seconds) return '0m';
+  if (!seconds || seconds <= 0) return "0m";
   var h = Math.floor(seconds / 3600);
   var m = Math.floor((seconds % 3600) / 60);
-  return h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+  return h > 0 ? h + "h " + m + "m" : m + "m";
 }
-
 function renderActiveSessions(sessions) {
-  var el = document.getElementById('active-sessions-table');
+  var el = document.getElementById("active-sessions-table");
   if (!el) return;
+  if (!sessions || sessions.length === 0) { el.innerHTML = '<tr><td colspan="6" class="muted">No hay usuarios conectados actualmente.</td></tr>'; return; }
   el.innerHTML = sessions.map(function(s) {
-    return '<tr><td>' + escapeHtml(s.user_name) + '</td><td>' + (s.role || '') + '</td><td>' + formatDateTimeCDMX(s.login_at) + '</td><td>' + formatDateTimeCDMX(s.last_activity_at) + '</td><td>' + formatDuration(s.duration_seconds) + '</td><td>' + escapeHtml(s.ip_address || '') + '</td></tr>';
-  }).join('') || '<tr><td colspan="6" class="muted">Sin sesiones activas.</td></tr>';
+    return '<tr><td>' + escapeHtml(s.user_name) + '</td><td>' + escapeHtml(s.role || '') + '</td><td>' + formatDateTimeCDMX(s.login_at) + '</td><td>' + formatDateTimeCDMX(s.last_activity_at) + '</td><td>' + formatDuration(s.duration_seconds) + '</td><td>' + escapeHtml(s.ip_address || '') + '</td></tr>';
+  }).join("");
 }
-
-function renderWeeklyReport(report) {
-  var el = document.getElementById('weekly-report-table');
+function renderRecentSessions(sessions) {
+  var el = document.getElementById("recent-sessions-table");
   if (!el) return;
-  el.innerHTML = (report.users || []).map(function(u) {
-    return '<tr><td>' + escapeHtml(u.user_name) + '</td><td>' + (u.role || '') + '</td><td>' + u.total_sessions + '</td><td>' + formatDuration(u.total_seconds) + '</td><td>' + formatDuration(u.avg_per_day) + '</td><td>' + formatDateTimeCDMX(u.last_activity) + '</td></tr>';
-  }).join('') || '<tr><td colspan="6" class="muted">Sin actividad.</td></tr>';
+  if (!sessions || sessions.length === 0) { el.innerHTML = '<tr><td colspan="6" class="muted">No hay sesiones registradas todavia.</td></tr>'; return; }
+  el.innerHTML = sessions.map(function(s) {
+    return '<tr><td>' + escapeHtml(s.user_name) + '</td><td>' + escapeHtml(s.role || '') + '</td><td>' + formatDateTimeCDMX(s.login_at) + '</td><td>' + (s.logout_at ? formatDateTimeCDMX(s.logout_at) : '<em>Activa</em>') + '</td><td>' + formatDuration(s.duration_seconds) + '</td><td>' + escapeHtml(s.ip_address || '') + '</td></tr>';
+  }).join("");
+}
+function renderWeeklyReport(report) {
+  var el = document.getElementById("weekly-report-table");
+  if (!el) return;
+  var users = (report && report.users) || [];
+  if (users.length === 0) { el.innerHTML = '<tr><td colspan="6" class="muted">No hay actividad registrada para esta semana.</td></tr>'; return; }
+  el.innerHTML = users.map(function(u) {
+    return '<tr><td>' + escapeHtml(u.user_name) + '</td><td>' + escapeHtml(u.role || '') + '</td><td>' + (u.total_sessions || 0) + '</td><td>' + formatDuration(u.total_seconds) + '</td><td>' + formatDuration(u.avg_per_day) + '</td><td>' + formatDateTimeCDMX(u.last_activity) + '</td></tr>';
+  }).join("");
+}
+function renderRecentEvents(events) {
+  var el = document.getElementById("recent-events-table");
+  if (!el) return;
+  if (!events || events.length === 0) { el.innerHTML = '<tr><td colspan="5" class="muted">No hay eventos recientes.</td></tr>'; return; }
+  el.innerHTML = events.map(function(ev) {
+    return '<tr><td>' + formatDateTimeCDMX(ev.timestamp_utc) + '</td><td>' + escapeHtml(ev.user_name || '') + '</td><td>' + escapeHtml(ev.action || '') + '</td><td>' + escapeHtml(ev.module || '') + '</td><td>' + escapeHtml(ev.entity_label || ev.entity_type || '') + '</td></tr>';
+  }).join("");
 }
