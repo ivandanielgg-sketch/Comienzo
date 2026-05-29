@@ -48,9 +48,12 @@
             <button id="ecovis-tab" class="secondary hidden" type="button">Cuenta ECOVIS</button>
             <button id="service-quoter-tab" class="secondary hidden" type="button">Cotizador</button>
             <button id="financial-tab" class="secondary hidden" type="button">Estados Financieros</button>
+            <button id="commissions-tab" class="secondary hidden" type="button">Comisiones</button>
+            <button id="activity-monitor-tab" class="secondary hidden" type="button">Monitor Actividad</button>
             <button id="backup-create-btn" class="secondary hidden" type="button">Crear respaldo</button>
             <button id="backup-import-btn" class="secondary hidden" type="button">Importar respaldo</button>
             <button id="users-tab" class="secondary" type="button">Usuarios</button>
+            <select id="theme-selector" title="Tema visual" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:0.85rem;"><option value="default">Azul REVRAM</option><option value="dark">Modo Oscuro</option><option value="corporate">Gris Corporativo</option><option value="high_contrast">Alto Contraste</option></select>
             <button id="logout-button" class="secondary" type="button">Cerrar sesion</button>
           </div>
         </header>
@@ -1664,6 +1667,108 @@
             </div>
           </div>
         </div>
+        <section id="commissions-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Modulo Comisiones</p>
+                <h2>Comisiones de Vendedoras</h2>
+              </div>
+            </div>
+            <div class="cards-row" id="commissions-summary-cards"></div>
+            <h3>Vendedoras</h3>
+            <form id="agent-form" class="stack inline-form">
+              <input type="hidden" name="id" />
+              <input name="name" placeholder="Nombre vendedora" required />
+              <input name="start_date" type="date" required />
+              <button type="submit">Guardar vendedora</button>
+            </form>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Nombre</th><th>Activa</th><th>Inicio</th><th>Comisiones Devengadas</th><th>Pagado</th><th>Saldo</th><th></th></tr></thead><tbody id="agents-table"></tbody></table>
+            </div>
+            <h3>Proyectos Disponibles para Comision</h3>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Venta MXN</th><th>Costo MXN</th><th>Utilidad Bruta</th><th>Margen</th><th></th></tr></thead><tbody id="available-projects-table"></tbody></table>
+            </div>
+            <h3>Comisiones Asignadas</h3>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Vendedora</th><th>Base</th><th>%</th><th>Monto MXN</th><th>Status</th><th></th></tr></thead><tbody id="commissions-table"></tbody></table>
+            </div>
+            <h3>Pagos de Comisiones</h3>
+            <form id="commission-payment-form" class="stack inline-form">
+              <select name="sales_agent_id" required><option value="">Vendedora...</option></select>
+              <input name="payment_date" type="date" required />
+              <input name="amount_original" type="text" inputmode="decimal" placeholder="Monto" required />
+              <select name="currency"><option value="MXN">MXN</option><option value="USD">USD</option><option value="EUR">EUR</option></select>
+              <input name="reference" placeholder="Referencia" />
+              <button type="submit">Registrar pago</button>
+            </form>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Vendedora</th><th>Fecha</th><th>Monto</th><th>Moneda</th><th>Referencia</th></tr></thead><tbody id="commission-payments-table"></tbody></table>
+            </div>
+          </div>
+        </section>
+
+        <section id="activity-monitor-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Auditoria de uso</p>
+                <h2>Monitor de Actividad</h2>
+                <p class="muted">Registro de actividad de usuarios en el sistema. No es una medicion directa de productividad.</p>
+              </div>
+            </div>
+            <div class="activity-filters" style="padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:12px;">
+              <form id="activity-filter-form" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+                <label style="display:flex;flex-direction:column;font-size:0.85rem;">Periodo
+                  <select id="af-period-type" name="periodType" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);">
+                    <option value="day">Dia</option>
+                    <option value="week">Semana del ano</option>
+                    <option value="month" selected>Mes</option>
+                    <option value="year">Ano</option>
+                  </select>
+                </label>
+                <label id="af-year-label" style="display:flex;flex-direction:column;font-size:0.85rem;">Ano
+                  <input id="af-year" name="year" type="number" min="2020" max="2030" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);width:80px;" />
+                </label>
+                <label id="af-month-label" style="display:flex;flex-direction:column;font-size:0.85rem;">Mes
+                  <select id="af-month" name="month" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);">
+                    <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option><option value="4">Abril</option><option value="5">Mayo</option><option value="6">Junio</option><option value="7">Julio</option><option value="8">Agosto</option><option value="9">Septiembre</option><option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
+                  </select>
+                </label>
+                <label id="af-week-label" style="display:none;flex-direction:column;font-size:0.85rem;">Semana
+                  <input id="af-week" name="weekNumber" type="number" min="1" max="53" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);width:70px;" />
+                </label>
+                <label id="af-date-label" style="display:none;flex-direction:column;font-size:0.85rem;">Fecha
+                  <input id="af-date" name="date" type="date" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);" />
+                </label>
+                <button type="submit" style="padding:8px 16px;border-radius:6px;background:var(--primary);color:#fff;border:none;cursor:pointer;">Consultar</button>
+                <button type="button" id="af-clear" style="padding:8px 16px;border-radius:6px;background:var(--card);color:var(--text);border:1px solid var(--border);cursor:pointer;">Limpiar filtros</button>
+              </form>
+            </div>
+            <div id="activity-summary-cards" class="hidden" style="display:none;flex-wrap:wrap;gap:12px;padding:12px 0;"></div>
+            <div id="activity-monitor-loading" class="muted" style="padding:16px;">Cargando monitor de actividad...</div>
+            <div id="activity-monitor-error" class="hidden" style="padding:16px;color:var(--danger);"></div>
+            <div id="activity-monitor-content" class="hidden">
+              <h3>Usuarios Conectados Actualmente</h3>
+              <div class="table-wrapper">
+                <table><thead><tr><th>Usuario</th><th>Rol</th><th>Inicio Sesion</th><th>Ultima Actividad</th><th>Duracion</th><th>IP</th></tr></thead><tbody id="active-sessions-table"></tbody></table>
+              </div>
+              <h3>Ultimas Sesiones</h3>
+              <div class="table-wrapper">
+                <table><thead><tr><th>Usuario</th><th>Rol</th><th>Inicio</th><th>Fin</th><th>Duracion</th><th>IP</th></tr></thead><tbody id="recent-sessions-table"></tbody></table>
+              </div>
+              <h3>Reporte Semanal de Actividad</h3>
+              <div class="table-wrapper">
+                <table><thead><tr><th>Usuario</th><th>Rol</th><th>Sesiones</th><th>Tiempo Conectado</th><th>Promedio/Dia</th><th>Ultima Actividad</th></tr></thead><tbody id="weekly-report-table"></tbody></table>
+              </div>
+              <h3>Eventos Recientes</h3>
+              <div class="table-wrapper">
+                <table><thead><tr><th>Fecha/Hora</th><th>Usuario</th><th>Accion</th><th>Modulo</th><th>Detalle</th></tr></thead><tbody id="recent-events-table"></tbody></table>
+              </div>
+            </div>
+          </div>
+        </section>
       </section>
     </main>
 

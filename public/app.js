@@ -48,6 +48,19 @@ function canAccess(module, action) {
   return userPermissions[module].includes(action);
 }
 
+function applyTheme(themeName) {
+  document.documentElement.setAttribute("data-theme", themeName || "default");
+  var sel = document.getElementById("theme-selector");
+  if (sel) sel.value = themeName || "default";
+}
+
+async function changeTheme(theme) {
+  try {
+    await api("/api/preferences/theme", { method: "PUT", body: JSON.stringify({ theme: theme }) });
+    applyTheme(theme);
+  } catch (e) { console.error("Error changing theme:", e.message); }
+}
+
 function applyPermissionVisibility() {
   const tabs = {
     'projects-tab': canAccess('projects', 'view'),
@@ -58,11 +71,13 @@ function applyPermissionVisibility() {
     'ecovis-tab': canAccess('ecovisAccount', 'view'),
     'service-quoter-tab': canAccess('serviceQuoter', 'view'),
     'users-tab': canAccess('users', 'view'),
+    'commissions-tab': canAccess('commissions', 'view'),
+    'activity-monitor-tab': canAccess('activityMonitor', 'view'),
   };
 
   for (const [tabId, allowed] of Object.entries(tabs)) {
     const el = document.getElementById(tabId);
-    if (el) el.style.display = allowed ? '' : 'none';
+    if (el) { if (allowed) el.classList.remove("hidden"); else el.classList.add("hidden"); }
   }
 
   const backupBtn = document.getElementById('backup-btn');
@@ -668,6 +683,8 @@ function switchView(viewName) {
     ecovis: ['ecovisAccount', 'view'],
     'service-quoter': ['serviceQuoter', 'view'],
     users: ['users', 'view'],
+    commissions: ['commissions', 'view'],
+    'activity-monitor': ['activityMonitor', 'view'],
   };
   const perm = viewPermMap[viewName];
   if (perm && !canAccess(perm[0], perm[1])) {
@@ -687,6 +704,8 @@ function switchView(viewName) {
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
+  const showingCommissions = viewName === "commissions";
+  const showingActivityMonitor = viewName === "activity-monitor";
   if (vacationsView) vacationsView.classList.toggle('hidden', !showingVacations);
   if (attendanceView) attendanceView.classList.toggle('hidden', !showingAttendance);
   if (reportsView) reportsView.classList.toggle('hidden', !showingReports);
@@ -697,6 +716,10 @@ function switchView(viewName) {
   if (sqView) sqView.classList.toggle('hidden', !showingServiceQuoter);
   const finView = document.getElementById('financial-view');
   if (finView) finView.classList.toggle('hidden', !showingFinancial);
+  var comView2 = document.getElementById("commissions-view");
+  if (comView2) comView2.classList.toggle("hidden", !showingCommissions);
+  var amView2 = document.getElementById("activity-monitor-view");
+  if (amView2) amView2.classList.toggle("hidden", !showingActivityMonitor);
   projectsTab.classList.toggle('active', showingProjects);
   closedProjectsTab.classList.toggle('active', showingClosedProjects);
   usersTab.classList.toggle('active', showingUsers);
@@ -708,6 +731,10 @@ function switchView(viewName) {
   if (archiveTab) archiveTab.classList.toggle('active', showingArchive);
   const sqTab = document.getElementById('service-quoter-tab');
   if (sqTab) sqTab.classList.toggle('active', showingServiceQuoter);
+  var comTabA = document.getElementById("commissions-tab");
+  if (comTabA) comTabA.classList.toggle("active", showingCommissions);
+  var amTabA = document.getElementById("activity-monitor-tab");
+  if (amTabA) amTabA.classList.toggle("active", showingActivityMonitor);
   if (showingServiceQuoter) initServiceQuoter();
 }
 
@@ -1238,6 +1265,7 @@ loginForm.addEventListener('submit', async (event) => {
     try {
       const sessionData = await api('/api/session');
       userPermissions = sessionData.permissions || {};
+      if (sessionData.theme) applyTheme(sessionData.theme);
     } catch { userPermissions = {}; }
     showVacationsTab();
     showAttendanceTab();
@@ -3179,6 +3207,10 @@ function applyRoleVisibility() {
   const backupImportBtn = document.getElementById('backup-import-btn');
   if (backupCreateBtn) backupCreateBtn.classList.toggle('hidden', !canAccess('backups', 'backup'));
   if (backupImportBtn) backupImportBtn.classList.toggle('hidden', !canAccess('backups', 'import'));
+  var comTab = document.getElementById("commissions-tab");
+  if (comTab) comTab.classList.toggle("hidden", !canAccess("commissions", "view"));
+  var amTab = document.getElementById("activity-monitor-tab");
+  if (amTab) amTab.classList.toggle("hidden", !canAccess("activityMonitor", "view"));
   const exchangePanel = document.querySelector('.exchange-panel');
   if (exchangePanel) exchangePanel.classList.toggle('hidden', !canAccess('settings', 'view'));
 }
@@ -4903,3 +4935,324 @@ api('/api/session')
     }
   })
   .catch(showLogin);
+
+// ===================== THEME SELECTOR =====================
+(function() {
+  var themeSelector = document.getElementById('theme-selector');
+  if (themeSelector) {
+    themeSelector.addEventListener('change', function() { changeTheme(themeSelector.value); });
+  }
+})();
+
+// ===================== COMMISSIONS MODULE =====================
+var commissionsTab = document.getElementById('commissions-tab');
+var commissionsView = document.getElementById('commissions-view');
+if (commissionsTab) {
+  commissionsTab.addEventListener('click', async function() {
+    switchView('commissions');
+    await loadCommissions();
+  });
+}
+
+async function loadCommissions() {
+  if (!commissionsView) return;
+  try {
+    var summary = await api('/api/commissions/summary');
+    var agents = await api('/api/commissions/agents');
+    var available = await api('/api/commissions/available-projects');
+    var commissions = await api('/api/commissions');
+    var payments = await api('/api/commissions/payments');
+    renderCommissionsSummary(summary);
+    renderAgentsTable(agents, summary);
+    renderAvailableProjects(available);
+    renderCommissionsTable(commissions);
+    renderCommissionPayments(payments);
+    populateAgentSelects(agents);
+  } catch (e) { console.error('Error loading commissions:', e); }
+}
+
+function renderCommissionsSummary(summary) {
+  var el = document.getElementById('commissions-summary-cards');
+  if (!el) return;
+  el.innerHTML = '<div class="stat-card"><strong>' + money.format(summary.total_earned_mxn) + '</strong><small>Devengadas</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(summary.total_paid_mxn) + '</strong><small>Pagadas</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(summary.pending_balance_mxn) + '</strong><small>Saldo pendiente</small></div>' +
+    '<div class="stat-card"><strong>' + summary.active_agents + '</strong><small>Vendedoras</small></div>' +
+    '<div class="stat-card"><strong>' + summary.pending_projects + '</strong><small>Sin comision</small></div>';
+}
+
+function renderAgentsTable(agents, summary) {
+  var el = document.getElementById('agents-table');
+  if (!el) return;
+  var agentMap = {};
+  if (summary && summary.agents) summary.agents.forEach(function(a) { agentMap[a.id] = a; });
+  el.innerHTML = agents.map(function(a) {
+    var s = agentMap[a.id] || { earned_mxn: 0, paid_mxn: 0, pending_mxn: 0 };
+    return '<tr><td>' + escapeHtml(a.name) + '</td><td>' + (a.active ? 'Si' : 'No') + '</td><td>' + a.start_date + '</td><td>' + money.format(s.earned_mxn) + '</td><td>' + money.format(s.paid_mxn) + '</td><td>' + money.format(s.pending_mxn) + '</td><td><button class="secondary" onclick="toggleAgent(' + a.id + ',' + (a.active ? 0 : 1) + ')">' + (a.active ? 'Desactivar' : 'Activar') + '</button></td></tr>';
+  }).join('') || '<tr><td colspan="7" class="muted">Sin vendedoras.</td></tr>';
+}
+
+function renderAvailableProjects(projects) {
+  var el = document.getElementById('available-projects-table');
+  if (!el) return;
+  el.innerHTML = projects.map(function(p) {
+    return '<tr><td>' + escapeHtml(p.quote_number) + '</td><td>' + escapeHtml(p.client_name) + '</td><td>' + money.format(p.total_sale_mxn) + '</td><td>' + money.format(p.total_costs_mxn) + '</td><td>' + money.format(p.gross_profit_mxn) + '</td><td>' + p.margin + '%</td><td><button class="secondary" onclick="assignCommission(' + p.id + ')">Asignar</button></td></tr>';
+  }).join('') || '<tr><td colspan="7" class="muted">No hay proyectos disponibles.</td></tr>';
+}
+
+function renderCommissionsTable(commissions) {
+  var el = document.getElementById('commissions-table');
+  if (!el) return;
+  var baseLabels = { total_sale_mxn: 'Venta Total', gross_profit_mxn: 'Util. Bruta', net_profit_mxn: 'Util. Neta', no_aplica: 'N/A' };
+  el.innerHTML = commissions.map(function(c) {
+    return '<tr><td>' + escapeHtml(c.quote_number) + '</td><td>' + escapeHtml(c.client_name) + '</td><td>' + escapeHtml(c.agent_name) + '</td><td>' + (baseLabels[c.commission_calculation_base_type] || '') + '</td><td>' + c.commission_percentage + '%</td><td>' + money.format(c.commission_amount_mxn) + '</td><td>' + c.status + '</td><td></td></tr>';
+  }).join('') || '<tr><td colspan="8" class="muted">Sin comisiones.</td></tr>';
+}
+
+function renderCommissionPayments(payments) {
+  var el = document.getElementById('commission-payments-table');
+  if (!el) return;
+  el.innerHTML = payments.map(function(p) {
+    return '<tr><td>' + escapeHtml(p.agent_name || '') + '</td><td>' + p.payment_date + '</td><td>' + money.format(p.amount_mxn) + '</td><td>' + p.currency + '</td><td>' + escapeHtml(p.reference || '') + '</td></tr>';
+  }).join('') || '<tr><td colspan="5" class="muted">Sin pagos.</td></tr>';
+}
+
+function populateAgentSelects(agents) {
+  var sel = document.querySelector('#commission-payment-form select[name="sales_agent_id"]');
+  if (sel) {
+    var active = agents.filter(function(a) { return a.active; });
+    sel.innerHTML = '<option value="">Vendedora...</option>' + active.map(function(a) { return '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>'; }).join('');
+  }
+}
+
+async function assignCommission(projectId) {
+  var agentName = window.prompt('Nombre de la vendedora:');
+  if (!agentName) return;
+  var agents = await api('/api/commissions/agents');
+  var agent = agents.find(function(a) { return a.name.toLowerCase().includes(agentName.toLowerCase()); });
+  if (!agent) { window.alert('Vendedora no encontrada.'); return; }
+  var baseType = window.prompt('Base (total_sale_mxn / gross_profit_mxn / net_profit_mxn / no_aplica):', 'gross_profit_mxn');
+  if (!baseType) return;
+  var payload = { project_id: projectId, sales_agent_id: agent.id, commission_calculation_base_type: baseType };
+  if (baseType === 'no_aplica') { payload.no_apply_reason = window.prompt('Motivo:') || 'N/A'; }
+  else { payload.commission_percentage = Number(window.prompt('Porcentaje (1-20):', '10')); }
+  try { await api('/api/commissions', { method: 'POST', body: JSON.stringify(payload) }); await loadCommissions(); }
+  catch (e) { window.alert(e.message); }
+}
+
+async function toggleAgent(id, active) {
+  var agents = await api('/api/commissions/agents');
+  var agent = agents.find(function(a) { return a.id === id; });
+  if (!agent) return;
+  try { await api('/api/commissions/agents/' + id, { method: 'PUT', body: JSON.stringify({ name: agent.name, active: active, start_date: agent.start_date }) }); await loadCommissions(); }
+  catch (e) { window.alert(e.message); }
+}
+
+var agentForm = document.getElementById('agent-form');
+if (agentForm) {
+  agentForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var payload = Object.fromEntries(new FormData(agentForm).entries());
+    try { await api('/api/commissions/agents', { method: 'POST', body: JSON.stringify(payload) }); agentForm.reset(); await loadCommissions(); }
+    catch (err) { window.alert(err.message); }
+  });
+}
+
+var commissionPaymentForm = document.getElementById('commission-payment-form');
+if (commissionPaymentForm) {
+  commissionPaymentForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var payload = Object.fromEntries(new FormData(commissionPaymentForm).entries());
+    payload.amount_original = Number(payload.amount_original);
+    try { await api('/api/commissions/payments', { method: 'POST', body: JSON.stringify(payload) }); commissionPaymentForm.reset(); await loadCommissions(); }
+    catch (err) { window.alert(err.message); }
+  });
+}
+
+// ===================== ACTIVITY MONITOR =====================
+var activityMonitorTab = document.getElementById('activity-monitor-tab');
+var activityMonitorView = document.getElementById('activity-monitor-view');
+if (activityMonitorTab) {
+  activityMonitorTab.addEventListener('click', async function() {
+    switchView('activity-monitor');
+    await loadActivityMonitor();
+  });
+}
+
+async function loadActivityMonitor() {
+  var loadingEl = document.getElementById("activity-monitor-loading");
+  var errorEl = document.getElementById("activity-monitor-error");
+  var contentEl = document.getElementById("activity-monitor-content");
+  if (loadingEl) loadingEl.classList.remove("hidden");
+  if (errorEl) errorEl.classList.add("hidden");
+  if (contentEl) contentEl.classList.add("hidden");
+  try {
+    var results = await Promise.all([
+      api("/api/activity-monitor/sessions"),
+      api("/api/activity-monitor/recent-sessions"),
+      api("/api/activity-monitor/weekly-report"),
+      api("/api/activity-monitor/recent-events"),
+    ]);
+    renderActiveSessions(results[0]);
+    renderRecentSessions((results[1] && results[1].data) || []);
+    renderWeeklyReport(results[2]);
+    renderRecentEvents((results[3] && results[3].data) || []);
+    if (loadingEl) loadingEl.classList.add("hidden");
+    if (contentEl) contentEl.classList.remove("hidden");
+  } catch (e) {
+    if (loadingEl) loadingEl.classList.add("hidden");
+    if (errorEl) { errorEl.textContent = "No se pudo cargar el Monitor de Actividad: " + e.message; errorEl.classList.remove("hidden"); }
+  }
+}
+function formatDuration(seconds) {
+  if (!seconds || seconds <= 0) return "0m";
+  var h = Math.floor(seconds / 3600);
+  var m = Math.floor((seconds % 3600) / 60);
+  return h > 0 ? h + "h " + m + "m" : m + "m";
+}
+function renderActiveSessions(sessions) {
+  var el = document.getElementById("active-sessions-table");
+  if (!el) return;
+  if (!sessions || sessions.length === 0) { el.innerHTML = '<tr><td colspan="6" class="muted">No hay usuarios conectados actualmente.</td></tr>'; return; }
+  el.innerHTML = sessions.map(function(s) {
+    return '<tr><td>' + escapeHtml(s.user_name) + '</td><td>' + escapeHtml(s.role || '') + '</td><td>' + formatDateTimeCDMX(s.login_at) + '</td><td>' + formatDateTimeCDMX(s.last_activity_at) + '</td><td>' + formatDuration(s.duration_seconds) + '</td><td>' + escapeHtml(s.ip_address || '') + '</td></tr>';
+  }).join("");
+}
+function renderRecentSessions(sessions) {
+  var el = document.getElementById("recent-sessions-table");
+  if (!el) return;
+  if (!sessions || sessions.length === 0) { el.innerHTML = '<tr><td colspan="6" class="muted">No hay sesiones registradas todavia.</td></tr>'; return; }
+  el.innerHTML = sessions.map(function(s) {
+    return '<tr><td>' + escapeHtml(s.user_name) + '</td><td>' + escapeHtml(s.role || '') + '</td><td>' + formatDateTimeCDMX(s.login_at) + '</td><td>' + (s.logout_at ? formatDateTimeCDMX(s.logout_at) : '<em>Activa</em>') + '</td><td>' + formatDuration(s.duration_seconds) + '</td><td>' + escapeHtml(s.ip_address || '') + '</td></tr>';
+  }).join("");
+}
+function renderWeeklyReport(report) {
+  var el = document.getElementById("weekly-report-table");
+  if (!el) return;
+  var users = (report && report.users) || [];
+  if (users.length === 0) { el.innerHTML = '<tr><td colspan="6" class="muted">No hay actividad registrada para esta semana.</td></tr>'; return; }
+  el.innerHTML = users.map(function(u) {
+    return '<tr><td>' + escapeHtml(u.user_name) + '</td><td>' + escapeHtml(u.role || '') + '</td><td>' + (u.total_sessions || 0) + '</td><td>' + formatDuration(u.total_seconds) + '</td><td>' + formatDuration(u.avg_per_day) + '</td><td>' + formatDateTimeCDMX(u.last_activity) + '</td></tr>';
+  }).join("");
+}
+function renderRecentEvents(events) {
+  var el = document.getElementById("recent-events-table");
+  if (!el) return;
+  if (!events || events.length === 0) { el.innerHTML = '<tr><td colspan="5" class="muted">No hay eventos recientes.</td></tr>'; return; }
+  el.innerHTML = events.map(function(ev) {
+    return '<tr><td>' + formatDateTimeCDMX(ev.timestamp_utc) + '</td><td>' + escapeHtml(ev.user_name || '') + '</td><td>' + escapeHtml(ev.action || '') + '</td><td>' + escapeHtml(ev.module || '') + '</td><td>' + escapeHtml(ev.entity_label || ev.entity_type || '') + '</td></tr>';
+  }).join("");
+}
+
+// ===================== ACTIVITY MONITOR FILTERS =====================
+(function() {
+  var periodType = document.getElementById('af-period-type');
+  var yearLabel = document.getElementById('af-year-label');
+  var monthLabel = document.getElementById('af-month-label');
+  var weekLabel = document.getElementById('af-week-label');
+  var dateLabel = document.getElementById('af-date-label');
+  var yearInput = document.getElementById('af-year');
+  var monthInput = document.getElementById('af-month');
+  var weekInput = document.getElementById('af-week');
+  var dateInput = document.getElementById('af-date');
+  var filterForm = document.getElementById('activity-filter-form');
+  var clearBtn = document.getElementById('af-clear');
+
+  if (!periodType || !filterForm) return;
+
+  var now = new Date();
+  if (yearInput) yearInput.value = now.getFullYear();
+  if (monthInput) monthInput.value = now.getMonth() + 1;
+  if (weekInput) weekInput.value = Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / (7*24*60*60*1000));
+  if (dateInput) dateInput.value = now.toISOString().split('T')[0];
+
+  function updateVisibility() {
+    var type = periodType.value;
+    yearLabel.style.display = (type === 'year' || type === 'month' || type === 'week') ? 'flex' : 'none';
+    monthLabel.style.display = (type === 'month') ? 'flex' : 'none';
+    weekLabel.style.display = (type === 'week') ? 'flex' : 'none';
+    dateLabel.style.display = (type === 'day') ? 'flex' : 'none';
+  }
+  periodType.addEventListener('change', updateVisibility);
+  updateVisibility();
+
+  filterForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var type = periodType.value;
+    var params = 'periodType=' + type;
+    if (type === 'year' || type === 'month' || type === 'week') params += '&year=' + yearInput.value;
+    if (type === 'month') params += '&month=' + monthInput.value;
+    if (type === 'week') params += '&weekNumber=' + weekInput.value;
+    if (type === 'day') params += '&date=' + dateInput.value;
+    await loadActivitySummary(params);
+  });
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      periodType.value = 'month';
+      yearInput.value = now.getFullYear();
+      monthInput.value = now.getMonth() + 1;
+      weekInput.value = Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / (7*24*60*60*1000));
+      dateInput.value = now.toISOString().split('T')[0];
+      updateVisibility();
+      var cards = document.getElementById('activity-summary-cards');
+      if (cards) cards.style.display = 'none';
+      var table = document.getElementById('activity-summary-users');
+      if (table) table.innerHTML = '';
+      var evTable = document.getElementById('activity-summary-events');
+      if (evTable) evTable.innerHTML = '';
+    });
+  }
+})();
+
+async function loadActivitySummary(queryStr) {
+  var cards = document.getElementById('activity-summary-cards');
+  var loadingEl = document.getElementById('activity-monitor-loading');
+  var errorEl = document.getElementById('activity-monitor-error');
+  var contentEl = document.getElementById('activity-monitor-content');
+  if (loadingEl) loadingEl.classList.remove('hidden');
+  if (errorEl) errorEl.classList.add('hidden');
+  if (contentEl) contentEl.classList.add('hidden');
+  if (cards) cards.style.display = 'none';
+  try {
+    var data = await api('/api/activity-monitor/summary?' + queryStr);
+    if (loadingEl) loadingEl.classList.add('hidden');
+    if (contentEl) contentEl.classList.remove('hidden');
+    renderActivitySummaryCards(data);
+    renderActivitySummaryUsers(data.users || []);
+    renderActiveSessions([]); 
+    renderRecentSessions([]);
+    renderWeeklyReport({ users: data.users || [] });
+    renderRecentEvents(data.events || []);
+  } catch(e) {
+    if (loadingEl) loadingEl.classList.add('hidden');
+    if (errorEl) { errorEl.textContent = 'No se pudo cargar la actividad del periodo seleccionado: ' + e.message; errorEl.classList.remove('hidden'); }
+  }
+}
+
+function renderActivitySummaryCards(data) {
+  var el = document.getElementById('activity-summary-cards');
+  if (!el) return;
+  var s = data.summary || {};
+  el.style.display = 'flex';
+  el.innerHTML = '<div class="stat-card"><strong>' + (s.totalUsers || 0) + '</strong><small>Usuarios activos</small></div>' +
+    '<div class="stat-card"><strong>' + (s.totalSessions || 0) + '</strong><small>Sesiones</small></div>' +
+    '<div class="stat-card"><strong>' + formatDuration(s.totalDurationSeconds) + '</strong><small>Tiempo conectado</small></div>' +
+    '<div class="stat-card"><strong>' + formatDuration(s.averageSessionDurationSeconds) + '</strong><small>Promedio por sesion</small></div>' +
+    '<div class="stat-card"><strong>' + (s.totalEvents || 0) + '</strong><small>Eventos</small></div>' +
+    '<div class="stat-card"><strong>' + (s.deniedAccessEvents || 0) + '</strong><small>Accesos denegados</small></div>';
+  var periodLabel = (data.period && data.period.label) ? '<p class="muted" style="width:100%;margin-top:8px;">Periodo: <strong>' + escapeHtml(data.period.label) + '</strong></p>' : '';
+  el.innerHTML += periodLabel;
+}
+
+function renderActivitySummaryUsers(users) {
+  var el = document.getElementById('weekly-report-table');
+  if (!el) return;
+  if (!users || users.length === 0) {
+    el.innerHTML = '<tr><td colspan="6" class="muted">No hay actividad registrada para el periodo seleccionado.</td></tr>';
+    return;
+  }
+  el.innerHTML = users.map(function(u) {
+    return '<tr><td>' + escapeHtml(u.user_name) + '</td><td>' + escapeHtml(u.role || '') + '</td><td>' + (u.total_sessions || 0) + '</td><td>' + formatDuration(u.total_seconds) + '</td><td>' + formatDuration(u.avg_per_session) + '</td><td>' + formatDateTimeCDMX(u.last_activity) + '</td></tr>';
+  }).join('');
+}
