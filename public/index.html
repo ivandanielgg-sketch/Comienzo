@@ -1718,6 +1718,35 @@
                 <p class="muted">Registro de actividad de usuarios en el sistema. No es una medicion directa de productividad.</p>
               </div>
             </div>
+            <div class="activity-filters" style="padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:12px;">
+              <form id="activity-filter-form" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+                <label style="display:flex;flex-direction:column;font-size:0.85rem;">Periodo
+                  <select id="af-period-type" name="periodType" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);">
+                    <option value="day">Dia</option>
+                    <option value="week">Semana del ano</option>
+                    <option value="month" selected>Mes</option>
+                    <option value="year">Ano</option>
+                  </select>
+                </label>
+                <label id="af-year-label" style="display:flex;flex-direction:column;font-size:0.85rem;">Ano
+                  <input id="af-year" name="year" type="number" min="2020" max="2030" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);width:80px;" />
+                </label>
+                <label id="af-month-label" style="display:flex;flex-direction:column;font-size:0.85rem;">Mes
+                  <select id="af-month" name="month" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);">
+                    <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option><option value="4">Abril</option><option value="5">Mayo</option><option value="6">Junio</option><option value="7">Julio</option><option value="8">Agosto</option><option value="9">Septiembre</option><option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
+                  </select>
+                </label>
+                <label id="af-week-label" style="display:none;flex-direction:column;font-size:0.85rem;">Semana
+                  <input id="af-week" name="weekNumber" type="number" min="1" max="53" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);width:70px;" />
+                </label>
+                <label id="af-date-label" style="display:none;flex-direction:column;font-size:0.85rem;">Fecha
+                  <input id="af-date" name="date" type="date" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);" />
+                </label>
+                <button type="submit" style="padding:8px 16px;border-radius:6px;background:var(--primary);color:#fff;border:none;cursor:pointer;">Consultar</button>
+                <button type="button" id="af-clear" style="padding:8px 16px;border-radius:6px;background:var(--card);color:var(--text);border:1px solid var(--border);cursor:pointer;">Limpiar filtros</button>
+              </form>
+            </div>
+            <div id="activity-summary-cards" class="hidden" style="display:none;flex-wrap:wrap;gap:12px;padding:12px 0;"></div>
             <div id="activity-monitor-loading" class="muted" style="padding:16px;">Cargando monitor de actividad...</div>
             <div id="activity-monitor-error" class="hidden" style="padding:16px;color:var(--danger);"></div>
             <div id="activity-monitor-content" class="hidden">

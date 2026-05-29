@@ -5143,3 +5143,116 @@ function renderRecentEvents(events) {
     return '<tr><td>' + formatDateTimeCDMX(ev.timestamp_utc) + '</td><td>' + escapeHtml(ev.user_name || '') + '</td><td>' + escapeHtml(ev.action || '') + '</td><td>' + escapeHtml(ev.module || '') + '</td><td>' + escapeHtml(ev.entity_label || ev.entity_type || '') + '</td></tr>';
   }).join("");
 }
+
+// ===================== ACTIVITY MONITOR FILTERS =====================
+(function() {
+  var periodType = document.getElementById('af-period-type');
+  var yearLabel = document.getElementById('af-year-label');
+  var monthLabel = document.getElementById('af-month-label');
+  var weekLabel = document.getElementById('af-week-label');
+  var dateLabel = document.getElementById('af-date-label');
+  var yearInput = document.getElementById('af-year');
+  var monthInput = document.getElementById('af-month');
+  var weekInput = document.getElementById('af-week');
+  var dateInput = document.getElementById('af-date');
+  var filterForm = document.getElementById('activity-filter-form');
+  var clearBtn = document.getElementById('af-clear');
+
+  if (!periodType || !filterForm) return;
+
+  var now = new Date();
+  if (yearInput) yearInput.value = now.getFullYear();
+  if (monthInput) monthInput.value = now.getMonth() + 1;
+  if (weekInput) weekInput.value = Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / (7*24*60*60*1000));
+  if (dateInput) dateInput.value = now.toISOString().split('T')[0];
+
+  function updateVisibility() {
+    var type = periodType.value;
+    yearLabel.style.display = (type === 'year' || type === 'month' || type === 'week') ? 'flex' : 'none';
+    monthLabel.style.display = (type === 'month') ? 'flex' : 'none';
+    weekLabel.style.display = (type === 'week') ? 'flex' : 'none';
+    dateLabel.style.display = (type === 'day') ? 'flex' : 'none';
+  }
+  periodType.addEventListener('change', updateVisibility);
+  updateVisibility();
+
+  filterForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var type = periodType.value;
+    var params = 'periodType=' + type;
+    if (type === 'year' || type === 'month' || type === 'week') params += '&year=' + yearInput.value;
+    if (type === 'month') params += '&month=' + monthInput.value;
+    if (type === 'week') params += '&weekNumber=' + weekInput.value;
+    if (type === 'day') params += '&date=' + dateInput.value;
+    await loadActivitySummary(params);
+  });
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      periodType.value = 'month';
+      yearInput.value = now.getFullYear();
+      monthInput.value = now.getMonth() + 1;
+      weekInput.value = Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / (7*24*60*60*1000));
+      dateInput.value = now.toISOString().split('T')[0];
+      updateVisibility();
+      var cards = document.getElementById('activity-summary-cards');
+      if (cards) cards.style.display = 'none';
+      var table = document.getElementById('activity-summary-users');
+      if (table) table.innerHTML = '';
+      var evTable = document.getElementById('activity-summary-events');
+      if (evTable) evTable.innerHTML = '';
+    });
+  }
+})();
+
+async function loadActivitySummary(queryStr) {
+  var cards = document.getElementById('activity-summary-cards');
+  var loadingEl = document.getElementById('activity-monitor-loading');
+  var errorEl = document.getElementById('activity-monitor-error');
+  var contentEl = document.getElementById('activity-monitor-content');
+  if (loadingEl) loadingEl.classList.remove('hidden');
+  if (errorEl) errorEl.classList.add('hidden');
+  if (contentEl) contentEl.classList.add('hidden');
+  if (cards) cards.style.display = 'none';
+  try {
+    var data = await api('/api/activity-monitor/summary?' + queryStr);
+    if (loadingEl) loadingEl.classList.add('hidden');
+    if (contentEl) contentEl.classList.remove('hidden');
+    renderActivitySummaryCards(data);
+    renderActivitySummaryUsers(data.users || []);
+    renderActiveSessions([]); 
+    renderRecentSessions([]);
+    renderWeeklyReport({ users: data.users || [] });
+    renderRecentEvents(data.events || []);
+  } catch(e) {
+    if (loadingEl) loadingEl.classList.add('hidden');
+    if (errorEl) { errorEl.textContent = 'No se pudo cargar la actividad del periodo seleccionado: ' + e.message; errorEl.classList.remove('hidden'); }
+  }
+}
+
+function renderActivitySummaryCards(data) {
+  var el = document.getElementById('activity-summary-cards');
+  if (!el) return;
+  var s = data.summary || {};
+  el.style.display = 'flex';
+  el.innerHTML = '<div class="stat-card"><strong>' + (s.totalUsers || 0) + '</strong><small>Usuarios activos</small></div>' +
+    '<div class="stat-card"><strong>' + (s.totalSessions || 0) + '</strong><small>Sesiones</small></div>' +
+    '<div class="stat-card"><strong>' + formatDuration(s.totalDurationSeconds) + '</strong><small>Tiempo conectado</small></div>' +
+    '<div class="stat-card"><strong>' + formatDuration(s.averageSessionDurationSeconds) + '</strong><small>Promedio por sesion</small></div>' +
+    '<div class="stat-card"><strong>' + (s.totalEvents || 0) + '</strong><small>Eventos</small></div>' +
+    '<div class="stat-card"><strong>' + (s.deniedAccessEvents || 0) + '</strong><small>Accesos denegados</small></div>';
+  var periodLabel = (data.period && data.period.label) ? '<p class="muted" style="width:100%;margin-top:8px;">Periodo: <strong>' + escapeHtml(data.period.label) + '</strong></p>' : '';
+  el.innerHTML += periodLabel;
+}
+
+function renderActivitySummaryUsers(users) {
+  var el = document.getElementById('weekly-report-table');
+  if (!el) return;
+  if (!users || users.length === 0) {
+    el.innerHTML = '<tr><td colspan="6" class="muted">No hay actividad registrada para el periodo seleccionado.</td></tr>';
+    return;
+  }
+  el.innerHTML = users.map(function(u) {
+    return '<tr><td>' + escapeHtml(u.user_name) + '</td><td>' + escapeHtml(u.role || '') + '</td><td>' + (u.total_sessions || 0) + '</td><td>' + formatDuration(u.total_seconds) + '</td><td>' + formatDuration(u.avg_per_session) + '</td><td>' + formatDateTimeCDMX(u.last_activity) + '</td></tr>';
+  }).join('');
+}

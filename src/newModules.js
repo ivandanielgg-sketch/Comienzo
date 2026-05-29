@@ -247,6 +247,127 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
     } catch (error) { next(error); }
   });
 
+  // ===================== ACTIVITY MONITOR SUMMARY WITH PERIOD FILTERS =====================
+
+  function getActivityDateRange(periodType, params) {
+    const CDMX_OFFSET = -6;
+    function cdmxToUtc(dateStr) {
+      const d = new Date(dateStr);
+      d.setHours(d.getHours() - CDMX_OFFSET);
+      return d.toISOString();
+    }
+    function lastDayOfMonth(year, month) {
+      return new Date(year, month, 0).getDate();
+    }
+    function getISOWeekDates(year, weekNum) {
+      const jan4 = new Date(year, 0, 4);
+      const dayOfWeek = jan4.getDay() || 7;
+      const monday = new Date(jan4);
+      monday.setDate(jan4.getDate() - dayOfWeek + 1 + (weekNum - 1) * 7);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      return { monday, sunday };
+    }
+    const monthNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+    if (periodType === 'year') {
+      const y = Number(params.year);
+      return {
+        startDate: cdmxToUtc(`${y}-01-01T00:00:00`),
+        endDate: cdmxToUtc(`${y}-12-31T23:59:59`),
+        label: `${y}`,
+      };
+    }
+    if (periodType === 'month') {
+      const y = Number(params.year);
+      const m = Number(params.month);
+      const lastDay = lastDayOfMonth(y, m);
+      const mStr = String(m).padStart(2, '0');
+      return {
+        startDate: cdmxToUtc(`${y}-${mStr}-01T00:00:00`),
+        endDate: cdmxToUtc(`${y}-${mStr}-${String(lastDay).padStart(2,'0')}T23:59:59`),
+        label: `${monthNames[m-1]} ${y}`,
+      };
+    }
+    if (periodType === 'week') {
+      const y = Number(params.year);
+      const w = Number(params.weekNumber);
+      const { monday, sunday } = getISOWeekDates(y, w);
+      const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      return {
+        startDate: cdmxToUtc(`${fmt(monday)}T00:00:00`),
+        endDate: cdmxToUtc(`${fmt(sunday)}T23:59:59`),
+        label: `Semana ${w} de ${y} (${fmt(monday)} a ${fmt(sunday)})`,
+      };
+    }
+    if (periodType === 'day') {
+      const dateStr = params.date;
+      return {
+        startDate: cdmxToUtc(`${dateStr}T00:00:00`),
+        endDate: cdmxToUtc(`${dateStr}T23:59:59`),
+        label: dateStr,
+      };
+    }
+    return null;
+  }
+
+  app.get('/api/activity-monitor/summary', requireAuth, requirePermission('activityMonitor', 'view'), (req, res, next) => {
+    try {
+      if (req.session.role !== 'admin') return res.status(403).json({ message: 'Solo admin puede ver el monitor.' });
+      const { periodType, year, month, weekNumber, date, userId, role } = req.query;
+      if (!periodType || !['year', 'month', 'week', 'day'].includes(periodType)) {
+        return res.status(400).json({ message: 'periodType es obligatorio (year, month, week, day).' });
+      }
+      if ((periodType === 'year' || periodType === 'month' || periodType === 'week') && !year) {
+        return res.status(400).json({ message: 'year es obligatorio para este tipo de periodo.' });
+      }
+      if (periodType === 'month' && (!month || month < 1 || month > 12)) {
+        return res.status(400).json({ message: 'month es obligatorio y debe ser 1-12.' });
+      }
+      if (periodType === 'week' && (!weekNumber || weekNumber < 1 || weekNumber > 53)) {
+        return res.status(400).json({ message: 'weekNumber es obligatorio y debe ser 1-53.' });
+      }
+      if (periodType === 'day' && !date) {
+        return res.status(400).json({ message: 'date es obligatorio para consulta por dia.' });
+      }
+      const range = getActivityDateRange(periodType, { year, month, weekNumber, date });
+      if (!range) return res.status(400).json({ message: 'No se pudo calcular el rango de fechas.' });
+
+      let sessionFilter = 'login_at >= ? AND login_at <= ?';
+      let sessionParams = [range.startDate, range.endDate];
+      let eventFilter = 'timestamp_utc >= ? AND timestamp_utc <= ?';
+      let eventParams = [range.startDate, range.endDate];
+
+      if (userId) { sessionFilter += ' AND user_id = ?'; sessionParams.push(Number(userId)); eventFilter += ' AND user_id = ?'; eventParams.push(Number(userId)); }
+      if (role) { sessionFilter += ' AND role = ?'; sessionParams.push(role); eventFilter += ' AND module IS NOT NULL'; }
+
+      const users = db.prepare(`SELECT user_id, user_name, role, COUNT(*) as total_sessions, COALESCE(SUM(duration_seconds), 0) as total_seconds, MAX(last_activity_at) as last_activity FROM user_session_activities WHERE ${sessionFilter} GROUP BY user_id ORDER BY total_seconds DESC`).all(...sessionParams);
+
+      const totalSessions = users.reduce((sum, u) => sum + u.total_sessions, 0);
+      const totalDuration = users.reduce((sum, u) => sum + u.total_seconds, 0);
+
+      const totalEvents = db.prepare(`SELECT COUNT(*) as cnt FROM audit_logs WHERE ${eventFilter}`).get(...eventParams).cnt;
+      const deniedEvents = db.prepare(`SELECT COUNT(*) as cnt FROM audit_logs WHERE action = 'access_denied' AND ${eventFilter}`).get(...eventParams).cnt;
+
+      const events = db.prepare(`SELECT id, user_id, user_name, action, module, entity_type, entity_id, entity_label, timestamp_utc FROM audit_logs WHERE ${eventFilter} ORDER BY id DESC LIMIT 100`).all(...eventParams);
+
+      const userResults = users.map(u => {
+        const userEvents = db.prepare(`SELECT COUNT(*) as cnt FROM audit_logs WHERE user_id = ? AND ${eventFilter}`).get(u.user_id, ...eventParams).cnt;
+        const userDenied = db.prepare(`SELECT COUNT(*) as cnt FROM audit_logs WHERE user_id = ? AND action = 'access_denied' AND ${eventFilter}`).get(u.user_id, ...eventParams).cnt;
+        return { ...u, avg_per_session: u.total_sessions > 0 ? Math.round(u.total_seconds / u.total_sessions) : 0, total_events: userEvents, denied_access: userDenied };
+      });
+
+      logAuditEvent(db, { req, action: 'view_activity_summary', module: 'activityMonitor', metadata: { periodType, year, month, weekNumber, date } });
+
+      res.json({
+        period: { periodType, label: range.label, startDate: range.startDate, endDate: range.endDate },
+        summary: { totalUsers: users.length, totalSessions, totalDurationSeconds: totalDuration, averageSessionDurationSeconds: totalSessions > 0 ? Math.round(totalDuration / totalSessions) : 0, totalEvents, deniedAccessEvents: deniedEvents },
+        users: userResults,
+        events: events,
+      });
+    } catch (error) { next(error); }
+  });
+
   // ===================== SKINS / USER PREFERENCES =====================
 
   const VALID_THEMES = ['default', 'dark', 'corporate', 'high_contrast'];
