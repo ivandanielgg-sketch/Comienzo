@@ -3715,6 +3715,7 @@ const {
   getIncludedEntities,
   buildCoverageManifest,
 } = require('./backupRegistry');
+const { generateBackup, generateDiagnostic, decompressBackup, BACKUP_TYPES } = require("./backupOptimizer");
 
 app.get('/api/admin/backup', requireAuth, requirePermission('backups', 'backup'), (req, res) => {
   const entities = getIncludedEntities();
@@ -3768,6 +3769,79 @@ app.get('/api/admin/backup', requireAuth, requirePermission('backups', 'backup')
   }
 
   res.json(backup);
+});
+
+
+// ===================== OPTIMIZED BACKUP ENDPOINTS =====================
+
+app.get('/api/admin/backup/diagnostic', requireAuth, requirePermission('backups', 'view'), (req, res, next) => {
+  try {
+    const diagnostic = generateDiagnostic(db);
+    res.json(diagnostic);
+  } catch (error) { next(error); }
+});
+
+app.get('/api/admin/backup/optimized', requireAuth, requirePermission('backups', 'backup'), (req, res, next) => {
+  try {
+    const backupType = req.query.type || 'complete';
+    if (!BACKUP_TYPES[backupType]) {
+      return res.status(400).json({ message: 'Tipo de respaldo invalido. Opciones: complete, light, critical_only' });
+    }
+    const auditLogPolicy = req.query.auditLogPolicy || (backupType === 'light' ? 'last90Days' : 'full');
+    const activityPolicy = req.query.activityPolicy || 'none';
+    const compress = req.query.compress === 'true' || req.query.compress === '1';
+
+    const result = generateBackup(db, {
+      backupType,
+      auditLogPolicy,
+      activityPolicy,
+      compress,
+      username: req.session.username || 'admin',
+    });
+
+    logAuditEvent(db, { req, action: 'backup_create', module: 'backup', entityType: 'backup', entityLabel: `Respaldo ${backupType}`, metadata: { backupType, auditLogPolicy, activityPolicy, compress, recordCounts: result.backup.backupMetadata.recordCounts } });
+
+    if (compress && result.compressed) {
+      const filename = `REVRAM_backup_${new Date().toISOString().replace(/[:.]/g, '-').substring(0, 16)}${result.extension}`;
+      res.setHeader('Content-Type', result.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', result.compressed.length);
+      return res.send(result.compressed);
+    }
+
+    const warnings = result.backup.backupMetadata.warnings || [];
+    if (warnings.length > 0) return res.status(207).json(result.backup);
+    res.json(result.backup);
+  } catch (error) { next(error); }
+});
+
+app.post("/api/admin/backup/preview-compressed", requireAuth, requirePermission("backups", "import"), express.raw({ type: "application/gzip", limit: "100mb" }), (req, res, next) => {
+  try {
+    const backup = decompressBackup(req.body);
+    if (!backup || !backup.backupMetadata || !backup.data) {
+      return res.status(400).json({ message: "Archivo comprimido invalido o corrupto." });
+    }
+    req.body = backup;
+    next();
+  } catch (error) { return res.status(400).json({ message: "Error al descomprimir: " + error.message }); }
+}, (req, res) => {
+  const backup = req.body;
+  const entities = getIncludedEntities();
+  const preview = {};
+  for (const entity of entities) {
+    const backupRows = backup.data[entity.key] || [];
+    preview[entity.key] = { inBackup: backupRows.length };
+  }
+  const missingCritical = [];
+  const missingOptional = [];
+  const { CRITICAL_ENTITIES } = require("./backupOptimizer");
+  for (const key of CRITICAL_ENTITIES) {
+    if (!backup.data[key] || backup.data[key].length === 0) {
+      if (!entities.find(e => e.key === key)) continue;
+      missingCritical.push(key);
+    }
+  }
+  res.json({ preview, schemaVersion: backup.backupMetadata.schemaVersion, backupType: backup.backupMetadata.backupType || "complete", missingCritical, missingOptional, policiesUsed: backup.backupMetadata.policiesUsed || {} });
 });
 
 app.post('/api/admin/backup/preview', requireAuth, requirePermission('backups', 'import'), (req, res) => {
