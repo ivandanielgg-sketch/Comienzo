@@ -2634,6 +2634,61 @@ function mapEcovisPaymentResponse(payment) {
   };
 }
 
+function buildEcovisAssignableProjectLabel(project, balance) {
+  const pendingMxn = balance.pending_amount_mxn;
+  const name = project.project_name || 'Proyecto';
+  const currency = project.currency || 'MXN';
+  const pendingLabel = `$${pendingMxn.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (currency === 'MXN') {
+    return `${name} — Pendiente ${pendingLabel} MXN`;
+  }
+  const original = Number(project.total_amount || 0);
+  const originalLabel = original.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${name} — Pendiente ${pendingLabel} MXN (${originalLabel} ${currency} original)`;
+}
+
+function listEcovisAssignableProjects() {
+  const projects = db.prepare(
+    "SELECT * FROM ecovis_projects WHERE is_cancelled = 0 AND status NOT IN ('cancelado', 'pagado') ORDER BY project_name, id",
+  ).all();
+  const allAllocations = db.prepare(
+    "SELECT * FROM ecovis_payment_allocations WHERE is_cancelled = 0 AND allocation_type = 'proyecto'",
+  ).all();
+  const allocationsByProject = new Map();
+  for (const allocation of allAllocations) {
+    if (!allocation.ecovis_project_id) continue;
+    const list = allocationsByProject.get(allocation.ecovis_project_id) || [];
+    list.push(allocation);
+    allocationsByProject.set(allocation.ecovis_project_id, list);
+  }
+
+  const byId = new Map();
+  for (const project of projects) {
+    if (byId.has(project.id)) {
+      console.warn(`[ECOVIS] Proyecto duplicado omitido en lista asignable: id=${project.id}`);
+      continue;
+    }
+    const projectAllocations = allocationsByProject.get(project.id) || [];
+    const balance = calculateEcovisProjectBalance(project, projectAllocations);
+    if (balance.is_fully_paid || balance.pending_amount_mxn <= 0.01) {
+      continue;
+    }
+    byId.set(project.id, {
+      id: project.id,
+      project_name: project.project_name,
+      currency: project.currency || 'MXN',
+      total_amount: Number(project.total_amount || 0),
+      total_amount_mxn: balance.total_amount_mxn,
+      paid_amount_mxn: balance.paid_amount_mxn,
+      pending_amount_mxn: balance.pending_amount_mxn,
+      status: balance.status,
+      is_fully_paid: balance.is_fully_paid,
+      label: buildEcovisAssignableProjectLabel(project, balance),
+    });
+  }
+  return Array.from(byId.values());
+}
+
 function recalculateProjectStatus(projectId) {
   const project = db.prepare('SELECT * FROM ecovis_projects WHERE id = ?').get(projectId);
   if (!project) return;
@@ -2686,6 +2741,11 @@ app.get('/api/ecovis/summary', requireAuth, requirePermission('ecovisAccount', '
   const movements = db.prepare('SELECT * FROM ecovis_movements').all();
   const summary = calculateEcovisAccountSummary(projects, payments, allocations, movements);
   res.json(summary);
+});
+
+app.get('/api/ecovis/projects/assignable', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
+  const data = listEcovisAssignableProjects();
+  res.json({ data });
 });
 
 app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
@@ -3131,10 +3191,32 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
       ecovisProjectId = req.body.ecovis_project_id;
       const targetProject = getEcovisProjectOrFail(ecovisProjectId);
       if (targetProject.is_cancelled || targetProject.status === 'cancelado') {
+        logAuditEvent(db, {
+          req,
+          action: 'allocation_rejected_no_balance',
+          module: 'ecovis',
+          entityType: 'ecovis_project',
+          entityId: Number(ecovisProjectId),
+          entityLabel: targetProject.project_name,
+          metadata: { reason: 'proyecto_cancelado' },
+        });
         throw badRequest('No se puede asignar a un proyecto cancelado.');
       }
-      if (targetProject.status === 'pagado') {
-        throw badRequest('No se puede asignar a un proyecto ya pagado al 100%.');
+      const projectAllocations = db.prepare(
+        "SELECT * FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND allocation_type = 'proyecto' AND is_cancelled = 0",
+      ).all(ecovisProjectId);
+      const projectBalance = calculateEcovisProjectBalance(targetProject, projectAllocations);
+      if (projectBalance.is_fully_paid || projectBalance.pending_amount_mxn <= 0.01) {
+        logAuditEvent(db, {
+          req,
+          action: 'allocation_rejected_no_balance',
+          module: 'ecovis',
+          entityType: 'ecovis_project',
+          entityId: Number(ecovisProjectId),
+          entityLabel: targetProject.project_name,
+          metadata: { pending_amount_mxn: projectBalance.pending_amount_mxn, status: projectBalance.status },
+        });
+        throw badRequest('El proyecto no tiene saldo pendiente para asignar pagos.');
       }
     } else if (allocationType === 'orden_compra') {
       if (!req.body.ecovis_purchase_order_id) {
@@ -3154,6 +3236,29 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
     const allocationCurrency = payment.currency || 'MXN';
     const allocationRate = Number(payment.exchange_rate_to_mxn || 1);
     const allocationAmountMxn = roundMoneyEcovis(amount * allocationRate);
+
+    if (allocationType === 'proyecto' && ecovisProjectId) {
+      const targetProject = getEcovisProjectOrFail(ecovisProjectId);
+      const projectAllocations = db.prepare(
+        "SELECT * FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND allocation_type = 'proyecto' AND is_cancelled = 0",
+      ).all(ecovisProjectId);
+      const projectBalance = calculateEcovisProjectBalance(targetProject, projectAllocations);
+      if (allocationAmountMxn > projectBalance.pending_amount_mxn + 0.005) {
+        logAuditEvent(db, {
+          req,
+          action: 'allocation_rejected_insufficient_balance',
+          module: 'ecovis',
+          entityType: 'ecovis_project',
+          entityId: Number(ecovisProjectId),
+          entityLabel: targetProject.project_name,
+          metadata: {
+            attempted_amount_mxn: allocationAmountMxn,
+            pending_amount_mxn: projectBalance.pending_amount_mxn,
+          },
+        });
+        throw badRequest(`Monto excede saldo pendiente del proyecto (${projectBalance.pending_amount_mxn} MXN).`);
+      }
+    }
 
     let movementType;
     let direction;

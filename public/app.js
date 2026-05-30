@@ -199,29 +199,58 @@ function formatMoney(value) {
 }
 
 function initCurrencyInput(input, getCurrency) {
-  let rawValue = parseCurrencyInput(input.value) || 0;
+  let rawValue = parseCurrencyInput(input.value);
+  if (isNaN(rawValue)) rawValue = 0;
+
   function formatDisplay() {
     const cur = getCurrency ? getCurrency() : 'MXN';
     if (input === document.activeElement) return;
+    if (!rawValue || Math.abs(rawValue) < 0.000001) {
+      input.value = '';
+      return;
+    }
     input.value = formatCurrencyDisplay(rawValue, cur);
   }
+
   input.addEventListener('focus', () => {
-    input.value = rawValue === 0 ? '' : String(rawValue);
+    input.value = (!rawValue || Math.abs(rawValue) < 0.000001) ? '' : String(rawValue);
     input.select();
   });
   input.addEventListener('blur', () => {
-    const parsed = parseCurrencyInput(input.value);
-    if (!isNaN(parsed)) rawValue = parsed;
+    const trimmed = input.value.trim();
+    if (trimmed === '') {
+      rawValue = 0;
+    } else {
+      const parsed = parseCurrencyInput(input.value);
+      rawValue = isNaN(parsed) ? 0 : parsed;
+    }
     formatDisplay();
   });
   input.addEventListener('input', () => {
+    const trimmed = input.value.trim();
+    if (trimmed === '' || trimmed === '-' || trimmed === '.') {
+      rawValue = 0;
+      return;
+    }
     const parsed = parseCurrencyInput(input.value);
     if (!isNaN(parsed)) rawValue = parsed;
   });
   input.getCurrencyValue = () => rawValue;
   input.setCurrencyValue = (v) => {
-    rawValue = typeof v === 'number' ? v : (parseCurrencyInput(v) || 0);
-    formatDisplay();
+    if (v === '' || v == null) {
+      rawValue = 0;
+    } else {
+      rawValue = typeof v === 'number' ? v : (parseCurrencyInput(v) || 0);
+    }
+    if (input === document.activeElement) {
+      input.value = rawValue === 0 ? '' : String(rawValue);
+    } else {
+      formatDisplay();
+    }
+  };
+  input.clearCurrencyValue = () => {
+    rawValue = 0;
+    input.value = '';
   };
   formatDisplay();
 }
@@ -2414,14 +2443,20 @@ const ecovisAmountAdjustmentForm = document.querySelector('#ecovis-amount-adjust
 const ecovisAmountAdjustmentMessage = document.querySelector('#ecovis-amount-adjustment-message');
 
 function resetEcovisCurrencyField(input, value = 0) {
-  if (input && input.setCurrencyValue) {
+  if (!input) return;
+  if (value === 0 && input.clearCurrencyValue) {
+    input.clearCurrencyValue();
+  } else if (input.setCurrencyValue) {
     input.setCurrencyValue(value);
-  } else if (input) {
+  } else {
     input.value = value === 0 ? '' : String(value);
   }
 }
 
 function resetEcovisPaymentForm() {
+  if (ecovisPaymentForm.elements.amount && ecovisPaymentForm.elements.amount.clearCurrencyValue) {
+    ecovisPaymentForm.elements.amount.clearCurrencyValue();
+  }
   ecovisPaymentForm.reset();
   if (ecovisPaymentForm.elements.id) ecovisPaymentForm.elements.id.value = '';
   ecovisPaymentForm.elements.payment_date.value = today();
@@ -2429,8 +2464,10 @@ function resetEcovisPaymentForm() {
     ecovisPaymentForm.elements.currency.value = 'MXN';
     ecovisPaymentForm.elements.currency.disabled = false;
   }
-  if (ecovisPaymentForm.elements.amount) ecovisPaymentForm.elements.amount.readOnly = false;
-  resetEcovisCurrencyField(ecovisPaymentForm.elements.amount, 0);
+  if (ecovisPaymentForm.elements.amount) {
+    ecovisPaymentForm.elements.amount.readOnly = false;
+    resetEcovisCurrencyField(ecovisPaymentForm.elements.amount, 0);
+  }
   if (ecovisPaymentFormTitle) ecovisPaymentFormTitle.textContent = 'Registrar pago de ECOVIS';
   setMessage(ecovisPaymentMessage, '');
 }
@@ -2942,7 +2979,8 @@ ecovisPaymentForm.addEventListener('submit', async (event) => {
     setMessage(ecovisPaymentMessage, id ? 'Pago actualizado correctamente.' : 'Pago registrado correctamente.', true);
     await loadEcovisSummary();
     await loadEcovisPayments();
-    setTimeout(() => { closeEcovisModal(ecovisPaymentModal, resetEcovisPaymentForm); }, 600);
+    resetEcovisPaymentForm();
+    setTimeout(() => { closeEcovisModal(ecovisPaymentModal); }, 600);
   } catch (error) {
     setMessage(ecovisPaymentMessage, error.message);
   }
@@ -2984,6 +3022,31 @@ ecovisPaymentsTable.addEventListener('click', async (event) => {
   }
 });
 
+function dedupeEcovisAssignableProjects(projects) {
+  const seen = new Map();
+  for (const p of projects || []) {
+    if (!p || p.id == null) continue;
+    if (!seen.has(p.id)) seen.set(p.id, p);
+  }
+  return Array.from(seen.values());
+}
+
+function renderEcovisAssignableProjectOptions(projects) {
+  const unique = dedupeEcovisAssignableProjects(projects);
+  if (!unique.length) {
+    return '<option value="">No hay proyectos ECOVIS con saldo pendiente para asignar este pago.</option>';
+  }
+  return unique.map((p) => {
+    const label = p.label || (p.project_name + ' — Pendiente ' + money.format(Number(p.pending_amount_mxn || 0)) + ' MXN');
+    return '<option value="' + escapeHtml(String(p.id)) + '">' + escapeHtml(label) + '</option>';
+  }).join('');
+}
+
+async function loadEcovisAssignableProjects() {
+  const result = await api('/api/ecovis/projects/assignable');
+  return dedupeEcovisAssignableProjects(result.data || result);
+}
+
 async function openAllocationModal(paymentId) {
   state.selectedEcovisPaymentId = Number(paymentId);
   resetEcovisAllocationForm();
@@ -3017,10 +3080,8 @@ async function openAllocationModal(paymentId) {
       }).join('');
     }
 
-    const projects = (await api('/api/ecovis/projects?limit=9999&for_allocation=1')).data;
-    ecovisAllocationProjectSelect.innerHTML = projects.length
-      ? projects.map((p) => '<option value="' + p.id + '">' + escapeHtml(p.project_name) + ' (pend. ' + money.format(Number(p.pending_amount_mxn || 0)) + ' MXN)</option>').join('')
-      : '<option value="">Sin proyectos con saldo pendiente</option>';
+    const projects = await loadEcovisAssignableProjects();
+    ecovisAllocationProjectSelect.innerHTML = renderEcovisAssignableProjectOptions(projects);
 
     toggleAllocationProjectField();
   } catch (error) {
@@ -3186,11 +3247,11 @@ async function openApplyCreditModal(projectId) {
     const summary = await api('/api/ecovis/summary');
     ecovisCreditAvailable.textContent = 'Saldo a favor disponible: ' + money.format(summary.credit_balance || 0);
 
-    const projects = (await api('/api/ecovis/projects?limit=9999&for_allocation=1')).data;
-    ecovisCreditProjectSelect.innerHTML = projects.length
-      ? projects.map((p) => '<option value="' + p.id + '"' + (Number(p.id) === Number(projectId) ? ' selected' : '') + '>' +
-        escapeHtml(p.project_name) + ' (pend. ' + money.format(Number(p.pending_amount_mxn || 0)) + ' MXN)</option>').join('')
-      : '<option value="">Sin proyectos con saldo pendiente</option>';
+    const projects = await loadEcovisAssignableProjects();
+    ecovisCreditProjectSelect.innerHTML = renderEcovisAssignableProjectOptions(projects);
+    if (projectId && ecovisCreditProjectSelect.querySelector('option[value="' + projectId + '"]')) {
+      ecovisCreditProjectSelect.value = String(projectId);
+    }
 
     ecovisApplyCreditModal.classList.remove('hidden');
   } catch (error) {

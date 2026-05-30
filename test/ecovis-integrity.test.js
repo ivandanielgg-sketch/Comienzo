@@ -202,9 +202,27 @@ test('ECOVIS integrity fixes', async (t) => {
     assert.ok(String(dup.body.message || '').includes('orden de compra activa'));
   });
 
-  await t.test('for_allocation payments exclude fully allocated', async () => {
-    const list = await request('GET', '/api/ecovis/payments?limit=9999&for_allocation=1', null, adminCookie);
-    const fullyAllocated = list.body.data.find((p) => p.id === paymentId);
-    assert.equal(fullyAllocated, undefined);
+  await t.test('assignable endpoint excludes fully paid and dedupes by id', async () => {
+    const res = await request('GET', '/api/ecovis/projects/assignable', null, adminCookie);
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.body.data));
+    const ids = res.body.data.map((p) => p.id);
+    assert.equal(ids.length, new Set(ids).size, 'No duplicate project ids');
+    const paidProject = res.body.data.find((p) => p.id === projectId);
+    assert.equal(paidProject, undefined);
+    for (const p of res.body.data) {
+      assert.ok(p.pending_amount_mxn > 0.01, `Project ${p.id} should have pending balance`);
+      assert.ok(p.label && p.label.includes('Pendiente'));
+    }
+  });
+
+  await t.test('allocation rejected when project has no pending balance', async () => {
+    const res = await request('POST', `/api/ecovis/payments/${paymentId}/allocations`, {
+      allocation_type: 'proyecto',
+      ecovis_project_id: projectId,
+      amount: 1000,
+    }, adminCookie);
+    assert.equal(res.status, 400);
+    assert.ok(String(res.body.message || '').toLowerCase().includes('saldo pendiente'));
   });
 });

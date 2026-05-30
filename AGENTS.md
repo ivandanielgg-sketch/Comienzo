@@ -29,9 +29,9 @@ This is a Node.js/Express project management application ("Control de Proyectos"
 - ECOVIS project status values are `pendiente`, `parcialmente_pagado`, `pagado`, `cancelado` (note: `parcialmente_pagado`, not `parcial`).
 - The `ecovis_movements.description` column is `NOT NULL`; always provide a description when inserting movements.
 - Integration tests (e.g. `attendance.test.js`, `ecovis-currency.test.js`, `financial-integration.test.js`) require the server running on port 3000 (`npm start`) before executing `npm test`. Without the server, those tests fail with `ECONNREFUSED` but unit tests still pass.
-- ECOVIS allocation/work lists: use `for_allocation=1` on `/api/ecovis/projects` and `/api/ecovis/payments` to exclude saldados/completamente asignados. PO list supports `exclude_settled=1` and `for_allocation=1`.
+- ECOVIS allocation/work lists: use `GET /api/ecovis/projects/assignable` (preferred) or `for_allocation=1` on list endpoints. PO list supports `exclude_settled=1` and `for_allocation=1`.
 - Critical ECOVIS amount/currency edits are blocked when allocations exist; admins use `POST /api/ecovis/amount-adjustments` with mandatory `reason`.
 - OC duplicates are blocked via `purchase_order_number_normalized` (trim, uppercase, collapsed spaces). Error: "Ya existe una orden de compra activa con este numero."
-- Payment forms must reset currency input via `setCurrencyValue(0)` after `form.reset()` — otherwise stale amounts persist in `initCurrencyInput` closure.
+- Payment amount field: `initCurrencyInput` keeps `rawValue` in closure; call `clearCurrencyValue()` before `form.reset()` for new payments; zero displays as empty; `#ecovis-payment-amount` uses `autocomplete="off"`.
 - ECOVIS modals use mousedown-on-backdrop detection; avoid closing on text selection/copy inside inputs.
 - There is one pre-existing test failure (`backup import preview handles attendance entities` — 413 payload too large); this is not caused by environment setup.
