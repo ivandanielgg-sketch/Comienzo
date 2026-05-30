@@ -2,6 +2,16 @@ function roundMoney(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
+/** Normaliza número de OC: trim, mayúsculas, espacios colapsados. */
+function normalizePurchaseOrderNumber(value) {
+  if (value == null || value === '') return '';
+  return String(value).trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+function amountsDiffer(a, b, tolerance = 0.005) {
+  return Math.abs(Number(a || 0) - Number(b || 0)) > tolerance;
+}
+
 function convertToMXN(amount, currency, exchangeRates) {
   const cur = currency || 'MXN';
   const rate = exchangeRates[cur];
@@ -214,9 +224,42 @@ function calculatePurchaseOrderBalance(purchaseOrder, allocations) {
   };
 }
 
+function calculateEcovisProjectBalance(project, allocations) {
+  return calculateEcovisProjectPaymentStatus(project, allocations);
+}
+
+function calculateEcovisPurchaseOrderBalance(purchaseOrder, allocations) {
+  return calculatePurchaseOrderBalance(purchaseOrder, allocations);
+}
+
+function calculateEcovisPaymentUnallocatedAmount(payment, allocations) {
+  return {
+    unallocated_amount: calculatePaymentUnallocated(payment, allocations),
+    unallocated_amount_mxn: calculatePaymentUnallocatedMXN(payment, allocations),
+  };
+}
+
+function calculateEcovisCreditBalance(allocations, movements) {
+  const creditBalance = roundMoney(
+    allocations
+      .filter((a) => a.allocation_type === 'saldo_a_favor' && !a.is_cancelled)
+      .reduce((sum, a) => sum + Number(a.amount_mxn || a.amount || 0), 0),
+  );
+  const creditFromMovements = roundMoney(
+    movements
+      .filter((m) => m.movement_type === 'saldo_a_favor' && m.direction === 'ecovis_debe_a_revram' && !m.is_cancelled)
+      .reduce((sum, m) => sum + Number(m.amount_mxn || m.amount || 0), 0),
+  );
+  return roundMoney(creditBalance - creditFromMovements);
+}
+
 module.exports = {
   calculateEcovisAccountSummary,
   calculateEcovisProjectPaymentStatus,
+  calculateEcovisProjectBalance,
+  calculateEcovisPurchaseOrderBalance,
+  calculateEcovisPaymentUnallocatedAmount,
+  calculateEcovisCreditBalance,
   calculateProjectPaidAmount,
   calculateProjectPaidAmountMXN,
   calculateProjectStatus,
@@ -224,5 +267,7 @@ module.exports = {
   calculatePaymentUnallocatedMXN,
   calculatePurchaseOrderBalance,
   convertToMXN,
+  normalizePurchaseOrderNumber,
+  amountsDiffer,
   roundMoney,
 };
