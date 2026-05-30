@@ -2380,8 +2380,11 @@ const ecovisProjectModal = document.querySelector('#ecovis-project-modal');
 const ecovisProjectForm = document.querySelector('#ecovis-project-form');
 const ecovisProjectFormTitle = document.querySelector('#ecovis-project-form-title');
 const ecovisProjectMessage = document.querySelector('#ecovis-project-message');
+const ecovisProjectAmountLocked = document.querySelector('#ecovis-project-amount-locked');
+const ecovisProjectAdjustmentBtn = document.querySelector('#ecovis-project-adjustment-btn');
 const ecovisPaymentModal = document.querySelector('#ecovis-payment-modal');
 const ecovisPaymentForm = document.querySelector('#ecovis-payment-form');
+const ecovisPaymentFormTitle = document.querySelector('#ecovis-payment-form-title');
 const ecovisPaymentMessage = document.querySelector('#ecovis-payment-message');
 const ecovisAllocationModal = document.querySelector('#ecovis-allocation-modal');
 const ecovisAllocationForm = document.querySelector('#ecovis-allocation-form');
@@ -2406,19 +2409,132 @@ const ecovisCreditProjectSelect = document.querySelector('#ecovis-credit-project
 const ecovisProjectsSearchInput = document.querySelector('#ecovis-projects-search');
 const ecovisMovementsSearchInput = document.querySelector('#ecovis-movements-search');
 const ecovisMovementsTypeFilterSelect = document.querySelector('#ecovis-movements-type-filter');
+const ecovisAmountAdjustmentModal = document.querySelector('#ecovis-amount-adjustment-modal');
+const ecovisAmountAdjustmentForm = document.querySelector('#ecovis-amount-adjustment-form');
+const ecovisAmountAdjustmentMessage = document.querySelector('#ecovis-amount-adjustment-message');
+
+function resetEcovisCurrencyField(input, value = 0) {
+  if (input && input.setCurrencyValue) {
+    input.setCurrencyValue(value);
+  } else if (input) {
+    input.value = value === 0 ? '' : String(value);
+  }
+}
+
+function resetEcovisPaymentForm() {
+  ecovisPaymentForm.reset();
+  if (ecovisPaymentForm.elements.id) ecovisPaymentForm.elements.id.value = '';
+  ecovisPaymentForm.elements.payment_date.value = today();
+  if (ecovisPaymentForm.elements.currency) {
+    ecovisPaymentForm.elements.currency.value = 'MXN';
+    ecovisPaymentForm.elements.currency.disabled = false;
+  }
+  if (ecovisPaymentForm.elements.amount) ecovisPaymentForm.elements.amount.readOnly = false;
+  resetEcovisCurrencyField(ecovisPaymentForm.elements.amount, 0);
+  if (ecovisPaymentFormTitle) ecovisPaymentFormTitle.textContent = 'Registrar pago de ECOVIS';
+  setMessage(ecovisPaymentMessage, '');
+}
+
+function resetEcovisProjectForm() {
+  ecovisProjectForm.reset();
+  ecovisProjectForm.elements.id.value = '';
+  ecovisProjectForm.elements.project_date.value = today();
+  if (ecovisProjectForm.elements.currency) ecovisProjectForm.elements.currency.value = 'MXN';
+  resetEcovisCurrencyField(ecovisProjectForm.elements.total_amount, 0);
+  setEcovisProjectAmountLock(false);
+  setMessage(ecovisProjectMessage, '');
+}
+
+function resetEcovisAllocationForm() {
+  ecovisAllocationForm.reset();
+  resetEcovisCurrencyField(ecovisAllocationForm.elements.amount, 0);
+  setMessage(ecovisAllocationMessage, '');
+}
+
+function closeEcovisModal(modal, resetFn) {
+  modal.classList.add('hidden');
+  if (resetFn) resetFn();
+}
+
+function attachEcovisModalClose(modal, resetFn) {
+  modal.addEventListener('mousedown', (event) => {
+    if (event.target === modal) {
+      modal.dataset.backdropDown = '1';
+    }
+  });
+  modal.addEventListener('click', (event) => {
+    if (event.target.closest('.modal-close')) {
+      closeEcovisModal(modal, resetFn);
+      return;
+    }
+    if (event.target === modal && modal.dataset.backdropDown === '1') {
+      closeEcovisModal(modal, resetFn);
+    }
+    delete modal.dataset.backdropDown;
+  });
+  const content = modal.querySelector('.modal-content');
+  if (content) {
+    content.addEventListener('mousedown', (event) => {
+      event.stopPropagation();
+      delete modal.dataset.backdropDown;
+    });
+  }
+}
+
+function setEcovisProjectAmountLock(locked) {
+  const amtInput = ecovisProjectForm.elements.total_amount;
+  const curSelect = ecovisProjectForm.elements.currency;
+  if (amtInput) amtInput.readOnly = Boolean(locked);
+  if (curSelect) curSelect.disabled = Boolean(locked);
+  if (ecovisProjectAmountLocked) ecovisProjectAmountLocked.classList.toggle('hidden', !locked);
+  if (ecovisProjectAdjustmentBtn) {
+    ecovisProjectAdjustmentBtn.classList.toggle('hidden', !locked || state.userRole !== 'admin');
+  }
+}
+
+function openEcovisAmountAdjustmentModal(entityType, entityId, currentAmount, currentCurrency) {
+  ecovisAmountAdjustmentForm.reset();
+  ecovisAmountAdjustmentForm.elements.entity_type.value = entityType;
+  ecovisAmountAdjustmentForm.elements.entity_id.value = entityId;
+  ecovisAmountAdjustmentForm.elements.new_currency.value = currentCurrency || 'MXN';
+  resetEcovisCurrencyField(ecovisAmountAdjustmentForm.elements.new_amount_original, Number(currentAmount || 0));
+  setMessage(ecovisAmountAdjustmentMessage, '');
+  ecovisAmountAdjustmentModal.classList.remove('hidden');
+}
 
 (function setupEcovisCurrencyInputs() {
   if (ecovisProjectForm && ecovisProjectForm.elements.total_amount) {
     initCurrencyInput(ecovisProjectForm.elements.total_amount, function() { return ecovisProjectForm.elements.currency ? ecovisProjectForm.elements.currency.value : 'MXN'; });
+    if (ecovisProjectForm.elements.currency) {
+      ecovisProjectForm.elements.currency.addEventListener('change', function() {
+        resetEcovisCurrencyField(ecovisProjectForm.elements.total_amount, ecovisProjectForm.elements.total_amount.getCurrencyValue());
+      });
+    }
   }
   if (ecovisPaymentForm && ecovisPaymentForm.elements.amount) {
     initCurrencyInput(ecovisPaymentForm.elements.amount, function() { return ecovisPaymentForm.elements.currency ? ecovisPaymentForm.elements.currency.value : 'MXN'; });
+    if (ecovisPaymentForm.elements.currency) {
+      ecovisPaymentForm.elements.currency.addEventListener('change', function() {
+        resetEcovisCurrencyField(ecovisPaymentForm.elements.amount, ecovisPaymentForm.elements.amount.getCurrencyValue());
+      });
+    }
   }
   if (ecovisLoanForm && ecovisLoanForm.elements.amount) {
     initCurrencyInput(ecovisLoanForm.elements.amount, function() { return ecovisLoanForm.elements.currency ? ecovisLoanForm.elements.currency.value : 'MXN'; });
   }
   var allocForm = document.querySelector('#ecovis-allocation-form');
   if (allocForm && allocForm.elements.amount) initCurrencyInput(allocForm.elements.amount, function() { return 'MXN'; });
+  if (ecovisAmountAdjustmentForm && ecovisAmountAdjustmentForm.elements.new_amount_original) {
+    initCurrencyInput(ecovisAmountAdjustmentForm.elements.new_amount_original, function() {
+      return ecovisAmountAdjustmentForm.elements.new_currency ? ecovisAmountAdjustmentForm.elements.new_currency.value : 'MXN';
+    });
+  }
+  if (ecovisApplyCreditForm && ecovisApplyCreditForm.elements.amount) {
+    initCurrencyInput(ecovisApplyCreditForm.elements.amount, function() { return 'MXN'; });
+  }
+  if (ecovisAdjustmentForm && ecovisAdjustmentForm.elements.amount) {
+    initCurrencyInput(ecovisAdjustmentForm.elements.amount, function() { return 'MXN'; });
+  }
 })();
 
 const ECOVIS_MOVEMENT_TYPE_LABELS = {
@@ -2560,7 +2676,14 @@ function renderEcovisPayments(payments, pagination) {
     filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
     onRefresh: loadEcovisPayments,
     pageState: state.ecovisPaymentsPag,
-    renderActions: (p) => '<div class="row-actions"><button class="secondary" data-action="ecovis-allocate-payment" data-id="' + p.id + '" type="button">Asignar</button></div>',
+    renderActions: (p) => {
+      const canAllocate = !p.is_cancelled && Number(p.unallocated_amount || 0) > 0.005;
+      const canEdit = !p.is_cancelled;
+      return '<div class="row-actions">' +
+        (canAllocate ? '<button class="secondary" data-action="ecovis-allocate-payment" data-id="' + p.id + '" type="button">Asignar</button>' : '') +
+        (canEdit ? '<button class="secondary" data-action="ecovis-edit-payment" data-id="' + p.id + '" type="button">Editar</button>' : '') +
+      '</div>';
+    },
   });
 }
 
@@ -2712,11 +2835,8 @@ ecovisTab.addEventListener('click', async () => {
 });
 
 document.getElementById('ecovis-new-project-btn').addEventListener('click', () => {
-  ecovisProjectForm.reset();
-  ecovisProjectForm.elements.id.value = '';
   ecovisProjectFormTitle.textContent = 'Agregar proyecto ECOVIS';
-  ecovisProjectForm.elements.project_date.value = today();
-  setMessage(ecovisProjectMessage, '');
+  resetEcovisProjectForm();
   ecovisProjectModal.classList.remove('hidden');
 });
 
@@ -2733,17 +2853,13 @@ ecovisProjectForm.addEventListener('submit', async (event) => {
     setMessage(ecovisProjectMessage, 'Proyecto ECOVIS guardado correctamente.', true);
     await loadEcovisSummary();
     await loadEcovisProjects();
-    setTimeout(() => { ecovisProjectModal.classList.add('hidden'); }, 600);
+    setTimeout(() => { closeEcovisModal(ecovisProjectModal, resetEcovisProjectForm); }, 600);
   } catch (error) {
     setMessage(ecovisProjectMessage, error.message);
   }
 });
 
-ecovisProjectModal.addEventListener('click', (event) => {
-  if (event.target.closest('.modal-close') || event.target === ecovisProjectModal) {
-    ecovisProjectModal.classList.add('hidden');
-  }
-});
+attachEcovisModalClose(ecovisProjectModal, resetEcovisProjectForm);
 
 ecovisProjectsTable.addEventListener('click', async (event) => {
   const editBtn = event.target.closest('[data-action="ecovis-edit-project"]');
@@ -2759,8 +2875,9 @@ ecovisProjectsTable.addEventListener('click', async (event) => {
       ecovisProjectForm.elements.quote_number.value = project.quote_number || '';
       ecovisProjectForm.elements.purchase_order_number.value = project.purchase_order_number || '';
       ecovisProjectForm.elements.invoice_number.value = project.invoice_number || '';
-      ecovisProjectForm.elements.total_amount.value = project.total_amount || '';
+      resetEcovisCurrencyField(ecovisProjectForm.elements.total_amount, Number(project.total_amount || 0));
       ecovisProjectForm.elements.currency.value = project.currency || 'MXN';
+      setEcovisProjectAmountLock(Boolean(project.critical_amount_locked));
       ecovisProjectForm.elements.description.value = project.description || '';
       ecovisProjectForm.elements.notes.value = project.notes || '';
       setMessage(ecovisProjectMessage, '');
@@ -2778,7 +2895,7 @@ ecovisProjectsTable.addEventListener('click', async (event) => {
     try {
       await api('/api/ecovis/projects/' + cancelBtn.dataset.id + '/cancel', {
         method: 'POST',
-        body: JSON.stringify({ cancellation_reason: reason }),
+        body: JSON.stringify({ reason: reason }),
       });
       await loadEcovisSummary();
       await loadEcovisProjects();
@@ -2794,10 +2911,21 @@ ecovisProjectsTable.addEventListener('click', async (event) => {
   }
 });
 
+if (ecovisProjectAdjustmentBtn) {
+  ecovisProjectAdjustmentBtn.addEventListener('click', () => {
+    const entityId = ecovisProjectForm.elements.id.value;
+    if (!entityId) return;
+    openEcovisAmountAdjustmentModal(
+      'project',
+      entityId,
+      ecovisProjectForm.elements.total_amount.getCurrencyValue(),
+      ecovisProjectForm.elements.currency.value,
+    );
+  });
+}
+
 document.getElementById('ecovis-new-payment-btn').addEventListener('click', () => {
-  ecovisPaymentForm.reset();
-  ecovisPaymentForm.elements.payment_date.value = today();
-  setMessage(ecovisPaymentMessage, '');
+  resetEcovisPaymentForm();
   ecovisPaymentModal.classList.remove('hidden');
 });
 
@@ -2806,47 +2934,73 @@ ecovisPaymentForm.addEventListener('submit', async (event) => {
   setMessage(ecovisPaymentMessage, '');
   const payload = simpleFormPayload(ecovisPaymentForm);
   try {
-    await api('/api/ecovis/payments', {
-      method: 'POST',
+    const id = ecovisPaymentForm.elements.id.value;
+    await api(id ? '/api/ecovis/payments/' + id : '/api/ecovis/payments', {
+      method: id ? 'PUT' : 'POST',
       body: JSON.stringify(payload),
     });
-    setMessage(ecovisPaymentMessage, 'Pago registrado correctamente.', true);
+    setMessage(ecovisPaymentMessage, id ? 'Pago actualizado correctamente.' : 'Pago registrado correctamente.', true);
     await loadEcovisSummary();
     await loadEcovisPayments();
-    setTimeout(() => { ecovisPaymentModal.classList.add('hidden'); }, 600);
+    setTimeout(() => { closeEcovisModal(ecovisPaymentModal, resetEcovisPaymentForm); }, 600);
   } catch (error) {
     setMessage(ecovisPaymentMessage, error.message);
   }
 });
 
-ecovisPaymentModal.addEventListener('click', (event) => {
-  if (event.target.closest('.modal-close') || event.target === ecovisPaymentModal) {
-    ecovisPaymentModal.classList.add('hidden');
-  }
-});
+attachEcovisModalClose(ecovisPaymentModal, resetEcovisPaymentForm);
 
 ecovisPaymentsTable.addEventListener('click', async (event) => {
   const allocBtn = event.target.closest('[data-action="ecovis-allocate-payment"]');
   if (allocBtn) {
     await openAllocationModal(allocBtn.dataset.id);
+    return;
+  }
+  const editBtn = event.target.closest('[data-action="ecovis-edit-payment"]');
+  if (editBtn) {
+    try {
+      const payment = await api('/api/ecovis/payments/' + editBtn.dataset.id);
+      resetEcovisPaymentForm();
+      ecovisPaymentForm.elements.id.value = payment.id;
+      ecovisPaymentFormTitle.textContent = 'Editar pago ECOVIS #' + payment.id;
+      ecovisPaymentForm.elements.payment_date.value = payment.payment_date || today();
+      resetEcovisCurrencyField(ecovisPaymentForm.elements.amount, Number(payment.amount || 0));
+      ecovisPaymentForm.elements.currency.value = payment.currency || 'MXN';
+      ecovisPaymentForm.elements.payment_method.value = payment.payment_method || '';
+      ecovisPaymentForm.elements.bank_reference.value = payment.bank_reference || '';
+      ecovisPaymentForm.elements.source_description.value = payment.source_description || '';
+      ecovisPaymentForm.elements.notes.value = payment.notes || '';
+      if (payment.critical_amount_locked) {
+        ecovisPaymentForm.elements.amount.readOnly = true;
+        ecovisPaymentForm.elements.currency.disabled = true;
+      } else {
+        ecovisPaymentForm.elements.amount.readOnly = false;
+        ecovisPaymentForm.elements.currency.disabled = false;
+      }
+      ecovisPaymentModal.classList.remove('hidden');
+    } catch (error) {
+      window.alert(error.message);
+    }
   }
 });
 
 async function openAllocationModal(paymentId) {
   state.selectedEcovisPaymentId = Number(paymentId);
-  setMessage(ecovisAllocationMessage, '');
-  ecovisAllocationForm.reset();
-  ecovisAllocationModal.classList.remove('hidden');
+  resetEcovisAllocationForm();
 
   try {
-    const payments = (await api('/api/ecovis/payments?limit=9999')).data;
-    const payment = payments.find((p) => p.id === Number(paymentId));
-    if (!payment) return;
+    const payment = await api('/api/ecovis/payments/' + paymentId);
+    if (!payment || payment.is_cancelled || Number(payment.unallocated_amount || 0) <= 0.005) {
+      window.alert('Este pago no tiene saldo disponible para asignar.');
+      return;
+    }
+
+    ecovisAllocationModal.classList.remove('hidden');
 
     ecovisAllocationSubtitle.textContent = 'Pago #' + payment.id + ' — ' + money.format(Number(payment.amount || 0)) + ' (' + (payment.currency || 'MXN') + ')';
     ecovisAllocationSummary.innerHTML =
       '<article><span>Monto total</span><strong>' + money.format(Number(payment.amount || 0)) + '</strong></article>' +
-      '<article><span>Asignado</span><strong>' + money.format(Number(payment.amount || 0) - Number(payment.unallocated_amount || 0)) + '</strong></article>' +
+      '<article><span>Asignado</span><strong>' + money.format(Number(payment.allocated_amount || 0)) + '</strong></article>' +
       '<article><span>Sin asignar</span><strong>' + money.format(Number(payment.unallocated_amount || 0)) + '</strong></article>';
 
     const allocations = payment.allocations || [];
@@ -2863,11 +3017,10 @@ async function openAllocationModal(paymentId) {
       }).join('');
     }
 
-    const projects = (await api('/api/ecovis/projects?limit=9999')).data;
-    ecovisAllocationProjectSelect.innerHTML = projects
-      .filter((p) => p.status !== 'cancelado')
-      .map((p) => '<option value="' + p.id + '">' + escapeHtml(p.project_name) + ' (' + money.format(Number(p.total_amount || 0)) + ')</option>')
-      .join('');
+    const projects = (await api('/api/ecovis/projects?limit=9999&for_allocation=1')).data;
+    ecovisAllocationProjectSelect.innerHTML = projects.length
+      ? projects.map((p) => '<option value="' + p.id + '">' + escapeHtml(p.project_name) + ' (pend. ' + money.format(Number(p.pending_amount_mxn || 0)) + ' MXN)</option>').join('')
+      : '<option value="">Sin proyectos con saldo pendiente</option>';
 
     toggleAllocationProjectField();
   } catch (error) {
@@ -2896,18 +3049,24 @@ ecovisAllocationForm.addEventListener('submit', async (event) => {
     });
     setMessage(ecovisAllocationMessage, 'Asignacion registrada correctamente.', true);
     await loadEcovisSummary();
+    await loadEcovisProjects();
     await loadEcovisPayments();
+    resetEcovisAllocationForm();
     await openAllocationModal(state.selectedEcovisPaymentId);
   } catch (error) {
     setMessage(ecovisAllocationMessage, error.message);
   }
 });
 
-ecovisAllocationModal.addEventListener('click', (event) => {
-  if (event.target.closest('.modal-close') || event.target === ecovisAllocationModal) {
-    ecovisAllocationModal.classList.add('hidden');
+function closeEcovisAllocationModal() {
+  closeEcovisModal(ecovisAllocationModal, () => {
+    resetEcovisAllocationForm();
     state.selectedEcovisPaymentId = null;
-  }
+  });
+}
+attachEcovisModalClose(ecovisAllocationModal, () => {
+  resetEcovisAllocationForm();
+  state.selectedEcovisPaymentId = null;
 });
 
 document.getElementById('ecovis-new-loan-btn').addEventListener('click', () => {
@@ -2936,10 +3095,9 @@ ecovisLoanForm.addEventListener('submit', async (event) => {
   }
 });
 
-ecovisLoanModal.addEventListener('click', (event) => {
-  if (event.target.closest('.modal-close') || event.target === ecovisLoanModal) {
-    ecovisLoanModal.classList.add('hidden');
-  }
+attachEcovisModalClose(ecovisLoanModal, () => {
+  ecovisLoanForm.reset();
+  resetEcovisCurrencyField(ecovisLoanForm.elements.amount, 0);
 });
 
 ecovisLoansTable.addEventListener('click', async (event) => {
@@ -2987,11 +3145,37 @@ ecovisAdjustmentForm.addEventListener('submit', async (event) => {
   }
 });
 
-ecovisAdjustmentModal.addEventListener('click', (event) => {
-  if (event.target.closest('.modal-close') || event.target === ecovisAdjustmentModal) {
-    ecovisAdjustmentModal.classList.add('hidden');
-  }
+attachEcovisModalClose(ecovisAdjustmentModal, () => {
+  ecovisAdjustmentForm.reset();
+  resetEcovisCurrencyField(ecovisAdjustmentForm.elements.amount, 0);
 });
+
+if (ecovisAmountAdjustmentForm) {
+  ecovisAmountAdjustmentForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    setMessage(ecovisAmountAdjustmentMessage, '');
+    const payload = simpleFormPayload(ecovisAmountAdjustmentForm);
+    payload.entity_id = Number(payload.entity_id);
+    try {
+      await api('/api/ecovis/amount-adjustments', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMessage(ecovisAmountAdjustmentMessage, 'Ajuste aplicado correctamente.', true);
+      await loadEcovisSummary();
+      await loadEcovisProjects();
+      await loadEcovisPayments();
+      setTimeout(() => {
+        closeEcovisModal(ecovisAmountAdjustmentModal, () => ecovisAmountAdjustmentForm.reset());
+        closeEcovisModal(ecovisProjectModal, resetEcovisProjectForm);
+        closeEcovisModal(ecovisPaymentModal, resetEcovisPaymentForm);
+      }, 600);
+    } catch (error) {
+      setMessage(ecovisAmountAdjustmentMessage, error.message);
+    }
+  });
+  attachEcovisModalClose(ecovisAmountAdjustmentModal, () => ecovisAmountAdjustmentForm.reset());
+}
 
 async function openApplyCreditModal(projectId) {
   ecovisApplyCreditForm.reset();
@@ -3002,12 +3186,11 @@ async function openApplyCreditModal(projectId) {
     const summary = await api('/api/ecovis/summary');
     ecovisCreditAvailable.textContent = 'Saldo a favor disponible: ' + money.format(summary.credit_balance || 0);
 
-    const projects = (await api('/api/ecovis/projects?limit=9999')).data;
-    ecovisCreditProjectSelect.innerHTML = projects
-      .filter((p) => p.status !== 'cancelado')
-      .map((p) => '<option value="' + p.id + '"' + (Number(p.id) === Number(projectId) ? ' selected' : '') + '>' +
-        escapeHtml(p.project_name) + ' (' + money.format(Number(p.total_amount || 0)) + ')</option>')
-      .join('');
+    const projects = (await api('/api/ecovis/projects?limit=9999&for_allocation=1')).data;
+    ecovisCreditProjectSelect.innerHTML = projects.length
+      ? projects.map((p) => '<option value="' + p.id + '"' + (Number(p.id) === Number(projectId) ? ' selected' : '') + '>' +
+        escapeHtml(p.project_name) + ' (pend. ' + money.format(Number(p.pending_amount_mxn || 0)) + ' MXN)</option>').join('')
+      : '<option value="">Sin proyectos con saldo pendiente</option>';
 
     ecovisApplyCreditModal.classList.remove('hidden');
   } catch (error) {
@@ -3033,10 +3216,9 @@ ecovisApplyCreditForm.addEventListener('submit', async (event) => {
   }
 });
 
-ecovisApplyCreditModal.addEventListener('click', (event) => {
-  if (event.target.closest('.modal-close') || event.target === ecovisApplyCreditModal) {
-    ecovisApplyCreditModal.classList.add('hidden');
-  }
+attachEcovisModalClose(ecovisApplyCreditModal, () => {
+  ecovisApplyCreditForm.reset();
+  resetEcovisCurrencyField(ecovisApplyCreditForm.elements.amount, 0);
 });
 
 if (ecovisProjectsSearchInput) {

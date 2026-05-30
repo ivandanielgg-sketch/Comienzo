@@ -147,6 +147,14 @@ const BACKUP_ENTITIES = [
     module: 'ecovis',
   },
   {
+    key: 'ecovisAmountAdjustments',
+    table: 'ecovis_amount_adjustments',
+    query: 'SELECT * FROM ecovis_amount_adjustments ORDER BY id',
+    stableKeys: ['entity_type', 'entity_id', 'created_at', 'reason'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'ecovis',
+  },
+  {
     key: 'settings',
     table: 'exchange_rates',
     query: 'SELECT * FROM exchange_rates ORDER BY currency',

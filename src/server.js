@@ -15,7 +15,7 @@ const {
   addSqlFilters,
   buildListResponse,
 } = require('./pagination');
-const { calculateEcovisAccountSummary, calculateProjectPaidAmountMXN, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance, convertToMXN, roundMoney: roundMoneyEcovis, calculateEcovisProjectPaymentStatus } = require('./ecovis');
+const { calculateEcovisAccountSummary, calculateProjectPaidAmountMXN, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance, convertToMXN, roundMoney: roundMoneyEcovis, calculateEcovisProjectPaymentStatus, normalizePurchaseOrderNumber, amountsDiffer, calculateEcovisProjectBalance, calculateEcovisPurchaseOrderBalance, calculateEcovisPaymentUnallocatedAmount } = require('./ecovis');
 const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { formatDateTimeCDMX } = require('./dateHelper');
 const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES, isAdminOnlyModule } = require('./permissions');
@@ -2558,6 +2558,82 @@ function getEcovisPaymentOrFail(paymentId) {
   return payment;
 }
 
+function findActiveEcovisPoByNormalized(normalized, excludeId = null) {
+  if (!normalized) return null;
+  let sql = 'SELECT id, purchase_order_number FROM ecovis_purchase_orders WHERE purchase_order_number_normalized = ? AND is_cancelled = 0';
+  const params = [normalized];
+  if (excludeId != null) {
+    sql += ' AND id != ?';
+    params.push(excludeId);
+  }
+  return db.prepare(sql).get(...params);
+}
+
+function ecovisProjectHasProyectoAllocations(projectId) {
+  const row = db.prepare(
+    "SELECT COUNT(*) as c FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND allocation_type = 'proyecto' AND is_cancelled = 0",
+  ).get(projectId);
+  return row.c > 0;
+}
+
+function ecovisPoHasAllocations(poId) {
+  const row = db.prepare(
+    "SELECT COUNT(*) as c FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND allocation_type = 'orden_compra' AND is_cancelled = 0",
+  ).get(poId);
+  return row.c > 0;
+}
+
+function ecovisPaymentHasAllocations(paymentId) {
+  const row = db.prepare(
+    'SELECT COUNT(*) as c FROM ecovis_payment_allocations WHERE payment_id = ? AND is_cancelled = 0',
+  ).get(paymentId);
+  return row.c > 0;
+}
+
+function ecovisCriticalAmountChanged(existing, amountField, newAmount, newCurrency) {
+  const prevAmount = Number(existing[amountField] ?? existing.total_amount ?? existing.amount ?? 0);
+  const prevCurrency = existing.currency || 'MXN';
+  return amountsDiffer(prevAmount, newAmount) || prevCurrency !== newCurrency;
+}
+
+function assertEcovisCriticalAmountEditable(entityType, entityId, existing, newAmount, newCurrency, amountField = 'total_amount') {
+  if (!ecovisCriticalAmountChanged(existing, amountField, newAmount, newCurrency)) {
+    return;
+  }
+  let locked = false;
+  if (entityType === 'project') {
+    locked = ecovisProjectHasProyectoAllocations(entityId);
+  } else if (entityType === 'purchase_order') {
+    locked = ecovisPoHasAllocations(entityId);
+  } else if (entityType === 'payment') {
+    locked = ecovisPaymentHasAllocations(entityId);
+  }
+  if (locked) {
+    const error = new Error(
+      'No se puede modificar monto o moneda directamente porque existen pagos o asignaciones relacionados. Use ajuste controlado.',
+    );
+    error.statusCode = 400;
+    error.code = 'CRITICAL_AMOUNT_LOCKED';
+    throw error;
+  }
+}
+
+function mapEcovisPaymentResponse(payment) {
+  const allocations = db.prepare(
+    'SELECT * FROM ecovis_payment_allocations WHERE payment_id = ? AND is_cancelled = 0 ORDER BY created_at DESC',
+  ).all(payment.id);
+  const allocated_amount = roundMoneyEcovis(allocations.reduce((sum, a) => sum + Number(a.amount || 0), 0));
+  const unallocatedInfo = calculateEcovisPaymentUnallocatedAmount(payment, allocations);
+  return {
+    ...payment,
+    allocations,
+    allocated_amount,
+    unallocated_amount: payment.unallocated_amount,
+    unallocated_amount_mxn: unallocatedInfo.unallocated_amount_mxn,
+    critical_amount_locked: ecovisPaymentHasAllocations(payment.id),
+  };
+}
+
 function recalculateProjectStatus(projectId) {
   const project = db.prepare('SELECT * FROM ecovis_projects WHERE id = ?').get(projectId);
   if (!project) return;
@@ -2619,6 +2695,7 @@ app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 
   const pendingMxnSql = `(COALESCE(ep.amount_mxn, ep.total_amount) - ${paidMxnSql})`;
 
   const excludePaid = req.query.exclude_paid === '1' || req.query.exclude_paid === 'true';
+  const forAllocation = req.query.for_allocation === '1' || req.query.for_allocation === 'true';
 
   const sorting = normalizeSort(req.query, {
     id: 'ep.id',
@@ -2661,6 +2738,10 @@ app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 
   if (excludePaid) {
     extraWhere = " AND ep.status != 'pagado' AND ep.is_cancelled = 0";
   }
+  if (forAllocation) {
+    extraWhere += " AND ep.status NOT IN ('pagado', 'cancelado') AND ep.is_cancelled = 0";
+    extraWhere += ` AND (${pendingMxnSql}) > 0.01`;
+  }
 
   const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM ecovis_projects ep WHERE ${whereClause}${extraWhere}`).get(...params).count;
   const pag = buildPaginationMeta(page, limit, totalRecords);
@@ -2678,7 +2759,16 @@ app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 
     const amount_mxn = Number(project.amount_mxn || project.total_amount || 0);
     const pending_amount = Math.max(0, Number(project.total_amount) - paid_amount);
     const pending_amount_mxn = roundMoneyEcovis(Math.max(0, amount_mxn - paid_amount_mxn));
-    return { ...project, paid_amount, pending_amount, amount_mxn, paid_amount_mxn, pending_amount_mxn };
+    const critical_amount_locked = ecovisProjectHasProyectoAllocations(project.id);
+    return {
+      ...project,
+      paid_amount,
+      pending_amount,
+      amount_mxn,
+      paid_amount_mxn,
+      pending_amount_mxn,
+      critical_amount_locked,
+    };
   });
 
   res.json(buildListResponse(data, pag, sorting, filters));
@@ -2735,8 +2825,9 @@ app.post('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount',
 });
 
 app.put('/api/ecovis/projects/:id', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
+  let project;
   try {
-    const project = getEcovisProjectOrFail(req.params.id);
+    project = getEcovisProjectOrFail(req.params.id);
     if (project.is_cancelled) {
       throw badRequest('No se puede editar un proyecto cancelado.');
     }
@@ -2754,6 +2845,8 @@ app.put('/api/ecovis/projects/:id', requireAuth, requirePermission('ecovisAccoun
     const rates = getExchangeRateMap();
     const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
     const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
+
+    assertEcovisCriticalAmountEditable('project', Number(req.params.id), project, totalAmount, currency);
 
     const audit = updatedByFields(req);
     db.prepare(
@@ -2774,6 +2867,17 @@ app.put('/api/ecovis/projects/:id', requireAuth, requirePermission('ecovisAccoun
     logAuditEvent(db, { req, action: 'update', module: 'ecovis', entityType: 'ecovis_project', entityId: Number(req.params.id), entityLabel: projectName, before: project, metadata: { currency, exchange_rate_to_mxn: exchangeRate, amount_mxn: amountMxn } });
     res.json(getEcovisProjectOrFail(req.params.id));
   } catch (error) {
+    if (error.code === 'CRITICAL_AMOUNT_LOCKED') {
+      logAuditEvent(db, {
+        req,
+        action: 'critical_amount_edit_blocked',
+        module: 'ecovis',
+        entityType: 'ecovis_project',
+        entityId: Number(req.params.id),
+        entityLabel: project?.project_name || String(req.params.id),
+        metadata: { attempted_amount: req.body.total_amount, attempted_currency: req.body.currency },
+      });
+    }
     next(error);
   }
 });
@@ -2823,6 +2927,7 @@ app.get('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount', 
   const { page, limit, search } = parsePaginationParams(req.query);
   const allocatedSql = '(ep.amount - ep.unallocated_amount)';
   const statusSql = "(CASE WHEN ep.is_cancelled = 1 THEN 'cancelado' WHEN ep.unallocated_amount > 0 THEN 'parcial' ELSE 'asignado' END)";
+  const forAllocation = req.query.for_allocation === '1' || req.query.for_allocation === 'true';
   const sorting = normalizeSort(req.query, {
     id: 'ep.id',
     payment_date: 'ep.payment_date',
@@ -2854,26 +2959,37 @@ app.get('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount', 
     },
   });
 
-  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM ecovis_payments ep WHERE ${whereClause}`).get(...params).count;
+  let paymentsExtraWhere = '';
+  if (forAllocation) {
+    paymentsExtraWhere = ' AND ep.is_cancelled = 0 AND ep.unallocated_amount > 0.005';
+  }
+
+  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM ecovis_payments ep WHERE ${whereClause}${paymentsExtraWhere}`).get(...params).count;
   const pag = buildPaginationMeta(page, limit, totalRecords);
 
   const payments = db.prepare(
-    `SELECT ep.* FROM ecovis_payments ep WHERE ${whereClause} ORDER BY ${sorting.orderBy} LIMIT ? OFFSET ?`,
+    `SELECT ep.* FROM ecovis_payments ep WHERE ${whereClause}${paymentsExtraWhere} ORDER BY ${sorting.orderBy} LIMIT ? OFFSET ?`,
   ).all(...params, pag.limit, pag.offset);
 
   const data = payments.map((payment) => {
-    const allocations = db.prepare(
-      'SELECT * FROM ecovis_payment_allocations WHERE payment_id = ? AND is_cancelled = 0',
-    ).all(payment.id);
-    const allocated_amount = allocations.reduce((sum, a) => sum + Number(a.amount || 0), 0);
+    const mapped = mapEcovisPaymentResponse(payment);
     return {
-      ...payment,
-      allocated_amount: Math.round((allocated_amount + Number.EPSILON) * 100) / 100,
+      ...mapped,
+      allocated_amount: mapped.allocated_amount,
       unallocated_amount: payment.unallocated_amount,
     };
   });
 
   res.json(buildListResponse(data, pag, sorting, filters));
+});
+
+app.get('/api/ecovis/payments/:id', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res, next) => {
+  try {
+    const payment = getEcovisPaymentOrFail(req.params.id);
+    res.json(mapEcovisPaymentResponse(payment));
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
@@ -2912,8 +3028,71 @@ app.post('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount',
 
     const paymentId = createPayment();
     logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_payment', entityId: paymentId, entityLabel: `Pago ${amount} ${currency}`, metadata: { currency, exchange_rate_to_mxn: exchangeRate, amount_mxn: amountMxn } });
-    res.status(201).json(getEcovisPaymentOrFail(paymentId));
+    res.status(201).json(mapEcovisPaymentResponse(getEcovisPaymentOrFail(paymentId)));
   } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/ecovis/payments/:id', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
+  let payment;
+  try {
+    payment = getEcovisPaymentOrFail(req.params.id);
+    if (payment.is_cancelled) {
+      throw badRequest('No se puede editar un pago cancelado.');
+    }
+
+    const paymentDate = requiredText(req.body, 'payment_date', 'Fecha de pago');
+    const amount = numberValue(req.body, 'amount', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const paymentMethod = optionalText(req.body, 'payment_method');
+    const bankReference = optionalText(req.body, 'bank_reference');
+    const sourceDescription = optionalText(req.body, 'source_description');
+    const notes = optionalText(req.body, 'notes');
+
+    assertEcovisCriticalAmountEditable('payment', Number(req.params.id), payment, amount, currency, 'amount');
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyEcovis(amount * exchangeRate);
+
+    const audit = updatedByFields(req);
+    db.prepare(
+      `UPDATE ecovis_payments SET
+        payment_date = ?, amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?,
+        payment_method = ?, bank_reference = ?, source_description = ?, notes = ?,
+        updated_at = ?, updated_by = ?, updated_by_user_id = ?
+      WHERE id = ?`,
+    ).run(
+      paymentDate, amount, currency, exchangeRate, amountMxn,
+      paymentMethod, bankReference, sourceDescription, notes,
+      audit.updated_at, audit.updated_by_name, audit.updated_by_user_id, req.params.id,
+    );
+
+    recalculatePaymentUnallocated(Number(req.params.id));
+    logAuditEvent(db, {
+      req,
+      action: 'update',
+      module: 'ecovis',
+      entityType: 'ecovis_payment',
+      entityId: Number(req.params.id),
+      entityLabel: `Pago ${amount} ${currency}`,
+      before: payment,
+      metadata: { currency, exchange_rate_to_mxn: exchangeRate, amount_mxn: amountMxn },
+    });
+    res.json(mapEcovisPaymentResponse(getEcovisPaymentOrFail(req.params.id)));
+  } catch (error) {
+    if (error.code === 'CRITICAL_AMOUNT_LOCKED') {
+      logAuditEvent(db, {
+        req,
+        action: 'critical_amount_edit_blocked',
+        module: 'ecovis',
+        entityType: 'ecovis_payment',
+        entityId: Number(req.params.id),
+        entityLabel: `Pago #${req.params.id}`,
+        metadata: { attempted_amount: req.body.amount, attempted_currency: req.body.currency },
+      });
+    }
     next(error);
   }
 });
@@ -2950,12 +3129,26 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
         throw badRequest('El proyecto es obligatorio para asignaciones de tipo proyecto.');
       }
       ecovisProjectId = req.body.ecovis_project_id;
-      getEcovisProjectOrFail(ecovisProjectId);
+      const targetProject = getEcovisProjectOrFail(ecovisProjectId);
+      if (targetProject.is_cancelled || targetProject.status === 'cancelado') {
+        throw badRequest('No se puede asignar a un proyecto cancelado.');
+      }
+      if (targetProject.status === 'pagado') {
+        throw badRequest('No se puede asignar a un proyecto ya pagado al 100%.');
+      }
     } else if (allocationType === 'orden_compra') {
       if (!req.body.ecovis_purchase_order_id) {
         throw badRequest('La orden de compra es obligatoria para asignaciones de tipo orden_compra.');
       }
       ecovisPurchaseOrderId = req.body.ecovis_purchase_order_id;
+      const targetPo = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(ecovisPurchaseOrderId);
+      if (!targetPo) throw badRequest('Orden de compra no encontrada.');
+      if (targetPo.is_cancelled || targetPo.status === 'cancelada') {
+        throw badRequest('No se puede asignar a una OC cancelada.');
+      }
+      if (targetPo.status === 'pagada') {
+        throw badRequest('No se puede asignar a una OC saldada.');
+      }
     }
 
     const allocationCurrency = payment.currency || 'MXN';
@@ -3012,7 +3205,17 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
 
     const allocationId = createAllocation();
     const allocation = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE id = ?').get(allocationId);
-    const updatedPayment = getEcovisPaymentOrFail(payment.id);
+    const updatedPayment = mapEcovisPaymentResponse(getEcovisPaymentOrFail(payment.id));
+
+    logAuditEvent(db, {
+      req,
+      action: 'create',
+      module: 'ecovis',
+      entityType: 'ecovis_payment_allocation',
+      entityId: allocationId,
+      entityLabel: `${allocationType} ${amount} ${allocationCurrency}`,
+      metadata: { ecovis_project_id: ecovisProjectId, ecovis_purchase_order_id: ecovisPurchaseOrderId, amount_mxn: allocationAmountMxn },
+    });
 
     res.status(201).json({ allocation, payment: updatedPayment });
   } catch (error) {
@@ -3352,6 +3555,8 @@ app.get('/api/ecovis/projects/history', requireAuth, requirePermission('ecovisAc
 
 app.get('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
+  const excludeSettled = req.query.exclude_settled === '1' || req.query.exclude_settled === 'true';
+  const forAllocation = req.query.for_allocation === '1' || req.query.for_allocation === 'true';
   const sorting = normalizeSort(req.query, {
     id: 'po.id',
     purchase_order_number: 'po.purchase_order_number',
@@ -3369,18 +3574,34 @@ app.get('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAcc
     search: { value: search, columns: ['po.purchase_order_number', 'po.project_name', 'po.notes'] },
   });
 
+  let poExtraWhere = whereClause === '1=1' ? '' : '';
+  const poParams = [...params];
+  let poWhere = whereClause;
+  if (excludeSettled || forAllocation) {
+    poWhere = `(${whereClause}) AND po.is_cancelled = 0 AND po.status NOT IN ('pagada', 'cancelada')`;
+    if (forAllocation) {
+      poWhere += ' AND COALESCE(po.pending_amount_mxn, po.amount_mxn, po.total_amount) > 0.01';
+    }
+  }
+
   const allAllocations = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE is_cancelled = 0').all();
   const result = paginateSqlList({
     tableSql: 'SELECT po.* FROM ecovis_purchase_orders po',
     countSql: 'SELECT COUNT(*) as count FROM ecovis_purchase_orders po',
-    whereClause,
-    params,
+    whereClause: poWhere,
+    params: poParams,
     page,
     limit,
     orderBy: sorting.orderBy,
     map: (po) => {
       const balance = calculatePurchaseOrderBalance(po, allAllocations);
-      return { ...po, ...balance, created_at_cdmx: formatDateTimeCDMX(po.created_at), updated_at_cdmx: formatDateTimeCDMX(po.updated_at) };
+      return {
+        ...po,
+        ...balance,
+        critical_amount_locked: ecovisPoHasAllocations(po.id),
+        created_at_cdmx: formatDateTimeCDMX(po.created_at),
+        updated_at_cdmx: formatDateTimeCDMX(po.updated_at),
+      };
     },
   });
 
@@ -3410,6 +3631,7 @@ app.get('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovi
 app.post('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAccount', 'create'), (req, res, next) => {
   try {
     const purchaseOrderNumber = requiredText(req.body, 'purchase_order_number', 'Numero de orden de compra');
+    const poNormalized = normalizePurchaseOrderNumber(purchaseOrderNumber);
     const orderDate = requiredText(req.body, 'order_date', 'Fecha de orden');
     const totalAmount = numberValue(req.body, 'total_amount', 'Monto total', { min: 0.01 });
     const currency = currencyValue(req.body, 'currency', 'Moneda');
@@ -3421,13 +3643,24 @@ app.post('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAc
     const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
     const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
 
-    const existing = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0').get(purchaseOrderNumber);
-    if (existing) throw badRequest('Ya existe una OC activa con ese numero.');
+    const existing = findActiveEcovisPoByNormalized(poNormalized);
+    if (existing) {
+      logAuditEvent(db, {
+        req,
+        action: 'duplicate_po_blocked',
+        module: 'ecovis',
+        entityType: 'ecovis_purchase_order',
+        entityId: existing.id,
+        entityLabel: purchaseOrderNumber,
+        metadata: { normalized: poNormalized, existing_id: existing.id },
+      });
+      throw badRequest('Ya existe una orden de compra activa con este numero.');
+    }
 
     const result = db.prepare(
-      `INSERT INTO ecovis_purchase_orders (purchase_order_number, project_name, order_date, total_amount, currency, exchange_rate_to_mxn, amount_mxn, pending_amount_mxn, notes, created_by, created_by_user_id, created_by_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, exchangeRate, amountMxn, amountMxn, notes, req.session.username, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+      `INSERT INTO ecovis_purchase_orders (purchase_order_number, purchase_order_number_normalized, project_name, order_date, total_amount, currency, exchange_rate_to_mxn, amount_mxn, pending_amount_mxn, notes, created_by, created_by_user_id, created_by_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(purchaseOrderNumber, poNormalized, projectName, orderDate, totalAmount, currency, exchangeRate, amountMxn, amountMxn, notes, req.session.username, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
 
     logAuditEvent(db, { req, action: 'create', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: result.lastInsertRowid, entityLabel: purchaseOrderNumber, metadata: { currency, exchange_rate_to_mxn: exchangeRate, amount_mxn: amountMxn } });
     const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(result.lastInsertRowid);
@@ -3438,12 +3671,14 @@ app.post('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAc
 });
 
 app.put('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
+  let po;
   try {
-    const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
+    po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id);
     if (!po) throw badRequest('Orden de compra no encontrada.');
     if (po.is_cancelled) throw badRequest('No se puede editar una OC cancelada.');
 
     const purchaseOrderNumber = requiredText(req.body, 'purchase_order_number', 'Numero de orden de compra');
+    const poNormalized = normalizePurchaseOrderNumber(purchaseOrderNumber);
     const orderDate = requiredText(req.body, 'order_date', 'Fecha de orden');
     const totalAmount = numberValue(req.body, 'total_amount', 'Monto total', { min: 0.01 });
     const currency = currencyValue(req.body, 'currency', 'Moneda');
@@ -3455,17 +3690,41 @@ app.put('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovi
     const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
     const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
 
-    const dup = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0 AND id != ?').get(purchaseOrderNumber, req.params.id);
-    if (dup) throw badRequest('Ya existe otra OC activa con ese numero.');
+    assertEcovisCriticalAmountEditable('purchase_order', Number(req.params.id), po, totalAmount, currency);
+
+    const dup = findActiveEcovisPoByNormalized(poNormalized, Number(req.params.id));
+    if (dup) {
+      logAuditEvent(db, {
+        req,
+        action: 'duplicate_po_blocked',
+        module: 'ecovis',
+        entityType: 'ecovis_purchase_order',
+        entityId: dup.id,
+        entityLabel: purchaseOrderNumber,
+        metadata: { normalized: poNormalized, attempted_po_id: Number(req.params.id) },
+      });
+      throw badRequest('Ya existe una orden de compra activa con este numero.');
+    }
 
     db.prepare(
-      `UPDATE ecovis_purchase_orders SET purchase_order_number = ?, project_name = ?, order_date = ?, total_amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, notes = ?, updated_by = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`,
-    ).run(purchaseOrderNumber, projectName, orderDate, totalAmount, currency, exchangeRate, amountMxn, notes, req.session.username, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
+      `UPDATE ecovis_purchase_orders SET purchase_order_number = ?, purchase_order_number_normalized = ?, project_name = ?, order_date = ?, total_amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, notes = ?, updated_by = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`,
+    ).run(purchaseOrderNumber, poNormalized, projectName, orderDate, totalAmount, currency, exchangeRate, amountMxn, notes, req.session.username, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
 
     recalculatePurchaseOrderStatus(Number(req.params.id));
     logAuditEvent(db, { req, action: 'update', module: 'ecovis', entityType: 'ecovis_purchase_order', entityId: Number(req.params.id), entityLabel: purchaseOrderNumber, before: po });
     res.json(db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(req.params.id));
   } catch (error) {
+    if (error.code === 'CRITICAL_AMOUNT_LOCKED') {
+      logAuditEvent(db, {
+        req,
+        action: 'critical_amount_edit_blocked',
+        module: 'ecovis',
+        entityType: 'ecovis_purchase_order',
+        entityId: Number(req.params.id),
+        entityLabel: po?.purchase_order_number || String(req.params.id),
+        metadata: { attempted_amount: req.body.total_amount, attempted_currency: req.body.currency },
+      });
+    }
     next(error);
   }
 });
@@ -3510,10 +3769,14 @@ app.post('/api/ecovis/purchase-orders/:id/allocate', requireAuth, requirePermiss
     const available = Number(payment.amount) - totalAllocated;
     if (amount > available + 0.01) throw badRequest(`Monto excede el disponible del pago ($${available.toFixed(2)}).`);
 
+    const allocationCurrency = payment.currency || 'MXN';
+    const allocationRate = Number(payment.exchange_rate_to_mxn || 1);
+    const allocationAmountMxn = roundMoneyEcovis(amount * allocationRate);
+
     const result = db.prepare(
-      `INSERT INTO ecovis_payment_allocations (payment_id, ecovis_purchase_order_id, allocation_type, amount, notes, created_by, created_by_user_id, created_at, updated_at)
-       VALUES (?, ?, 'orden_compra', ?, ?, ?, ?, ?, ?)`,
-    ).run(paymentId, po.id, amount, notes, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
+      `INSERT INTO ecovis_payment_allocations (payment_id, ecovis_purchase_order_id, allocation_type, amount, currency, exchange_rate_to_mxn, amount_mxn, notes, created_by, created_by_user_id, created_at, updated_at)
+       VALUES (?, ?, 'orden_compra', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(paymentId, po.id, amount, allocationCurrency, allocationRate, allocationAmountMxn, notes, req.session.username, audit.created_by_user_id, audit.created_at, audit.created_at);
 
     recalculatePaymentUnallocated(paymentId);
     recalculatePurchaseOrderStatus(po.id);
@@ -3525,16 +3788,110 @@ app.post('/api/ecovis/purchase-orders/:id/allocate', requireAuth, requirePermiss
   }
 });
 
-function recalculatePurchaseOrderStatus(poId) {
-  const po = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(poId);
-  if (!po || po.is_cancelled) return;
-  const allocs = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND is_cancelled = 0').all(poId);
-  const totalApplied = allocs.reduce((s, a) => s + Number(a.amount), 0);
-  let newStatus = 'pendiente';
-  if (totalApplied >= Number(po.total_amount)) newStatus = 'pagada';
-  else if (totalApplied > 0) newStatus = 'parcialmente_pagada';
-  db.prepare('UPDATE ecovis_purchase_orders SET status = ? WHERE id = ?').run(newStatus, poId);
-}
+app.post('/api/ecovis/amount-adjustments', requireAuth, requireAdmin, (req, res, next) => {
+  try {
+    const entityType = requiredText(req.body, 'entity_type', 'Tipo de entidad');
+    const entityId = Number(req.body.entity_id);
+    if (!entityId) throw badRequest('entity_id es obligatorio.');
+    const newAmount = numberValue(req.body, 'new_amount_original', 'Nuevo monto', { min: 0 });
+    const newCurrency = currencyValue(req.body, 'new_currency', 'Moneda');
+    const reason = requiredText(req.body, 'reason', 'Motivo del ajuste');
+    const notes = optionalText(req.body, 'notes');
+
+    const rates = getExchangeRateMap();
+    const newRate = newCurrency === 'MXN' ? 1 : (rates[newCurrency] || 1);
+    const newAmountMxn = roundMoneyEcovis(newAmount * newRate);
+    const audit = updatedByFields(req);
+
+    const applyAdjustment = db.transaction(() => {
+      let previous;
+      if (entityType === 'project') {
+        previous = getEcovisProjectOrFail(entityId);
+        if (previous.is_cancelled) throw badRequest('No se puede ajustar un proyecto cancelado.');
+        const paidMxn = Number(previous.paid_amount_mxn || 0);
+        if (newAmountMxn + 0.01 < paidMxn) {
+          throw badRequest(`El nuevo monto MXN (${newAmountMxn}) no puede ser menor al ya pagado (${paidMxn}).`);
+        }
+        db.prepare(
+          `UPDATE ecovis_projects SET total_amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, updated_at = ?, updated_by = ?, updated_by_user_id = ? WHERE id = ?`,
+        ).run(newAmount, newCurrency, newRate, newAmountMxn, audit.updated_at, audit.updated_by_name, audit.updated_by_user_id, entityId);
+        recalculateProjectStatus(entityId);
+      } else if (entityType === 'purchaseOrder') {
+        previous = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(entityId);
+        if (!previous) throw badRequest('Orden de compra no encontrada.');
+        if (previous.is_cancelled) throw badRequest('No se puede ajustar una OC cancelada.');
+        const paidMxn = Number(previous.paid_amount_mxn || 0);
+        if (newAmountMxn + 0.01 < paidMxn) {
+          throw badRequest(`El nuevo monto MXN (${newAmountMxn}) no puede ser menor al ya aplicado (${paidMxn}).`);
+        }
+        db.prepare(
+          `UPDATE ecovis_purchase_orders SET total_amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, updated_at = ?, updated_by = ?, updated_by_user_id = ?, updated_by_name = ? WHERE id = ?`,
+        ).run(newAmount, newCurrency, newRate, newAmountMxn, audit.updated_at, req.session.username, audit.updated_by_user_id, audit.updated_by_name, entityId);
+        recalculatePurchaseOrderStatus(entityId);
+      } else if (entityType === 'payment') {
+        previous = getEcovisPaymentOrFail(entityId);
+        if (previous.is_cancelled) throw badRequest('No se puede ajustar un pago cancelado.');
+        const allocations = db.prepare('SELECT * FROM ecovis_payment_allocations WHERE payment_id = ? AND is_cancelled = 0').all(entityId);
+        const allocated = allocations.reduce((s, a) => s + Number(a.amount || 0), 0);
+        if (newAmount + 0.005 < allocated) {
+          throw badRequest(`El nuevo monto (${newAmount}) no puede ser menor al ya asignado (${allocated}).`);
+        }
+        db.prepare(
+          `UPDATE ecovis_payments SET amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, updated_at = ?, updated_by = ?, updated_by_user_id = ? WHERE id = ?`,
+        ).run(newAmount, newCurrency, newRate, newAmountMxn, audit.updated_at, audit.updated_by_name, audit.updated_by_user_id, entityId);
+        recalculatePaymentUnallocated(entityId);
+      } else {
+        throw badRequest('Tipo de entidad no soportado para ajuste.');
+      }
+
+      const prevAmount = Number(previous.total_amount ?? previous.amount ?? 0);
+      const prevCurrency = previous.currency || 'MXN';
+      const prevRate = Number(previous.exchange_rate_to_mxn || 1);
+      const prevAmountMxn = roundMoneyEcovis(Number(previous.amount_mxn ?? prevAmount * prevRate));
+      const differenceMxn = roundMoneyEcovis(newAmountMxn - prevAmountMxn);
+
+      const adjResult = db.prepare(
+        `INSERT INTO ecovis_amount_adjustments (
+          entity_type, entity_id,
+          previous_amount_original, previous_currency, previous_exchange_rate_to_mxn, previous_amount_mxn,
+          new_amount_original, new_currency, new_exchange_rate_to_mxn, new_amount_mxn,
+          difference_mxn, reason, notes, approved_by_user_id, approved_by_name, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        entityType, entityId,
+        prevAmount, prevCurrency, prevRate, prevAmountMxn,
+        newAmount, newCurrency, newRate, newAmountMxn,
+        differenceMxn, reason, notes, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at,
+      );
+
+      return { adjustmentId: adjResult.lastInsertRowid, previous, differenceMxn };
+    });
+
+    const { adjustmentId, previous, differenceMxn } = applyAdjustment();
+    logAuditEvent(db, {
+      req,
+      action: 'amount_adjustment_applied',
+      module: 'ecovis',
+      entityType: `ecovis_${entityType}`,
+      entityId,
+      entityLabel: reason,
+      before: previous,
+      metadata: {
+        adjustment_id: adjustmentId,
+        new_amount_original: newAmount,
+        new_currency: newCurrency,
+        new_amount_mxn: newAmountMxn,
+        difference_mxn: differenceMxn,
+        reason,
+      },
+    });
+
+    const adjustment = db.prepare('SELECT * FROM ecovis_amount_adjustments WHERE id = ?').get(adjustmentId);
+    res.status(201).json({ adjustment, created_at_cdmx: formatDateTimeCDMX(adjustment.created_at) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // ===================== END ECOVIS MODULE =====================
 
@@ -3963,7 +4320,7 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
       'projectPayments', 'projectCosts', 'employees', 'vacationRequests',
       'payrollAttendanceWeeks', 'payrollAttendanceEmployees', 'attendanceStatuses',
       'projectReports', 'reportsArchive', 'ecovisPurchaseOrders', 'ecovisProjects', 'ecovisPayments',
-      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements',
+      'ecovisPaymentAllocations', 'ecovisLoans', 'ecovisMovements', 'ecovisAmountAdjustments',
       'serviceTypes', 'serviceQuoteSettings',
       'loginAttempts', 'auditLogs', 'backupImportLogs',
     ];
@@ -4047,9 +4404,73 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
             db.prepare('INSERT INTO project_reports (project_id, report_folio, client_name, client_address, service_name, report_date, assigned_technicians, burner_model, equipment_model_serial, pumps_motors_model, fuel, voltage, gas_pressure_inh2o, liquid_fuel_pressure_psi, working_pressure, pump_amperage, fan_amperage, condensate_tank_temp_c, operating_output_temp_c, flue_gas_temp_c, safety_tests, comments, emissions_low_fire, emissions_high_fire, technician_name, plant_manager_name, created_by, updated_by, report_type, report_data, deleted_at, deleted_by, delete_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.project_id, row.report_folio, row.client_name, row.client_address || null, row.service_name, row.report_date, row.assigned_technicians || null, row.burner_model || null, row.equipment_model_serial || null, row.pumps_motors_model || null, row.fuel || null, row.voltage || null, row.gas_pressure_inh2o || null, row.liquid_fuel_pressure_psi || null, row.working_pressure || null, row.pump_amperage || null, row.fan_amperage || null, row.condensate_tank_temp_c || null, row.operating_output_temp_c || null, row.flue_gas_temp_c || null, row.safety_tests || null, row.comments || null, row.emissions_low_fire || null, row.emissions_high_fire || null, row.technician_name || null, row.plant_manager_name || null, row.created_by || null, row.updated_by || null, row.report_type || 'boiler_startup', row.report_data || null, row.deleted_at || null, row.deleted_by || null, row.delete_reason || null);
             added++;
           } else if (entityKey === 'ecovisPurchaseOrders') {
-            const existingPo = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ?').get(row.purchase_order_number);
+            const poNorm = normalizePurchaseOrderNumber(row.purchase_order_number);
+            const existingPo = db.prepare(
+              'SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number_normalized = ? OR purchase_order_number = ?',
+            ).get(poNorm, row.purchase_order_number);
             if (existingPo) { skipped++; continue; }
-            db.prepare('INSERT INTO ecovis_purchase_orders (purchase_order_number, project_name, client_name, order_date, total_amount, currency, status, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.purchase_order_number, row.project_name || null, row.client_name || 'ECOVIS', row.order_date, row.total_amount, row.currency || 'MXN', row.status || 'pendiente', row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null);
+            db.prepare(
+              'INSERT INTO ecovis_purchase_orders (purchase_order_number, purchase_order_number_normalized, project_name, client_name, order_date, total_amount, currency, exchange_rate_to_mxn, amount_mxn, paid_amount_mxn, pending_amount_mxn, status, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ).run(
+              row.purchase_order_number,
+              poNorm || normalizePurchaseOrderNumber(row.purchase_order_number),
+              row.project_name || null,
+              row.client_name || 'ECOVIS',
+              row.order_date,
+              row.total_amount,
+              row.currency || 'MXN',
+              row.exchange_rate_to_mxn ?? 1,
+              row.amount_mxn ?? row.total_amount,
+              row.paid_amount_mxn ?? 0,
+              row.pending_amount_mxn ?? row.total_amount,
+              row.status || 'pendiente',
+              row.notes || null,
+              row.is_cancelled ?? 0,
+              row.cancelled_at || null,
+              row.cancelled_by || null,
+              row.cancellation_reason || null,
+              row.created_by || null,
+            );
+            added++;
+          } else if (entityKey === 'ecovisAmountAdjustments') {
+            const parentType = row.entity_type;
+            let parentExists = true;
+            if (parentType === 'project') {
+              parentExists = Boolean(db.prepare('SELECT id FROM ecovis_projects WHERE id = ?').get(row.entity_id));
+            } else if (parentType === 'purchaseOrder') {
+              parentExists = Boolean(db.prepare('SELECT id FROM ecovis_purchase_orders WHERE id = ?').get(row.entity_id));
+            } else if (parentType === 'payment') {
+              parentExists = Boolean(db.prepare('SELECT id FROM ecovis_payments WHERE id = ?').get(row.entity_id));
+            }
+            if (!parentExists) {
+              entityConflicts.push({ backupId: row.id, reason: 'Entidad padre del ajuste no encontrada' });
+              continue;
+            }
+            db.prepare(
+              `INSERT INTO ecovis_amount_adjustments (
+                entity_type, entity_id,
+                previous_amount_original, previous_currency, previous_exchange_rate_to_mxn, previous_amount_mxn,
+                new_amount_original, new_currency, new_exchange_rate_to_mxn, new_amount_mxn,
+                difference_mxn, reason, notes, approved_by_user_id, approved_by_name, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              row.entity_type,
+              row.entity_id,
+              row.previous_amount_original,
+              row.previous_currency || 'MXN',
+              row.previous_exchange_rate_to_mxn ?? 1,
+              row.previous_amount_mxn,
+              row.new_amount_original,
+              row.new_currency || 'MXN',
+              row.new_exchange_rate_to_mxn ?? 1,
+              row.new_amount_mxn,
+              row.difference_mxn,
+              row.reason,
+              row.notes || null,
+              row.approved_by_user_id || null,
+              row.approved_by_name || null,
+              row.created_at || nowUtc(),
+            );
             added++;
           } else if (entityKey === 'ecovisProjects') {
             db.prepare('INSERT INTO ecovis_projects (project_name, client_name, quote_number, purchase_order_number, invoice_number, project_date, description, total_amount, currency, status, notes, is_cancelled, cancelled_at, cancelled_by, cancellation_reason, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(row.project_name, row.client_name || 'ECOVIS', row.quote_number || null, row.purchase_order_number || null, row.invoice_number || null, row.project_date, row.description || null, row.total_amount, row.currency || 'MXN', row.status || 'pendiente', row.notes || null, row.is_cancelled ?? 0, row.cancelled_at || null, row.cancelled_by || null, row.cancellation_reason || null, row.created_by || null, row.updated_by || null);

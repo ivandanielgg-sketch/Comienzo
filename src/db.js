@@ -374,6 +374,35 @@ function migrate(database) {
   ensureColumn(database, 'ecovis_movements', 'exchange_rate_to_mxn', 'REAL NOT NULL DEFAULT 1');
   ensureColumn(database, 'ecovis_movements', 'amount_mxn', 'REAL');
 
+  ensureColumn(database, 'ecovis_purchase_orders', 'purchase_order_number_normalized', 'TEXT');
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS ecovis_amount_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('project', 'purchaseOrder', 'payment', 'allocation', 'loan', 'creditBalance')),
+      entity_id INTEGER NOT NULL,
+      previous_amount_original REAL NOT NULL,
+      previous_currency TEXT NOT NULL,
+      previous_exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      previous_amount_mxn REAL NOT NULL,
+      new_amount_original REAL NOT NULL,
+      new_currency TEXT NOT NULL,
+      new_exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      new_amount_mxn REAL NOT NULL,
+      difference_mxn REAL NOT NULL,
+      reason TEXT NOT NULL,
+      notes TEXT,
+      approved_by_user_id INTEGER,
+      approved_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ecovis_amount_adjustments_entity
+      ON ecovis_amount_adjustments (entity_type, entity_id);
+  `);
+
+  migrateEcovisPurchaseOrderNormalized(database);
+
   // Audit columns for ecovis_movements (created_by/updated_by already exist)
   ensureColumn(database, 'ecovis_movements', 'created_by_user_id', 'INTEGER');
   ensureColumn(database, 'ecovis_movements', 'updated_by_user_id', 'INTEGER');
@@ -1129,6 +1158,28 @@ function seedServiceQuoteSettings(database) {
   for (const s of defaults) {
     stmt.run(s.key, s.value, s.label, s.category);
   }
+}
+
+function migrateEcovisPurchaseOrderNormalized(database) {
+  const { normalizePurchaseOrderNumber } = require('./ecovis');
+  const rows = database.prepare(
+    'SELECT id, purchase_order_number FROM ecovis_purchase_orders WHERE purchase_order_number_normalized IS NULL OR purchase_order_number_normalized = \'\'',
+  ).all();
+  if (!rows.length) return;
+  const update = database.prepare(
+    'UPDATE ecovis_purchase_orders SET purchase_order_number_normalized = ? WHERE id = ?',
+  );
+  const migrate = database.transaction(() => {
+    for (const row of rows) {
+      update.run(normalizePurchaseOrderNumber(row.purchase_order_number), row.id);
+    }
+  });
+  migrate();
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ecovis_po_number_active
+      ON ecovis_purchase_orders (purchase_order_number_normalized)
+      WHERE is_cancelled = 0 AND purchase_order_number_normalized IS NOT NULL AND purchase_order_number_normalized != '';
+  `);
 }
 
 function migrateEcovisCurrencyFields(database) {

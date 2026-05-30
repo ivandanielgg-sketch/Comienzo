@@ -1101,10 +1101,12 @@
                 <label>Numero de factura<input name="invoice_number" /></label>
                 <label class="full money-field">Monto total *
                   <div class="money-row">
-                    <input name="total_amount" type="text" inputmode="decimal" required />
-                    <select name="currency"><option>MXN</option><option>USD</option><option>EUR</option></select>
+                    <input name="total_amount" id="ecovis-project-total-amount" type="text" inputmode="decimal" required />
+                    <select name="currency" id="ecovis-project-currency"><option>MXN</option><option>USD</option><option>EUR</option></select>
                   </div>
                 </label>
+                <p id="ecovis-project-amount-locked" class="muted hidden full">El monto esta bloqueado por pagos/asignaciones existentes. Use ajuste controlado.</p>
+                <button type="button" id="ecovis-project-adjustment-btn" class="secondary hidden full">Solicitar ajuste de monto</button>
                 <label class="full">Descripcion<textarea name="description" rows="2"></textarea></label>
                 <label class="full">Notas<textarea name="notes" rows="2"></textarea></label>
                 <button type="submit">Guardar proyecto ECOVIS</button>
@@ -1117,10 +1119,11 @@
           <div id="ecovis-payment-modal" class="modal-overlay hidden">
             <div class="modal-content panel">
               <div class="panel-header">
-                <h2>Registrar pago de ECOVIS</h2>
+                <h2 id="ecovis-payment-form-title">Registrar pago de ECOVIS</h2>
                 <button class="secondary modal-close" type="button">Cerrar</button>
               </div>
               <form id="ecovis-payment-form" class="grid-form">
+                <input type="hidden" name="id" />
                 <label>Fecha de pago *<input name="payment_date" type="date" required /></label>
                 <label class="full money-field">Monto *
                   <div class="money-row">
@@ -1223,6 +1226,30 @@
                 <label class="full">Notas<textarea name="notes" rows="2"></textarea></label>
                 <button type="submit">Registrar ajuste</button>
                 <p id="ecovis-adjustment-message" class="message"></p>
+              </form>
+            </div>
+          </div>
+
+          <!-- ECOVIS Amount Adjustment Modal (admin) -->
+          <div id="ecovis-amount-adjustment-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2 id="ecovis-amount-adjustment-title">Ajuste controlado de monto</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="ecovis-amount-adjustment-form" class="grid-form">
+                <input type="hidden" name="entity_type" />
+                <input type="hidden" name="entity_id" />
+                <label class="full money-field">Nuevo monto *
+                  <div class="money-row">
+                    <input name="new_amount_original" type="text" inputmode="decimal" required />
+                    <select name="new_currency"><option>MXN</option><option>USD</option><option>EUR</option></select>
+                  </div>
+                </label>
+                <label class="full">Motivo del ajuste *<textarea name="reason" rows="2" required></textarea></label>
+                <label class="full">Notas<textarea name="notes" rows="2"></textarea></label>
+                <button type="submit">Aplicar ajuste</button>
+                <p id="ecovis-amount-adjustment-message" class="message"></p>
               </form>
             </div>
           </div>
