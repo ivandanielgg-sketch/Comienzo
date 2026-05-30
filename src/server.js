@@ -2754,6 +2754,10 @@ app.put('/api/ecovis/projects/:id', requireAuth, requirePermission('ecovisAccoun
     const rates = getExchangeRateMap();
     const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
     const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
+    const projAllocations = db.prepare("SELECT COUNT(*) as cnt FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND is_cancelled = 0").get(req.params.id).cnt;
+    if (projAllocations > 0 && (totalAmount !== project.total_amount || currency !== project.currency)) {
+      throw badRequest("No se puede modificar el monto de un proyecto que ya tiene pagos aplicados. Use ajuste de monto.");
+    }
 
     const audit = updatedByFields(req);
     db.prepare(
@@ -3421,7 +3425,8 @@ app.post('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAc
     const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
     const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
 
-    const existing = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0').get(purchaseOrderNumber);
+    const poNormalized = purchaseOrderNumber.trim().toUpperCase().replace(/\s+/g, " ");
+    const existing = db.prepare("SELECT id FROM ecovis_purchase_orders WHERE UPPER(TRIM(purchase_order_number)) = ? AND is_cancelled = 0").get(poNormalized);
     if (existing) throw badRequest('Ya existe una OC activa con ese numero.');
 
     const result = db.prepare(
@@ -3455,8 +3460,13 @@ app.put('/api/ecovis/purchase-orders/:id', requireAuth, requirePermission('ecovi
     const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
     const amountMxn = roundMoneyEcovis(totalAmount * exchangeRate);
 
-    const dup = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE purchase_order_number = ? AND is_cancelled = 0 AND id != ?').get(purchaseOrderNumber, req.params.id);
-    if (dup) throw badRequest('Ya existe otra OC activa con ese numero.');
+    const dupNorm = purchaseOrderNumber.trim().toUpperCase().replace(/\s+/g, ' ');
+    const dup = db.prepare('SELECT id FROM ecovis_purchase_orders WHERE UPPER(TRIM(purchase_order_number)) = ? AND is_cancelled = 0 AND id != ?').get(dupNorm, req.params.id);
+    if (dup) throw badRequest("Ya existe otra OC activa con ese numero.");
+    const hasAllocations = db.prepare("SELECT COUNT(*) as cnt FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND is_cancelled = 0").get(req.params.id).cnt;
+    if (hasAllocations > 0 && (totalAmount !== po.total_amount || currency !== po.currency)) {
+      throw badRequest("No se puede modificar el monto de una OC que ya tiene pagos aplicados. Use ajuste de monto.");
+    }
 
     db.prepare(
       `UPDATE ecovis_purchase_orders SET purchase_order_number = ?, project_name = ?, order_date = ?, total_amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, notes = ?, updated_by = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`,

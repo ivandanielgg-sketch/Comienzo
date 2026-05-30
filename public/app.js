@@ -2739,10 +2739,10 @@ ecovisProjectForm.addEventListener('submit', async (event) => {
   }
 });
 
-ecovisProjectModal.addEventListener('click', (event) => {
-  if (event.target.closest('.modal-close') || event.target === ecovisProjectModal) {
-    ecovisProjectModal.classList.add('hidden');
-  }
+ecovisProjectModal.addEventListener("mousedown", function(e) { ecovisProjectModal._mdt = e.target; });
+ecovisProjectModal.addEventListener("click", (event) => {
+  if (event.target.closest(".modal-close")) { ecovisProjectModal.classList.add("hidden"); return; }
+  if (ecovisProjectModal._mdt === ecovisProjectModal && event.target === ecovisProjectModal) ecovisProjectModal.classList.add("hidden");
 });
 
 ecovisProjectsTable.addEventListener('click', async (event) => {
@@ -2795,8 +2795,13 @@ ecovisProjectsTable.addEventListener('click', async (event) => {
 });
 
 document.getElementById('ecovis-new-payment-btn').addEventListener('click', () => {
+  if (ecovisPaymentForm.elements.amount && ecovisPaymentForm.elements.amount.setCurrencyValue) ecovisPaymentForm.elements.amount.setCurrencyValue(0);
   ecovisPaymentForm.reset();
   ecovisPaymentForm.elements.payment_date.value = today();
+  if (ecovisPaymentForm.elements.currency) ecovisPaymentForm.elements.currency.value = "MXN";
+  if (ecovisPaymentForm.elements.bank_reference) ecovisPaymentForm.elements.bank_reference.value = "";
+  if (ecovisPaymentForm.elements.source_description) ecovisPaymentForm.elements.source_description.value = "";
+  if (ecovisPaymentForm.elements.notes) ecovisPaymentForm.elements.notes.value = "";
   setMessage(ecovisPaymentMessage, '');
   ecovisPaymentModal.classList.remove('hidden');
 });
@@ -2819,10 +2824,19 @@ ecovisPaymentForm.addEventListener('submit', async (event) => {
   }
 });
 
-ecovisPaymentModal.addEventListener('click', (event) => {
-  if (event.target.closest('.modal-close') || event.target === ecovisPaymentModal) {
-    ecovisPaymentModal.classList.add('hidden');
-  }
+
+ecovisPaymentModal.addEventListener("mousedown", function(event) {
+  if (event.target === ecovisPaymentModal) ecovisPaymentModal._clickedOverlay = true;
+  else ecovisPaymentModal._clickedOverlay = false;
+});
+ecovisPaymentModal.addEventListener("click", function(event) {
+  if (event.target.closest(".modal-close")) { ecovisPaymentModal.classList.add("hidden"); return; }
+  if (ecovisPaymentModal._clickedOverlay && event.target === ecovisPaymentModal) { ecovisPaymentModal.classList.add("hidden"); }
+  ecovisPaymentModal._clickedOverlay = false;
+});
+
+
+
 });
 
 ecovisPaymentsTable.addEventListener('click', async (event) => {
@@ -2865,7 +2879,7 @@ async function openAllocationModal(paymentId) {
 
     const projects = (await api('/api/ecovis/projects?limit=9999')).data;
     ecovisAllocationProjectSelect.innerHTML = projects
-      .filter((p) => p.status !== 'cancelado')
+      .filter((p) => p.status !== 'cancelado' && p.status !== 'pagado' && Number(p.pending_amount_mxn || p.total_amount || 0) > 0)
       .map((p) => '<option value="' + p.id + '">' + escapeHtml(p.project_name) + ' (' + money.format(Number(p.total_amount || 0)) + ')</option>')
       .join('');
 
@@ -3004,7 +3018,7 @@ async function openApplyCreditModal(projectId) {
 
     const projects = (await api('/api/ecovis/projects?limit=9999')).data;
     ecovisCreditProjectSelect.innerHTML = projects
-      .filter((p) => p.status !== 'cancelado')
+      .filter((p) => p.status !== 'cancelado' && p.status !== 'pagado' && Number(p.pending_amount_mxn || p.total_amount || 0) > 0)
       .map((p) => '<option value="' + p.id + '"' + (Number(p.id) === Number(projectId) ? ' selected' : '') + '>' +
         escapeHtml(p.project_name) + ' (' + money.format(Number(p.total_amount || 0)) + ')</option>')
       .join('');
@@ -5256,3 +5270,22 @@ function renderActivitySummaryUsers(users) {
     return '<tr><td>' + escapeHtml(u.user_name) + '</td><td>' + escapeHtml(u.role || '') + '</td><td>' + (u.total_sessions || 0) + '</td><td>' + formatDuration(u.total_seconds) + '</td><td>' + formatDuration(u.avg_per_session) + '</td><td>' + formatDateTimeCDMX(u.last_activity) + '</td></tr>';
   }).join('');
 }
+
+// ===================== FIX MODAL CLOSE ON TEXT SELECTION =====================
+(function fixEcovisModals() {
+  function safeModalClose(modal) {
+    if (!modal) return;
+    modal.addEventListener('mousedown', function(e) {
+      modal._mouseDownTarget = e.target;
+    });
+    var origHandler = null;
+    var listeners = modal._clickListeners || [];
+    modal.addEventListener('click', function(e) {
+      if (e.target.closest('.modal-close')) { modal.classList.add('hidden'); return; }
+      if (modal._mouseDownTarget === modal && e.target === modal) { modal.classList.add('hidden'); }
+      modal._mouseDownTarget = null;
+    }, true);
+  }
+  var modals = ['#ecovis-project-modal', '#ecovis-allocation-modal', '#ecovis-loan-modal', '#ecovis-adjustment-modal', '#ecovis-apply-credit-modal'];
+  modals.forEach(function(sel) { safeModalClose(document.querySelector(sel)); });
+})();

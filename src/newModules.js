@@ -368,6 +368,68 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
     } catch (error) { next(error); }
   });
 
+
+  // ===================== ECOVIS AMOUNT ADJUSTMENT =====================
+
+  app.post('/api/ecovis/amount-adjustment', requireAuth, requirePermission('ecovisAccount', 'edit'), (req, res, next) => {
+    try {
+      if (req.session.role !== 'admin') return res.status(403).json({ message: 'Solo admin puede realizar ajustes de monto.' });
+      const entityType = enumValue(req.body, 'entity_type', 'Tipo de entidad', ['project', 'purchase_order', 'payment']);
+      const entityId = numberValue(req.body, 'entity_id', 'ID de entidad', { min: 1 });
+      const newAmount = numberValue(req.body, 'new_amount', 'Nuevo monto', { min: 0.01 });
+      const newCurrency = currencyValue(req.body, 'new_currency', 'Moneda');
+      const reason = requiredText(req.body, 'reason', 'Motivo del ajuste');
+      const notes = optionalText(req.body, 'notes');
+      const audit = createdByFields(req);
+
+      const rates = {};
+      db.prepare('SELECT currency, rate_to_mxn FROM exchange_rates').all().forEach(r => { rates[r.currency] = r.rate_to_mxn; });
+      rates.MXN = 1;
+      const newExchangeRate = newCurrency === 'MXN' ? 1 : (rates[newCurrency] || 1);
+      const newAmountMxn = roundMoney(newAmount * newExchangeRate);
+
+      let entity, table, previousAmount, previousCurrency, previousRate, previousMxn;
+      if (entityType === 'project') {
+        entity = db.prepare('SELECT * FROM ecovis_projects WHERE id = ?').get(entityId);
+        if (!entity) throw badRequest('Proyecto no encontrado.');
+        table = 'ecovis_projects';
+        previousAmount = entity.total_amount; previousCurrency = entity.currency;
+        previousRate = entity.exchange_rate_to_mxn; previousMxn = entity.amount_mxn;
+      } else if (entityType === 'purchase_order') {
+        entity = db.prepare('SELECT * FROM ecovis_purchase_orders WHERE id = ?').get(entityId);
+        if (!entity) throw badRequest('Orden de compra no encontrada.');
+        table = 'ecovis_purchase_orders';
+        previousAmount = entity.total_amount; previousCurrency = entity.currency;
+        previousRate = entity.exchange_rate_to_mxn; previousMxn = entity.amount_mxn;
+      } else if (entityType === 'payment') {
+        entity = db.prepare('SELECT * FROM ecovis_payments WHERE id = ?').get(entityId);
+        if (!entity) throw badRequest('Pago no encontrado.');
+        table = 'ecovis_payments';
+        previousAmount = entity.amount; previousCurrency = entity.currency;
+        previousRate = entity.exchange_rate_to_mxn; previousMxn = entity.amount_mxn;
+      }
+
+      const differenceMxn = roundMoney(newAmountMxn - (previousMxn || 0));
+
+      if (entityType === 'project') {
+        db.prepare('UPDATE ecovis_projects SET total_amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newAmount, newCurrency, newExchangeRate, newAmountMxn, entityId);
+        const paidMxn = db.prepare("SELECT COALESCE(SUM(amount_mxn), 0) as t FROM ecovis_payment_allocations WHERE ecovis_project_id = ? AND allocation_type = 'proyecto' AND is_cancelled = 0").get(entityId).t;
+        db.prepare('UPDATE ecovis_projects SET paid_amount_mxn = ?, pending_amount_mxn = ? WHERE id = ?').run(paidMxn, Math.max(0, roundMoney(newAmountMxn - paidMxn)), entityId);
+      } else if (entityType === 'purchase_order') {
+        db.prepare('UPDATE ecovis_purchase_orders SET total_amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newAmount, newCurrency, newExchangeRate, newAmountMxn, entityId);
+        const paidMxn = db.prepare("SELECT COALESCE(SUM(amount_mxn), 0) as t FROM ecovis_payment_allocations WHERE ecovis_purchase_order_id = ? AND allocation_type = 'orden_compra' AND is_cancelled = 0").get(entityId).t;
+        db.prepare('UPDATE ecovis_purchase_orders SET paid_amount_mxn = ?, pending_amount_mxn = ? WHERE id = ?').run(paidMxn, Math.max(0, roundMoney(newAmountMxn - paidMxn)), entityId);
+      } else if (entityType === 'payment') {
+        db.prepare('UPDATE ecovis_payments SET amount = ?, currency = ?, exchange_rate_to_mxn = ?, amount_mxn = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(newAmount, newCurrency, newExchangeRate, newAmountMxn, entityId);
+        const allocatedMxn = db.prepare("SELECT COALESCE(SUM(amount_mxn), 0) as t FROM ecovis_payment_allocations WHERE payment_id = ? AND is_cancelled = 0").get(entityId).t;
+        db.prepare('UPDATE ecovis_payments SET unallocated_amount = ? WHERE id = ?').run(Math.max(0, roundMoney(newAmount - allocatedMxn / newExchangeRate)), entityId);
+      }
+
+      logAuditEvent(db, { req, action: 'amount_adjustment', module: 'ecovis', entityType: 'ecovis_amount_adjustment', entityId, entityLabel: entityType + ' #' + entityId, before: { amount: previousAmount, currency: previousCurrency, exchange_rate: previousRate, amount_mxn: previousMxn }, after: { amount: newAmount, currency: newCurrency, exchange_rate: newExchangeRate, amount_mxn: newAmountMxn }, metadata: { reason, difference_mxn: differenceMxn } });
+
+      res.json({ message: 'Ajuste aplicado correctamente.', previous: { amount: previousAmount, currency: previousCurrency, amount_mxn: previousMxn }, current: { amount: newAmount, currency: newCurrency, amount_mxn: newAmountMxn }, difference_mxn: differenceMxn });
+    } catch (error) { next(error); }
+  });
   // ===================== SKINS / USER PREFERENCES =====================
 
   const VALID_THEMES = ['default', 'dark', 'corporate', 'high_contrast'];
