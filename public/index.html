@@ -48,6 +48,7 @@
             <button id="ecovis-tab" class="secondary hidden" type="button">Cuenta ECOVIS</button>
             <button id="service-quoter-tab" class="secondary hidden" type="button">Cotizador</button>
             <button id="financial-tab" class="secondary hidden" type="button">Estados Financieros</button>
+            <button id="kpis-tab" class="secondary hidden" type="button">Tablero KPIs</button>
             <button id="commissions-tab" class="secondary hidden" type="button">Comisiones</button>
             <button id="activity-monitor-tab" class="secondary hidden" type="button">Monitor Actividad</button>
             <button id="backup-create-btn" class="secondary hidden" type="button">Crear respaldo</button>
@@ -667,6 +668,30 @@
                 <label>
                   Departamento
                   <input name="department" />
+                </label>
+                <label>
+                  Depto. principal KPI
+                  <select name="primary_department">
+                    <option value="">— Sin asignar —</option>
+                    <option value="Ventas">Ventas</option>
+                    <option value="Técnico">Técnico</option>
+                    <option value="Cobranza">Cobranza</option>
+                    <option value="Facturación">Facturación</option>
+                  </select>
+                </label>
+                <label>
+                  Depto. secundario KPI
+                  <select name="secondary_department">
+                    <option value="">— Ninguno —</option>
+                    <option value="Ventas">Ventas</option>
+                    <option value="Técnico">Técnico</option>
+                    <option value="Cobranza">Cobranza</option>
+                    <option value="Facturación">Facturación</option>
+                  </select>
+                </label>
+                <label class="checkbox-row">
+                  <input name="kpi_eligible" type="checkbox" checked />
+                  Elegible para KPIs
                 </label>
                 <label>
                   Puesto
@@ -1732,6 +1757,75 @@
             </form>
             <div class="table-wrapper">
               <table><thead><tr><th>Vendedora</th><th>Fecha</th><th>Monto</th><th>Moneda</th><th>Referencia</th></tr></thead><tbody id="commission-payments-table"></tbody></table>
+            </div>
+          </div>
+        </section>
+
+
+        <section id="kpis-view" class="hidden">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Evaluacion Fase 1</p>
+                <h2>Tablero KPIs</h2>
+                <p class="muted">Indicadores administrativos, comerciales, operativos y de cobranza. Solo administrador.</p>
+              </div>
+            </div>
+            <div id="kpis-access-denied" class="hidden" style="padding:24px;color:var(--danger);font-weight:600;">
+              Acceso restringido. Solo el administrador puede consultar el Tablero KPIs.
+            </div>
+            <div id="kpis-dashboard">
+              <form id="kpi-filter-form" class="kpi-filters" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:12px;">
+                <label style="display:flex;flex-direction:column;font-size:0.85rem;">Periodo
+                  <select id="kpi-period-type" name="periodType">
+                    <option value="current_month">Mes actual</option>
+                    <option value="previous_month">Mes anterior</option>
+                    <option value="current_quarter">Trimestre actual</option>
+                    <option value="current_year">Ano actual</option>
+                    <option value="custom">Rango personalizado</option>
+                  </select>
+                </label>
+                <label id="kpi-start-label" class="hidden" style="display:none;flex-direction:column;font-size:0.85rem;">Desde
+                  <input id="kpi-start-date" name="startDate" type="date" />
+                </label>
+                <label id="kpi-end-label" class="hidden" style="display:none;flex-direction:column;font-size:0.85rem;">Hasta
+                  <input id="kpi-end-date" name="endDate" type="date" />
+                </label>
+                <label style="display:flex;flex-direction:column;font-size:0.85rem;">Departamento
+                  <select id="kpi-department" name="department"><option value="">Todos</option></select>
+                </label>
+                <label style="display:flex;flex-direction:column;font-size:0.85rem;">Empleado
+                  <select id="kpi-employee" name="employeeId"><option value="">Todos</option></select>
+                </label>
+                <label style="display:flex;flex-direction:column;font-size:0.85rem;">Cliente
+                  <select id="kpi-client" name="clientName"><option value="">Todos</option></select>
+                </label>
+                <label style="display:flex;flex-direction:column;font-size:0.85rem;">Proyecto
+                  <select id="kpi-project" name="projectId"><option value="">Todos</option></select>
+                </label>
+                <label style="display:flex;flex-direction:column;font-size:0.85rem;">Estatus
+                  <select id="kpi-status" name="status"><option value="">Todos</option></select>
+                </label>
+                <button type="submit">Consultar</button>
+              </form>
+              <p id="kpi-period-label" class="muted" style="margin:8px 0;"></p>
+              <div id="kpi-summary-cards" class="kpi-cards"></div>
+              <div id="kpi-loading" class="muted hidden">Cargando indicadores...</div>
+              <div id="kpi-error" class="hidden" style="color:var(--danger);padding:8px 0;"></div>
+              <div id="kpi-sections">
+                <div class="kpi-section panel" id="kpi-section-ventas"><h3>Ventas</h3><div id="kpi-ventas-content" class="kpi-metrics"></div></div>
+                <div class="kpi-section panel" id="kpi-section-proyectos"><h3>Proyectos</h3><div id="kpi-proyectos-content" class="kpi-metrics"></div></div>
+                <div class="kpi-section panel" id="kpi-section-reportes"><h3>Reportes Tecnicos</h3><div id="kpi-reportes-content" class="kpi-metrics"></div></div>
+                <div class="kpi-section panel" id="kpi-section-facturacion"><h3>Facturacion</h3><div id="kpi-facturacion-content" class="kpi-metrics"></div></div>
+                <div class="kpi-section panel" id="kpi-section-cobranza"><h3>Cobranza</h3><div id="kpi-cobranza-content" class="kpi-metrics"></div></div>
+                <div class="kpi-section panel" id="kpi-section-departments"><h3>KPIs por Departamento</h3><div id="kpi-departments-content"></div></div>
+                <div class="kpi-section panel" id="kpi-section-employees"><h3>KPIs por Empleado</h3><div class="table-wrapper"><table><thead><tr><th>Empleado</th><th>Departamento</th><th>Indicadores</th><th>Semaforo</th><th>Alertas</th></tr></thead><tbody id="kpi-employees-table"></tbody></table></div></div>
+                <div class="kpi-section panel" id="kpi-section-alerts"><h3>Alertas Operativas</h3><div class="table-wrapper"><table><thead><tr><th>Severidad</th><th>Tipo</th><th>Responsable</th><th>Fecha</th><th>Accion sugerida</th><th>Registro</th></tr></thead><tbody id="kpi-alerts-table"></tbody></table></div></div>
+              </div>
+              <div id="kpi-unassigned" class="hidden panel" style="margin-top:12px;">
+                <h3>Sin departamento asignado</h3>
+                <ul id="kpi-unassigned-list"></ul>
+              </div>
             </div>
           </div>
         </section>

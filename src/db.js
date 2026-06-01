@@ -429,6 +429,30 @@ function migrate(database) {
   ensureColumn(database, 'projects', 'invoice_date', 'TEXT');
   ensureColumn(database, 'projects', 'invoice_date_na', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'projects', 'due_date', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_number', 'TEXT');
+
+  // KPI tracking fields (Tablero KPIs Fase 1)
+  ensureColumn(database, 'employees', 'primary_department', 'TEXT');
+  ensureColumn(database, 'employees', 'secondary_department', 'TEXT');
+  ensureColumn(database, 'employees', 'kpi_eligible', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(database, 'employees', 'user_id', 'INTEGER');
+  ensureColumn(database, 'projects', 'lead_channel', 'TEXT');
+  ensureColumn(database, 'projects', 'next_commercial_action', 'TEXT');
+  ensureColumn(database, 'projects', 'next_commercial_action_date', 'TEXT');
+  ensureColumn(database, 'projects', 'lost_reason', 'TEXT');
+  ensureColumn(database, 'projects', 'technical_closed_at', 'TEXT');
+  ensureColumn(database, 'projects', 'technical_report_complete', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'projects', 'rework', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'projects', 'rework_cause', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_requested_at', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_issued_at', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_accepted_at', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_paid_at', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_cancelled', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'projects', 'invoice_error', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'projects', 'invoice_pending_docs', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'projects', 'collection_contact_at', 'TEXT');
+  ensureColumn(database, 'projects', 'collection_notes', 'TEXT');
 
   // Create audit_logs table
   database.exec(`

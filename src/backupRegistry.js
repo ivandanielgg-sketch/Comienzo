@@ -351,6 +351,7 @@ const DETECTED_ROUTES = [
   '/admin/backup',
   '/commissions',
   '/activity-monitor',
+  '/kpis',
   '/preferences',
 ];
 

@@ -730,6 +730,7 @@ function switchView(viewName) {
   const showingArchive = viewName === 'report-archive';
   const showingServiceQuoter = viewName === 'service-quoter';
   const showingFinancial = viewName === 'financial';
+  const showingKpis = viewName === 'kpis';
   projectsView.classList.toggle('hidden', !showingProjects);
   closedProjectsView.classList.toggle('hidden', !showingClosedProjects);
   usersView.classList.toggle('hidden', !showingUsers);
@@ -745,6 +746,8 @@ function switchView(viewName) {
   if (sqView) sqView.classList.toggle('hidden', !showingServiceQuoter);
   const finView = document.getElementById('financial-view');
   if (finView) finView.classList.toggle('hidden', !showingFinancial);
+  const kpisView = document.getElementById('kpis-view');
+  if (kpisView) kpisView.classList.toggle('hidden', !showingKpis);
   var comView2 = document.getElementById("commissions-view");
   if (comView2) comView2.classList.toggle("hidden", !showingCommissions);
   var amView2 = document.getElementById("activity-monitor-view");
@@ -764,6 +767,9 @@ function switchView(viewName) {
   if (comTabA) comTabA.classList.toggle("active", showingCommissions);
   var amTabA = document.getElementById("activity-monitor-tab");
   if (amTabA) amTabA.classList.toggle("active", showingActivityMonitor);
+  const kpisTabEl = document.getElementById('kpis-tab');
+  if (kpisTabEl) kpisTabEl.classList.toggle('active', showingKpis);
+  if (showingKpis) initKpiDashboard();
   if (showingServiceQuoter) initServiceQuoter();
 }
 
@@ -1622,6 +1628,15 @@ function openEmployeeModal(employee) {
     employeeForm.elements.full_name.value = employee.full_name;
     employeeForm.elements.hire_date.value = employee.hire_date;
     employeeForm.elements.department.value = employee.department || '';
+    if (employeeForm.elements.primary_department) {
+      employeeForm.elements.primary_department.value = employee.primary_department || employee.department || '';
+    }
+    if (employeeForm.elements.secondary_department) {
+      employeeForm.elements.secondary_department.value = employee.secondary_department || '';
+    }
+    if (employeeForm.elements.kpi_eligible) {
+      employeeForm.elements.kpi_eligible.checked = employee.kpi_eligible !== false;
+    }
     employeeForm.elements.position.value = employee.position || '';
     employeeForm.elements.immediate_boss.value = employee.immediate_boss || '';
     employeeForm.elements.active.checked = Boolean(employee.active);
