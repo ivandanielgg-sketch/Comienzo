@@ -1174,10 +1174,22 @@ th.col-number {
 .kpi-semaphore-gray { background: #9ca3af; }
 
 .kpi-dept-block {
-  margin-bottom: 12px;
-  padding: 10px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.kpi-dept-block h4 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.kpi-dept-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
 }
 
 .kpi-dept-block ul {

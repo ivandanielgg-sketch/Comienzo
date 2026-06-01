@@ -5519,6 +5519,104 @@ function renderActivitySummaryUsers(users) {
 
 let kpiFiltersLoaded = false;
 
+const KPI_FIELD_LABELS = {
+  leads_by_channel: 'Leads por canal',
+  quotes_sent: 'Cotizaciones enviadas',
+  quoted_amount_mxn: 'Monto cotizado (MXN)',
+  sold_amount_mxn: 'Monto vendido (MXN)',
+  close_rate: 'Tasa de cierre (%)',
+  profitable_close_rate: 'Cierre rentable (%)',
+  quotes_without_follow_up: 'Cotizaciones sin seguimiento',
+  avg_estimated_margin: 'Margen estimado promedio (%)',
+  active_projects: 'Proyectos activos',
+  gross_margin_real: 'Margen bruto real (%)',
+  red_margin_projects: 'Proyectos con margen rojo',
+  delivery_compliance: 'Cumplimiento de entrega (%)',
+  reworks: 'Retrabajos',
+  rework_rate: 'Tasa de retrabajo (%)',
+  technical_close_pending: 'Cierre técnico pendiente',
+  complete_reports: 'Reportes completos (%)',
+  complete_count: 'Reportes completos (#)',
+  complete_evidence: 'Evidencias completas (%)',
+  services_without_report: 'Servicios sin reporte',
+  services_total: 'Servicios realizados',
+  invoices_issued: 'Facturas emitidas',
+  invoiced_amount_mxn: 'Monto facturado (MXN)',
+  billing_time_days: 'Tiempo de facturación (días)',
+  cancelled_invoices: 'Facturas canceladas',
+  error_invoices: 'Facturas con error',
+  pending_documentation: 'Pendientes por documentación',
+  collected_amount_mxn: 'Monto cobrado (MXN)',
+  collected_invoices: 'Facturas cobradas',
+  avg_collection_days: 'Días promedio de cobranza',
+  overdue_portfolio: 'Cartera vencida (%)',
+  overdue_amount_mxn: 'Cartera vencida (MXN)',
+  accounts_over_120_days: 'Cuentas +120 días',
+  accounts_over_120_amount_mxn: 'Monto cuentas +120 días (MXN)',
+  invoices_without_contact: 'Facturas sin contacto de pago',
+  assigned_services: 'Servicios asignados',
+  avg_margin: 'Margen promedio (%)',
+  overdue_assigned: 'Cartera vencida asignada (MXN)',
+  accounts_over_120: 'Cuentas +120 días',
+  avg_billing_days: 'Tiempo promedio de facturación (días)',
+  cancelled: 'Facturas canceladas',
+  pending_docs: 'Pendientes por documentación',
+  note: 'Observación',
+};
+
+function getKpiFieldLabel(key) {
+  if (KPI_FIELD_LABELS[key]) return KPI_FIELD_LABELS[key];
+  return String(key || '')
+    .replace(/_mxn$/i, ' (MXN)')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+}
+
+function formatKpiDisplayValue(key, value) {
+  if (value && typeof value === 'object' && value.display != null) {
+    return value.display;
+  }
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'number') {
+    if (/_mxn$/i.test(key) || key === 'overdue_assigned') {
+      return '$' + value.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    if (/rate|margin|portfolio|compliance|evidence|complete_reports|avg_margin/i.test(key)) {
+      return value + '%';
+    }
+    if (/days/i.test(key)) {
+      return value + ' días';
+    }
+    return String(value);
+  }
+  return String(value);
+}
+
+function renderDepartmentKpis(departments) {
+  if (!departments || !departments.length) {
+    return '<p class="muted">Sin datos de departamentos para el periodo seleccionado.</p>';
+  }
+  return departments.map(function(d) {
+    const metrics = Object.entries(d.kpis || {}).map(function(entry) {
+      const label = getKpiFieldLabel(entry[0]);
+      const display = formatKpiDisplayValue(entry[0], entry[1]);
+      const unavailable = entry[1] && entry[1].available === false;
+      return renderKpiMetric(label, unavailable ? entry[1] : { display: display, available: true });
+    }).join('');
+    return '<div class="kpi-dept-block"><h4>' + escapeHtml(d.department) + '</h4><div class="kpi-dept-metrics">' + metrics + '</div></div>';
+  }).join('');
+}
+
+function renderEmployeeKpiSummary(kpis) {
+  if (!kpis || typeof kpis !== 'object') return '—';
+  return Object.entries(kpis).map(function(entry) {
+    const label = getKpiFieldLabel(entry[0]);
+    const display = formatKpiDisplayValue(entry[0], entry[1]);
+    return escapeHtml(label) + ': ' + escapeHtml(display);
+  }).join(' · ');
+}
+
+
 function renderTrafficLight(color) {
   const labels = { green: 'Verde', yellow: 'Amarillo', red: 'Rojo', critical: 'Critico', gray: 'N/A' };
   return '<span class="kpi-semaphore kpi-semaphore-' + escapeHtml(color || 'gray') + '" title="' + escapeHtml(labels[color] || 'N/A') + '"></span>';
@@ -5644,23 +5742,13 @@ function renderKpiDashboard(summary, alerts, employees) {
 
   const deptContent = document.getElementById('kpi-departments-content');
   if (deptContent && summary.departments) {
-    deptContent.innerHTML = summary.departments.map(function(d) {
-      const items = Object.entries(d.kpis || {}).map(function(entry) {
-        const val = entry[1];
-        const display = val && val.display != null ? val.display : '—';
-        return '<li><strong>' + escapeHtml(entry[0]) + ':</strong> ' + escapeHtml(display) + '</li>';
-      }).join('');
-      return '<div class="kpi-dept-block"><h4>' + escapeHtml(d.department) + '</h4><ul>' + items + '</ul></div>';
-    }).join('');
+    deptContent.innerHTML = renderDepartmentKpis(summary.departments);
   }
 
   const empTable = document.getElementById('kpi-employees-table');
   if (empTable && employees && employees.employees) {
     empTable.innerHTML = employees.employees.map(function(e) {
-      const kpiText = Object.entries(e.kpis || {}).map(function(kv) {
-        return escapeHtml(kv[0]) + ': ' + escapeHtml(kv[1] != null ? String(kv[1]) : '—');
-      }).join('; ');
-      return '<tr><td>' + escapeHtml(e.employee) + '</td><td>' + escapeHtml(e.department) + '</td><td>' + kpiText + '</td><td>' + renderTrafficLight(e.traffic_light) + '</td><td>' + (e.alerts && e.alerts.length ? e.alerts.length : '0') + '</td></tr>';
+      return '<tr><td>' + escapeHtml(e.employee) + '</td><td>' + escapeHtml(e.department) + '</td><td>' + renderEmployeeKpiSummary(e.kpis) + '</td><td>' + renderTrafficLight(e.traffic_light) + '</td><td>' + (e.alerts && e.alerts.length ? e.alerts.length : '0') + '</td></tr>';
     }).join('') || '<tr><td colspan="5" class="muted">Sin empleados activos en departamentos medibles.</td></tr>';
   }
 
