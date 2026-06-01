@@ -20,6 +20,7 @@ const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc
 const { formatDateTimeCDMX } = require('./dateHelper');
 const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES, isAdminOnlyModule } = require('./permissions');
 const { registerNewModules, updateSessionActivity, closeSessionActivity } = require("./newModules");
+const { registerKpiRoutes } = require('./kpisRoutes');
 const { ATTENDANCE_STATUSES, VALID_STATUS_CODES, VALID_WEEK_STATUSES, DAY_COLUMNS, calculateWeekRange, calculateAttendanceSummary, generateDefaultAttendance, validateStatusCode, employeeHasOutsideWork } = require('./attendance');
 
 const app = express();
@@ -1763,6 +1764,11 @@ function mapEmployee(row) {
 
   return {
     ...row,
+    active: !!row.active,
+    kpi_eligible: row.kpi_eligible !== 0,
+    primary_department: row.primary_department || row.department || null,
+    secondary_department: row.secondary_department || null,
+    user_id: row.user_id || null,
     seniority_years: completedYears,
     accrued_days: accruedDays,
     days_taken: daysTaken,
@@ -1862,6 +1868,10 @@ app.post('/api/employees', requireAuth, requirePermission('vacations', 'create')
     const fullName = requiredText(req.body, 'full_name', 'Nombre completo');
     const hireDate = requiredText(req.body, 'hire_date', 'Fecha de ingreso');
     const department = optionalText(req.body, 'department');
+    const primaryDepartment = optionalText(req.body, 'primary_department') || department;
+    const secondaryDepartment = optionalText(req.body, 'secondary_department');
+    const kpiEligible = req.body.kpi_eligible === false || req.body.kpi_eligible === 0 ? 0 : 1;
+    const userId = req.body.user_id ? Number(req.body.user_id) : null;
     const position = optionalText(req.body, 'position');
     const immediateBoss = optionalText(req.body, 'immediate_boss');
     const active = req.body.active === false || req.body.active === 0 ? 0 : 1;
@@ -1881,9 +1891,9 @@ app.post('/api/employees', requireAuth, requirePermission('vacations', 'create')
 
     const audit = createdByFields(req);
     const result = db.prepare(
-      `INSERT INTO employees (employee_number, full_name, hire_date, department, position, immediate_boss, active, termination_date, inactive_reason, created_at, updated_at, created_by_user_id, created_by_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(employeeNumber, fullName, hireDate, department, position, immediateBoss, active, terminationDate, inactiveReason, audit.created_at, audit.created_at, audit.created_by_user_id, audit.created_by_name);
+      `INSERT INTO employees (employee_number, full_name, hire_date, department, primary_department, secondary_department, kpi_eligible, user_id, position, immediate_boss, active, termination_date, inactive_reason, created_at, updated_at, created_by_user_id, created_by_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(employeeNumber, fullName, hireDate, department, primaryDepartment, secondaryDepartment, kpiEligible, userId, position, immediateBoss, active, terminationDate, inactiveReason, audit.created_at, audit.created_at, audit.created_by_user_id, audit.created_by_name);
 
     logAuditEvent(db, { req, action: 'create', module: 'employees', entityType: 'employee', entityId: result.lastInsertRowid, entityLabel: fullName });
     res.status(201).json(mapEmployee(getEmployeeOrFail(result.lastInsertRowid)));
@@ -5452,6 +5462,7 @@ app.post('/api/financial/statements/:id/reopen', requireAuth, requireAdminOnly, 
 
 // ===================== END FINANCIAL STATEMENTS MODULE =====================
 
+registerKpiRoutes(app, db, { requireAuth });
 registerNewModules(app, db, { requireAuth, requirePermission, badRequest, requiredText, optionalText, numberValue, enumValue, currencyValue, booleanValue, trim });
 app.use((err, req, res, next) => {
   if (res.headersSent) {
