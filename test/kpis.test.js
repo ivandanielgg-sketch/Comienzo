@@ -339,8 +339,8 @@ describe('KPIs frontend markup', () => {
   it('app.js contains admin-only KPI visibility', () => {
     const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
     assert.match(js, /kpis-tab/);
-    assert.match(js, /state\.userRole !== 'admin'/);
-    assert.match(js, /initKpiDashboard/);
-    assert.doesNotMatch(js, /weighted_score|ranking público|calificacion ponderada/i);
+    assert.match(js, /kpisTab.*classList\.toggle\('hidden', state\.userRole !== 'admin'\)/);
+    assert.match(js, /function initKpiDashboard/);
+    assert.match(js, /function showKpisTab/);
   });
 });

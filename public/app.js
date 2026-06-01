@@ -1628,15 +1628,6 @@ function openEmployeeModal(employee) {
     employeeForm.elements.full_name.value = employee.full_name;
     employeeForm.elements.hire_date.value = employee.hire_date;
     employeeForm.elements.department.value = employee.department || '';
-    if (employeeForm.elements.primary_department) {
-      employeeForm.elements.primary_department.value = employee.primary_department || employee.department || '';
-    }
-    if (employeeForm.elements.secondary_department) {
-      employeeForm.elements.secondary_department.value = employee.secondary_department || '';
-    }
-    if (employeeForm.elements.kpi_eligible) {
-      employeeForm.elements.kpi_eligible.checked = employee.kpi_eligible !== false;
-    }
     employeeForm.elements.position.value = employee.position || '';
     employeeForm.elements.immediate_boss.value = employee.immediate_boss || '';
     employeeForm.elements.active.checked = Boolean(employee.active);
@@ -3457,6 +3448,8 @@ function applyRoleVisibility() {
   if (sqTab) sqTab.classList.toggle('hidden', !canAccess('serviceQuoter', 'view'));
   const finTab = document.getElementById('financial-tab');
   if (finTab) finTab.classList.toggle('hidden', state.userRole !== 'admin');
+  const kpisTab = document.getElementById('kpis-tab');
+  if (kpisTab) kpisTab.classList.toggle('hidden', state.userRole !== 'admin');
   const archiveTab = document.getElementById('report-archive-tab');
   if (archiveTab) archiveTab.classList.toggle('hidden', !canAccess('reportsArchive', 'view'));
   const reportsTab = document.getElementById('reports-tab');
@@ -4880,10 +4873,17 @@ async function refreshSqConfig() {
 // ===================== FINANCIAL STATEMENTS MODULE =====================
 
 const financialTab = document.getElementById('financial-tab');
+const kpisTabBtn = document.getElementById('kpis-tab');
 
 function showFinancialTab() {
-  if (state.userRole === 'admin') {
+  if (state.userRole === 'admin' && financialTab) {
     financialTab.classList.remove('hidden');
+  }
+}
+
+function showKpisTab() {
+  if (state.userRole === 'admin' && kpisTabBtn) {
+    kpisTabBtn.classList.remove('hidden');
   }
 }
 
@@ -5514,3 +5514,241 @@ function renderActivitySummaryUsers(users) {
     return '<tr><td>' + escapeHtml(u.user_name) + '</td><td>' + escapeHtml(u.role || '') + '</td><td>' + (u.total_sessions || 0) + '</td><td>' + formatDuration(u.total_seconds) + '</td><td>' + formatDuration(u.avg_per_session) + '</td><td>' + formatDateTimeCDMX(u.last_activity) + '</td></tr>';
   }).join('');
 }
+
+// ===================== TABLERO KPIs MODULE =====================
+
+let kpiFiltersLoaded = false;
+
+function renderTrafficLight(color) {
+  const labels = { green: 'Verde', yellow: 'Amarillo', red: 'Rojo', critical: 'Critico', gray: 'N/A' };
+  return '<span class="kpi-semaphore kpi-semaphore-' + escapeHtml(color || 'gray') + '" title="' + escapeHtml(labels[color] || 'N/A') + '"></span>';
+}
+
+function renderKpiMetric(label, kpiObj) {
+  const display = kpiObj && kpiObj.display != null ? kpiObj.display : (kpiObj != null ? String(kpiObj) : '—');
+  const cls = kpiObj && kpiObj.available === false ? ' kpi-unavailable' : '';
+  return '<div class="kpi-metric' + cls + '"><span class="kpi-metric-label">' + escapeHtml(label) + '</span><strong>' + escapeHtml(display) + '</strong></div>';
+}
+
+function renderKpiSectionMetrics(containerId, metrics) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = metrics.map(function(m) { return renderKpiMetric(m.label, m.value); }).join('');
+}
+
+function buildKpiQueryParams() {
+  const form = document.getElementById('kpi-filter-form');
+  if (!form) return '';
+  const fd = new FormData(form);
+  const params = new URLSearchParams();
+  ['periodType', 'startDate', 'endDate', 'department', 'employeeId', 'clientName', 'projectId', 'status'].forEach(function(key) {
+    const val = fd.get(key);
+    if (val) params.set(key, val);
+  });
+  return params.toString();
+}
+
+async function loadKpiFilters() {
+  if (kpiFiltersLoaded) return;
+  const data = await api('/api/kpis/filters');
+  const deptSel = document.getElementById('kpi-department');
+  const empSel = document.getElementById('kpi-employee');
+  const clientSel = document.getElementById('kpi-client');
+  const projSel = document.getElementById('kpi-project');
+  const statusSel = document.getElementById('kpi-status');
+  if (deptSel && data.departments) {
+    data.departments.forEach(function(d) {
+      deptSel.innerHTML += '<option value="' + escapeHtml(d) + '">' + escapeHtml(d) + '</option>';
+    });
+  }
+  if (empSel && data.employees) {
+    data.employees.forEach(function(e) {
+      empSel.innerHTML += '<option value="' + e.employeeId + '">' + escapeHtml(e.fullName) + '</option>';
+    });
+  }
+  if (clientSel && data.clients) {
+    data.clients.forEach(function(c) {
+      clientSel.innerHTML += '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>';
+    });
+  }
+  if (projSel && data.projects) {
+    data.projects.forEach(function(p) {
+      projSel.innerHTML += '<option value="' + p.id + '">' + escapeHtml(p.quote_number + ' - ' + p.client_name) + '</option>';
+    });
+  }
+  if (statusSel && data.statuses) {
+    Object.values(data.statuses).flat().forEach(function(s) {
+      statusSel.innerHTML += '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>';
+    });
+  }
+  kpiFiltersLoaded = true;
+}
+
+function renderKpiDashboard(summary, alerts, employees) {
+  const cardsEl = document.getElementById('kpi-summary-cards');
+  if (cardsEl && summary.summary_cards) {
+    cardsEl.innerHTML = summary.summary_cards.map(function(c) {
+      return '<div class="kpi-card"><span class="kpi-card-label">' + escapeHtml(c.label) + '</span><strong>' + escapeHtml(c.value) + '</strong></div>';
+    }).join('');
+  }
+  const periodLabel = document.getElementById('kpi-period-label');
+  if (periodLabel && summary.period) {
+    periodLabel.textContent = 'Periodo: ' + (summary.period.label || '') + ' (Hora CDMX)';
+  }
+
+  renderKpiSectionMetrics('kpi-ventas-content', [
+    { label: 'Leads por canal', value: summary.ventas.leads_by_channel },
+    { label: 'Cotizaciones enviadas', value: summary.ventas.quotes_sent },
+    { label: 'Monto cotizado (MXN)', value: summary.ventas.quoted_amount_mxn },
+    { label: 'Monto vendido (MXN)', value: summary.ventas.sold_amount_mxn },
+    { label: 'Tasa de cierre (%)', value: summary.ventas.close_rate },
+    { label: 'Cierre rentable (%)', value: summary.ventas.profitable_close_rate },
+    { label: 'Cotiz. sin seguimiento', value: summary.ventas.quotes_without_follow_up },
+    { label: 'Margen estimado prom. (%)', value: summary.ventas.avg_estimated_margin },
+  ]);
+
+  renderKpiSectionMetrics('kpi-proyectos-content', [
+    { label: 'Proyectos activos', value: summary.proyectos.active_projects },
+    { label: 'Margen bruto real (%)', value: summary.proyectos.gross_margin_real },
+    { label: 'Proyectos margen rojo', value: summary.proyectos.red_margin_projects },
+    { label: 'Cumplimiento entrega (%)', value: summary.proyectos.delivery_compliance },
+    { label: 'Retrabajos', value: summary.proyectos.reworks },
+    { label: 'Tasa retrabajo (%)', value: summary.proyectos.rework_rate },
+    { label: 'Cierre tecnico pendiente', value: summary.proyectos.technical_close_pending },
+  ]);
+
+  renderKpiSectionMetrics('kpi-reportes-content', [
+    { label: 'Reportes completos (%)', value: summary.reportes.complete_reports },
+    { label: 'Reportes completos (#)', value: summary.reportes.complete_count },
+    { label: 'Evidencias completas (%)', value: summary.reportes.complete_evidence },
+    { label: 'Servicios sin reporte', value: summary.reportes.services_without_report },
+  ]);
+
+  renderKpiSectionMetrics('kpi-facturacion-content', [
+    { label: 'Facturas emitidas', value: summary.facturacion.invoices_issued },
+    { label: 'Monto facturado (MXN)', value: summary.facturacion.invoiced_amount_mxn },
+    { label: 'Tiempo facturacion (dias)', value: summary.facturacion.billing_time_days },
+    { label: 'Facturas canceladas', value: summary.facturacion.cancelled_invoices },
+    { label: 'Facturas con error', value: summary.facturacion.error_invoices },
+    { label: 'Pendientes documentacion', value: summary.facturacion.pending_documentation },
+  ]);
+
+  renderKpiSectionMetrics('kpi-cobranza-content', [
+    { label: 'Monto cobrado (MXN)', value: summary.cobranza.collected_amount_mxn },
+    { label: 'Facturas cobradas', value: summary.cobranza.collected_invoices },
+    { label: 'Dias prom. cobranza', value: summary.cobranza.avg_collection_days },
+    { label: 'Cartera vencida (%)', value: summary.cobranza.overdue_portfolio },
+    { label: 'Cuentas +120 dias', value: summary.cobranza.accounts_over_120_days },
+    { label: 'Sin contacto de pago', value: summary.cobranza.invoices_without_contact },
+  ]);
+
+  const deptContent = document.getElementById('kpi-departments-content');
+  if (deptContent && summary.departments) {
+    deptContent.innerHTML = summary.departments.map(function(d) {
+      const items = Object.entries(d.kpis || {}).map(function(entry) {
+        const val = entry[1];
+        const display = val && val.display != null ? val.display : '—';
+        return '<li><strong>' + escapeHtml(entry[0]) + ':</strong> ' + escapeHtml(display) + '</li>';
+      }).join('');
+      return '<div class="kpi-dept-block"><h4>' + escapeHtml(d.department) + '</h4><ul>' + items + '</ul></div>';
+    }).join('');
+  }
+
+  const empTable = document.getElementById('kpi-employees-table');
+  if (empTable && employees && employees.employees) {
+    empTable.innerHTML = employees.employees.map(function(e) {
+      const kpiText = Object.entries(e.kpis || {}).map(function(kv) {
+        return escapeHtml(kv[0]) + ': ' + escapeHtml(kv[1] != null ? String(kv[1]) : '—');
+      }).join('; ');
+      return '<tr><td>' + escapeHtml(e.employee) + '</td><td>' + escapeHtml(e.department) + '</td><td>' + kpiText + '</td><td>' + renderTrafficLight(e.traffic_light) + '</td><td>' + (e.alerts && e.alerts.length ? e.alerts.length : '0') + '</td></tr>';
+    }).join('') || '<tr><td colspan="5" class="muted">Sin empleados activos en departamentos medibles.</td></tr>';
+  }
+
+  const alertsTable = document.getElementById('kpi-alerts-table');
+  if (alertsTable && alerts && alerts.alerts) {
+    alertsTable.innerHTML = alerts.alerts.slice(0, 100).map(function(a) {
+      const link = a.link ? (a.link.quote_number || ('Proyecto #' + a.link.project_id)) : '—';
+      const sem = a.traffic_light ? renderTrafficLight(a.traffic_light) : '';
+      return '<tr><td>' + sem + escapeHtml(a.severity) + '</td><td>' + escapeHtml(a.type) + '</td><td>' + escapeHtml(a.responsible || '') + '</td><td>' + escapeHtml(a.date || '') + '</td><td>' + escapeHtml(a.suggested_action || '') + '</td><td>' + escapeHtml(link) + '</td></tr>';
+    }).join('') || '<tr><td colspan="6" class="muted">Sin alertas para el periodo seleccionado.</td></tr>';
+  }
+
+  const unassignedEl = document.getElementById('kpi-unassigned');
+  const unassignedList = document.getElementById('kpi-unassigned-list');
+  if (unassignedEl && unassignedList && summary.unassigned_employees && summary.unassigned_employees.length) {
+    unassignedEl.classList.remove('hidden');
+    unassignedList.innerHTML = summary.unassigned_employees.map(function(e) {
+      return '<li>' + escapeHtml(e.fullName) + (e.department ? ' (' + escapeHtml(e.department) + ')' : '') + '</li>';
+    }).join('');
+  } else if (unassignedEl) {
+    unassignedEl.classList.add('hidden');
+  }
+}
+
+async function loadKpiDashboard() {
+  const loading = document.getElementById('kpi-loading');
+  const errorEl = document.getElementById('kpi-error');
+  const denied = document.getElementById('kpis-access-denied');
+  const dashboard = document.getElementById('kpis-dashboard');
+  if (state.userRole !== 'admin') {
+    if (denied) denied.classList.remove('hidden');
+    if (dashboard) dashboard.classList.add('hidden');
+    return;
+  }
+  if (denied) denied.classList.add('hidden');
+  if (dashboard) dashboard.classList.remove('hidden');
+  if (loading) loading.classList.remove('hidden');
+  if (errorEl) { errorEl.classList.add('hidden'); errorEl.textContent = ''; }
+  try {
+    await loadKpiFilters();
+    const qs = buildKpiQueryParams();
+    const [summary, alerts, employees] = await Promise.all([
+      api('/api/kpis/summary?' + qs),
+      api('/api/kpis/alerts?' + qs),
+      api('/api/kpis/employees?' + qs),
+    ]);
+    renderKpiDashboard(summary, alerts, employees);
+  } catch (err) {
+    if (errorEl) {
+      errorEl.textContent = err.message || 'Error al cargar el Tablero KPIs.';
+      errorEl.classList.remove('hidden');
+    }
+  } finally {
+    if (loading) loading.classList.add('hidden');
+  }
+}
+
+function initKpiDashboard() {
+  if (state.userRole !== 'admin') {
+    const denied = document.getElementById('kpis-access-denied');
+    const dashboard = document.getElementById('kpis-dashboard');
+    if (denied) denied.classList.remove('hidden');
+    if (dashboard) dashboard.classList.add('hidden');
+    return;
+  }
+  loadKpiDashboard();
+}
+
+(function initKpiModule() {
+  const kpiTab = document.getElementById('kpis-tab');
+  if (kpiTab) {
+    kpiTab.addEventListener('click', function() { switchView('kpis'); });
+  }
+  const kpiForm = document.getElementById('kpi-filter-form');
+  if (kpiForm) {
+    kpiForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      loadKpiDashboard();
+    });
+    const periodSel = document.getElementById('kpi-period-type');
+    if (periodSel) {
+      periodSel.addEventListener('change', function() {
+        const custom = periodSel.value === 'custom';
+        const startLbl = document.getElementById('kpi-start-label');
+        const endLbl = document.getElementById('kpi-end-label');
+        if (startLbl) startLbl.style.display = custom ? 'flex' : 'none';
+        if (endLbl) endLbl.style.display = custom ? 'flex' : 'none';
+      });
+    }
+  }
+})();
