@@ -5619,7 +5619,8 @@ function renderKpiCharts(summary, employees) {
   const trendCtx = document.getElementById('kpi-chart-trend');
   if (trendCtx) {
     if (!trend.length) {
-      trendCtx.parentElement.querySelector('.kpi-chart-empty')?.remove();
+      const empty = trendCtx.parentElement && trendCtx.parentElement.querySelector('.kpi-chart-empty');
+      if (empty) empty.remove();
       const p = document.createElement('p');
       p.className = 'kpi-chart-empty';
       p.textContent = 'Sin datos de tendencia para el periodo.';
@@ -5642,11 +5643,19 @@ function renderKpiCharts(summary, employees) {
           plugins: {
             tooltip: {
               callbacks: {
-                label: function(ctx) { return ctx.dataset.label + ': ' + formatCurrencyMXN(ctx.parsed.y); },
+                label: function(ctx) {
+                  return ctx.dataset.label + ': ' + formatCurrencyMXN(ctx.parsed.y);
+                },
               },
             },
           },
-          scales: { y: { ticks: { callback: function(v) { return formatCurrencyMXN(v); } } } } },
+          scales: {
+            y: {
+              ticks: {
+                callback: function(v) { return formatCurrencyMXN(v); },
+              },
+            },
+          },
         },
       });
     }
@@ -5671,8 +5680,20 @@ function renderKpiCharts(summary, employees) {
       },
       options: {
         indexAxis: 'y',
-        plugins: { tooltip: { callbacks: { label: function(c) { return formatCurrencyMXN(c.parsed.x); } } } },
-        scales: { x: { ticks: { callback: function(v) { return formatCurrencyMXN(v); } } } } },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: function(c) { return formatCurrencyMXN(c.parsed.x); },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              callback: function(v) { return formatCurrencyMXN(v); },
+            },
+          },
+        },
       },
     });
   }
@@ -5684,11 +5705,27 @@ function renderKpiCharts(summary, employees) {
       type: 'bar',
       data: {
         labels: buckets.map(function(b) { return b.label; }),
-        datasets: [{ label: 'Monto MXN', data: buckets.map(function(b) { return b.amount; }), backgroundColor: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#7f1d1d'] }],
+        datasets: [{
+          label: 'Monto MXN',
+          data: buckets.map(function(b) { return b.amount; }),
+          backgroundColor: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#7f1d1d'],
+        }],
       },
       options: {
-        plugins: { tooltip: { callbacks: { label: function(c) { return formatCurrencyMXN(c.parsed.y); } } } },
-        scales: { y: { ticks: { callback: function(v) { return formatCurrencyMXN(v); } } } } },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: function(c) { return formatCurrencyMXN(c.parsed.y); },
+            },
+          },
+        },
+        scales: {
+          y: {
+            ticks: {
+              callback: function(v) { return formatCurrencyMXN(v); },
+            },
+          },
+        },
       },
     });
   }
@@ -5700,12 +5737,14 @@ function renderKpiCharts(summary, employees) {
       type: 'bar',
       data: {
         labels: ['Completos', 'Pendientes', 'Vencidos'],
-        datasets: [{ data: [rep.complete || 0, rep.pending || 0, rep.overdue || 0], backgroundColor: ['#22c55e', '#eab308', '#ef4444'] }],
+        datasets: [{
+          data: [rep.complete || 0, rep.pending || 0, rep.overdue || 0],
+          backgroundColor: ['#22c55e', '#eab308', '#ef4444'],
+        }],
       },
     });
   }
 }
-
 function populateKpiManualQuoteMonths() {
   const sel = document.getElementById('kpi-mq-month');
   if (!sel || sel.options.length > 1) return;
@@ -6232,3 +6271,4 @@ function initKpiDashboard() {
   }
 
 })();
+
