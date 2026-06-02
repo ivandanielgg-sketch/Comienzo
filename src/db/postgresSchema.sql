@@ -778,7 +778,7 @@ CREATE TABLE user_session_activities (
 CREATE TABLE sessions (
       sid TEXT PRIMARY KEY,
       sess TEXT NOT NULL,
-      expires INTEGER NOT NULL
+      expires BIGINT NOT NULL
     );
 
 CREATE INDEX idx_audit_logs_action ON audit_logs (action);
