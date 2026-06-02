@@ -32,10 +32,25 @@ function distinctYearSelect(column, alias = 'year') {
   return `SELECT DISTINCT CAST(strftime('%Y', ${column}) AS INTEGER) AS ${alias}`;
 }
 
+const INSERT_TABLES_WITHOUT_ID = new Set([
+  'exchange_rates',
+  'service_quote_settings',
+  'sessions',
+]);
+
+function insertTargetTable(sql) {
+  const match = sql.trim().match(/^INSERT\s+INTO\s+"?(\w+)"?/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
 function appendReturningId(sql) {
   if (!isPostgres()) return sql;
   const trimmed = sql.trim();
   if (!/^\s*INSERT/i.test(trimmed) || /RETURNING/i.test(trimmed)) {
+    return trimmed;
+  }
+  const table = insertTargetTable(trimmed);
+  if (table && INSERT_TABLES_WITHOUT_ID.has(table)) {
     return trimmed;
   }
   return `${trimmed} RETURNING id`;
