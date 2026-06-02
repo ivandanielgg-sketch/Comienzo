@@ -1,6 +1,7 @@
 'use strict';
 
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
+const { isDbTruthy } = require('./db/dialect');
 const { TIMEZONE } = require('./dateHelper');
 
 const KPI_DEPARTMENTS = ['Ventas', 'Técnico', 'Cobranza', 'Facturación'];
@@ -208,7 +209,7 @@ function mapKpiEmployee(row) {
     secondaryDepartment: row.secondary_department || null,
     kpiDepartment: kpiDept,
     kpiArea: row.kpi_area || null,
-    kpiEligible: row.kpi_eligible !== 0,
+    kpiEligible: isDbTruthy(row.kpi_eligible),
   };
 }
 

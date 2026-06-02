@@ -2,6 +2,7 @@
 
 const bcrypt = require('bcryptjs');
 const { logAuditEvent, createdByFields, updatedByFields } = require('./audit');
+const { isDbTruthy } = require('./db/dialect');
 const { TIMEZONE } = require('./dateHelper');
 const { buildKpiExcelWorkbook } = require('./kpisExport');
 const {
@@ -51,11 +52,11 @@ function mapKpiEmployeeConfigRow(r) {
     employee_id: r.id,
     full_name: r.full_name,
     position: r.position,
-    active: !!r.active,
+    active: isDbTruthy(r.active),
     kpi_area: r.kpi_area || 'Sin asignar',
-    kpi_eligible: r.kpi_eligible !== 0,
+    kpi_eligible: isDbTruthy(r.kpi_eligible),
     user_id: r.user_id,
-    has_vacation_requests: !!r.has_vacation_requests,
+    has_vacation_requests: isDbTruthy(r.has_vacation_requests),
     kpi_configured_at: r.kpi_configured_at,
     kpi_configured_by_name: r.kpi_configured_by_name,
   };
@@ -184,7 +185,7 @@ function validateSalesEmployee(db, employeeId) {
   if (!emp || !emp.active) {
     throw Object.assign(new Error('Vendedora no encontrada o inactiva.'), { statusCode: 400 });
   }
-  if (emp.kpi_eligible === 0) {
+  if (!isDbTruthy(emp.kpi_eligible)) {
     throw Object.assign(new Error('La vendedora no esta habilitada para KPIs.'), { statusCode: 400 });
   }
   const area = emp.kpi_area || emp.primary_department || '';
@@ -492,7 +493,7 @@ function registerKpiRoutes(app, db, { requireAuth }) {
         employee_id: after.id,
         full_name: after.full_name,
         kpi_area: after.kpi_area || 'Sin asignar',
-        kpi_eligible: after.kpi_eligible !== 0,
+        kpi_eligible: isDbTruthy(after.kpi_eligible),
       });
     } catch (error) {
       error.statusCode = error.statusCode || 400;
@@ -554,8 +555,7 @@ function registerKpiRoutes(app, db, { requireAuth }) {
     const rows = db.prepare(`
       SELECT id, full_name, position, kpi_area, primary_department, kpi_eligible, user_id
       FROM employees
-      WHERE active = 1 AND kpi_eligible != 0
-        AND (kpi_area = 'Ventas' OR (kpi_area IS NULL AND primary_department = 'Ventas'))
+      WHERE active = 1 AND kpi_eligible != 0 AND kpi_area = 'Ventas'
       ORDER BY full_name
     `).all();
     res.json({

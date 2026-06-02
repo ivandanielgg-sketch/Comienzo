@@ -5996,34 +5996,57 @@ function renderKpiConfigEmployeeTable(tbodyId, employees, defaultArea, showVacat
     const vacCell = showVacations
       ? '<td>' + (e.has_vacation_requests ? 'Sí' : 'No') + '</td>'
       : '';
+    const assigned = e.kpi_eligible && e.kpi_area === defaultArea;
     return '<tr data-id="' + e.employee_id + '" data-area="' + escapeHtml(defaultArea) + '">' +
       '<td>' + escapeHtml(e.full_name) + '</td>' +
       '<td>' + escapeHtml(e.position || '') + '</td>' +
       vacCell +
-      '<td><label style="display:flex;align-items:center;gap:6px;margin:0;">' +
-      '<input type="checkbox" class="kpi-emp-eligible"' + (e.kpi_eligible ? ' checked' : '') + ' />' +
-      '<span class="muted">Activo</span></label></td></tr>';
+      '<td><label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;">' +
+      '<input type="checkbox" class="kpi-emp-eligible"' + (assigned ? ' checked' : '') + ' aria-label="Asignado a KPI" />' +
+      '</label></td></tr>';
   }).join('');
-  tbody.querySelectorAll('.kpi-emp-eligible').forEach(function(chk) {
-    chk.addEventListener('change', async function() {
-      const tr = chk.closest('tr');
-      const id = tr.dataset.id;
-      const area = tr.dataset.area;
-      const eligible = chk.checked;
-      chk.disabled = true;
-      try {
-        await api('/api/kpis/employee-config/' + id, {
-          method: 'PUT',
-          body: { kpi_area: eligible ? area : 'Sin asignar', kpi_eligible: eligible },
-        });
-        await loadKpiDashboard();
-      } catch (err) {
-        chk.checked = !eligible;
-        alert(err.message || 'No se pudo guardar la asignacion.');
-      } finally {
-        chk.disabled = false;
-      }
+}
+
+async function handleKpiEmployeeEligibleToggle(chk) {
+  const tr = chk.closest('tr');
+  if (!tr) return;
+  const id = tr.dataset.id;
+  const area = tr.dataset.area;
+  const eligible = chk.checked;
+  const previousChecked = !eligible;
+  chk.disabled = true;
+  try {
+    const ok = await ensureKpiReauth();
+    if (!ok) {
+      chk.checked = previousChecked;
+      return;
+    }
+    const updated = await api('/api/kpis/employee-config/' + id, {
+      method: 'PUT',
+      body: { kpi_area: eligible ? area : 'Sin asignar', kpi_eligible: eligible },
     });
+    chk.checked = !!(updated && updated.kpi_eligible);
+    if (document.getElementById('kpi-manual-quotes-modal') &&
+        !document.getElementById('kpi-manual-quotes-modal').classList.contains('hidden')) {
+      await loadKpiSalesEmployees();
+    }
+    await loadKpiDashboard();
+  } catch (err) {
+    chk.checked = previousChecked;
+    alert(err.message || 'No se pudo guardar la asignacion.');
+  } finally {
+    chk.disabled = false;
+  }
+}
+
+function setupKpiEmployeeConfigHandlersOnce() {
+  const section = document.getElementById('kpi-config-employees-section');
+  if (!section || section.dataset.kpiEligibleBound === '1') return;
+  section.dataset.kpiEligibleBound = '1';
+  section.addEventListener('change', function(ev) {
+    const chk = ev.target;
+    if (!chk.classList || !chk.classList.contains('kpi-emp-eligible')) return;
+    handleKpiEmployeeEligibleToggle(chk);
   });
 }
 
@@ -6382,6 +6405,7 @@ function bindKpiModalBackdropClose(overlayId) {
   bindKpiModalBackdropClose('kpi-reauth-modal');
   bindKpiModalBackdropClose('kpi-manual-quotes-modal');
   bindKpiModalBackdropClose('kpi-config-modal');
+  setupKpiEmployeeConfigHandlersOnce();
   const kpiTab = document.getElementById('kpis-tab');
   if (kpiTab) {
     kpiTab.addEventListener('click', function() { switchView('kpis'); });

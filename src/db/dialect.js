@@ -61,6 +61,12 @@ function sqlCurrentDate() {
   return isPostgres() ? 'CURRENT_DATE' : "date('now')";
 }
 
+/** INTEGER/boolean flags from SQLite or PostgreSQL (pg may return "0"/"1" strings). */
+function isDbTruthy(value) {
+  if (value === null || value === undefined || value === false) return false;
+  return Number(value) !== 0;
+}
+
 module.exports = {
   isPostgres,
   toPositionalParams,
@@ -69,4 +75,5 @@ module.exports = {
   distinctYearSelect,
   appendReturningId,
   sqlCurrentDate,
+  isDbTruthy,
 };
