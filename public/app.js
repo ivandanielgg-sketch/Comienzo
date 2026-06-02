@@ -587,23 +587,38 @@ function renderPaginationControls(containerId, pagination, onPageChange, onLimit
 }
 
 async function api(path, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+  let body = options.body;
+  if (body != null && typeof body === 'object' && !(body instanceof FormData) && !(body instanceof Blob)) {
+    body = JSON.stringify(body);
+  }
   const response = await fetch(path, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
+    headers,
+    body,
   });
 
   if (response.status === 204) {
     return null;
   }
 
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.message || 'La operacion no pudo completarse.');
+  const text = await response.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      console.error('API JSON parse failed:', path, parseErr.message);
+      throw new Error('No se pudo interpretar la respuesta del servidor.');
+    }
   }
-
+  if (!response.ok) {
+    const msg = data.message || data.error || 'La operacion no pudo completarse.';
+    throw new Error(msg);
+  }
   return data;
 }
 
@@ -5569,39 +5584,88 @@ function formatKpiDisplayValue(key, value) {
   return String(value);
 }
 
-async function ensureKpiReauth() {
-  const status = await api('/api/kpis/reauth-status');
-  if (status.authenticated) return true;
-  return new Promise(function(resolve) {
-    const modal = document.getElementById('kpi-reauth-modal');
-    const form = document.getElementById('kpi-reauth-form');
+function resetKpiReauthModalUi() {
+  const input = document.getElementById('kpi-reauth-password');
+  const msg = document.getElementById('kpi-reauth-message');
+  const submitBtn = document.getElementById('kpi-reauth-submit');
+  if (input) input.value = '';
+  if (msg) msg.textContent = '';
+  if (submitBtn) submitBtn.disabled = false;
+}
+
+function closeKpiReauthModal() {
+  const modal = document.getElementById('kpi-reauth-modal');
+  if (modal) modal.classList.add('hidden');
+  resetKpiReauthModalUi();
+  if (kpiReauthPromise && kpiReauthPromise._resolve) {
+    const r = kpiReauthPromise._resolve;
+    kpiReauthPromise = null;
+    return r;
+  }
+  kpiReauthPromise = null;
+  return null;
+}
+
+function setupKpiReauthFormOnce() {
+  const form = document.getElementById('kpi-reauth-form');
+  const cancelBtn = document.getElementById('kpi-reauth-cancel');
+  if (!form || form.dataset.kpiReauthBound === '1') return;
+  form.dataset.kpiReauthBound = '1';
+  cancelBtn?.addEventListener('click', function() {
+    const resolve = closeKpiReauthModal();
+    if (resolve) resolve(false);
+  });
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
     const input = document.getElementById('kpi-reauth-password');
     const msg = document.getElementById('kpi-reauth-message');
-    if (!modal || !form) { resolve(false); return; }
+    const submitBtn = document.getElementById('kpi-reauth-submit');
+    if (!input || !kpiReauthPromise || !kpiReauthPromise._resolve) return;
     msg.textContent = '';
-    input.value = '';
-    modal.classList.remove('hidden');
-    function cleanup() {
-      modal.classList.add('hidden');
-      form.removeEventListener('submit', onSubmit);
-      document.getElementById('kpi-reauth-cancel').removeEventListener('click', onCancel);
-    }
-    function onCancel() { cleanup(); resolve(false); }
-    async function onSubmit(e) {
-      e.preventDefault();
-      msg.textContent = '';
-      try {
-        await api('/api/kpis/admin-reauth', { method: 'POST', body: { password: input.value } });
-        input.value = '';
-        cleanup();
-        resolve(true);
-      } catch (err) {
-        msg.textContent = err.message || 'Contrasena incorrecta.';
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const result = await api('/api/kpis/admin-reauth', {
+        method: 'POST',
+        body: { password: input.value },
+      });
+      if (result && result.success === false) {
+        throw new Error(result.message || 'Contraseña incorrecta o acceso no autorizado.');
       }
+      const resolve = kpiReauthPromise._resolve;
+      input.value = '';
+      closeKpiReauthModal();
+      resolve(true);
+    } catch (err) {
+      console.error('KPI reauth failed:', err.message);
+      msg.textContent = err.message || 'No se pudo validar la contraseña. Intenta nuevamente.';
+      input.value = '';
+      if (submitBtn) submitBtn.disabled = false;
     }
-    form.addEventListener('submit', onSubmit);
-    document.getElementById('kpi-reauth-cancel').addEventListener('click', onCancel);
   });
+}
+
+async function ensureKpiReauth() {
+  try {
+    const status = await api('/api/kpis/reauth-status');
+    if (status && status.authenticated) return true;
+  } catch (err) {
+    console.error('KPI reauth status error:', err.message);
+  }
+  if (kpiReauthPromise) return kpiReauthPromise;
+  kpiReauthPromise = new Promise(function(resolve) {
+    kpiReauthPromise._resolve = resolve;
+    const modal = document.getElementById('kpi-reauth-modal');
+    if (!modal) {
+      kpiReauthPromise = null;
+      resolve(false);
+      return;
+    }
+    setupKpiReauthFormOnce();
+    resetKpiReauthModalUi();
+    modal.classList.remove('hidden');
+    document.getElementById('kpi-reauth-password')?.focus();
+  });
+  return kpiReauthPromise;
 }
 
 function destroyKpiCharts() {
@@ -5758,18 +5822,34 @@ function populateKpiManualQuoteMonths() {
   if (sel && !sel.value) sel.value = now.getMonth() + 1;
 }
 
+async function loadKpiSalesEmployees() {
+  const empSel = document.getElementById('kpi-mq-employee');
+  if (!empSel) return;
+  const data = await api('/api/kpis/sales-employees');
+  empSel.innerHTML = '<option value="">Seleccione vendedora</option>';
+  (data.employees || []).forEach(function(e) {
+    empSel.innerHTML += '<option value="' + e.employee_id + '">' + escapeHtml(e.full_name) + '</option>';
+  });
+}
+
+function resetKpiManualQuoteForm() {
+  const form = document.getElementById('kpi-manual-quotes-form');
+  const idEl = document.getElementById('kpi-mq-id');
+  if (idEl) idEl.value = '';
+  if (form) form.reset();
+  populateKpiManualQuoteMonths();
+  syncKpiQuoteAmountFields();
+}
+
 async function openKpiManualQuotesModal() {
   populateKpiManualQuoteMonths();
   const modal = document.getElementById('kpi-manual-quotes-modal');
-  const empSel = document.getElementById('kpi-mq-employee');
-  if (empSel && empSel.options.length <= 1) {
-    const filters = await api('/api/kpis/filters');
-    (filters.employees || []).forEach(function(e) {
-      empSel.innerHTML += '<option value="' + e.employeeId + '">' + escapeHtml(e.fullName) + '</option>';
-    });
-  }
+  const msg = document.getElementById('kpi-mq-message');
+  if (msg) { msg.textContent = ''; msg.classList.add('hidden'); }
+  await loadKpiSalesEmployees();
+  resetKpiManualQuoteForm();
   await refreshKpiManualQuotesList();
-  modal.classList.remove('hidden');
+  if (modal) modal.classList.remove('hidden');
 }
 
 async function refreshKpiManualQuotesList() {
@@ -5780,7 +5860,7 @@ async function refreshKpiManualQuotesList() {
   const data = await api('/api/kpis/manual-quotes?year=' + year + '&month=' + month);
   list.innerHTML = '<table><thead><tr><th>Empleado</th><th>Cotiz.</th><th>Monto MXN</th><th></th></tr></thead><tbody>' +
     (data.captures || []).map(function(c) {
-      return '<tr><td>' + escapeHtml(c.employee_name_snapshot || 'Global') + '</td><td>' + c.quotes_sent_count + '</td><td>' + formatCurrencyMXN(c.quoted_amount_mxn) + '</td><td><button type="button" class="secondary kpi-mq-edit" data-id="' + c.id + '">Editar</button></td></tr>';
+      return '<tr><td>' + escapeHtml(c.employee_name_snapshot || '—') + '</td><td>' + c.quotes_sent_count + '</td><td>' + formatCurrencyMXN(c.quoted_amount_mxn) + '</td><td><button type="button" class="secondary kpi-mq-edit" data-id="' + c.id + '">Editar</button></td></tr>';
     }).join('') + '</tbody></table>';
   list.querySelectorAll('.kpi-mq-edit').forEach(function(btn) {
     btn.addEventListener('click', function() { loadKpiManualQuoteForEdit(btn.dataset.id, data.captures); });
@@ -5798,32 +5878,66 @@ function loadKpiManualQuoteForEdit(id, captures) {
   document.getElementById('kpi-mq-amount').value = c.quoted_amount_original;
   document.getElementById('kpi-mq-currency').value = c.currency || 'MXN';
   document.getElementById('kpi-mq-rate').value = c.exchange_rate_to_mxn || 1;
-  document.getElementById('kpi-mq-mxn').value = formatCurrencyMXN(c.quoted_amount_mxn);
   document.getElementById('kpi-mq-notes').value = c.notes || '';
+  syncKpiQuoteAmountFields();
+}
+
+function syncKpiQuoteAmountFields() {
+  const currency = document.getElementById('kpi-mq-currency')?.value || 'MXN';
+  const rateWrap = document.getElementById('kpi-mq-rate-wrap');
+  const mxnWrap = document.getElementById('kpi-mq-mxn-wrap');
+  const amountLabel = document.getElementById('kpi-mq-amount-label');
+  const rateInput = document.getElementById('kpi-mq-rate');
+  const mxnDisplay = document.getElementById('kpi-mq-mxn-display');
+  const isForeign = currency !== 'MXN';
+  if (rateWrap) rateWrap.classList.toggle('hidden', !isForeign);
+  if (mxnWrap) mxnWrap.classList.toggle('hidden', !isForeign);
+  if (amountLabel) {
+    amountLabel.firstChild && (amountLabel.childNodes[0].textContent = isForeign ? 'Monto cotizado (original) * ' : 'Monto cotizado * ');
+  }
+  if (!isForeign && rateInput) rateInput.value = '1';
+  const amount = parsePlainAmount(document.getElementById('kpi-mq-amount')?.value);
+  const rate = isForeign ? (Number(rateInput?.value) || 0) : 1;
+  const mxn = isForeign ? amount * rate : amount;
+  if (mxnDisplay) mxnDisplay.value = formatCurrencyMXN(mxn);
 }
 
 function updateKpiManualQuoteMxnPreview() {
-  const amount = parsePlainAmount(document.getElementById('kpi-mq-amount')?.value);
-  const currency = document.getElementById('kpi-mq-currency')?.value || 'MXN';
-  const rate = Number(document.getElementById('kpi-mq-rate')?.value) || 1;
-  const mxn = currency === 'MXN' ? amount : amount * rate;
-  const el = document.getElementById('kpi-mq-mxn');
-  if (el) el.value = formatCurrencyMXN(mxn);
+  syncKpiQuoteAmountFields();
 }
 
 async function openKpiConfigModal() {
   const ok = await ensureKpiReauth();
   if (!ok) return;
   const modal = document.getElementById('kpi-config-modal');
-  modal.classList.remove('hidden');
-  const [config, formulas, settings] = await Promise.all([
+  const errEl = document.getElementById('kpi-config-load-error');
+  if (errEl) { errEl.textContent = ''; errEl.classList.add('hidden'); }
+  if (modal) modal.classList.remove('hidden');
+  const results = await Promise.allSettled([
     api('/api/kpis/employee-config'),
     api('/api/kpis/formulas'),
     api('/api/kpis/settings'),
   ]);
-  renderKpiConfigEmployees(config);
-  renderKpiConfigFormulas(formulas.formulas || []);
-  fillKpiSettingsForm(settings);
+  const errors = [];
+  if (results[0].status === 'fulfilled') {
+    renderKpiConfigEmployees(results[0].value);
+  } else {
+    errors.push('Empleados KPI: ' + (results[0].reason?.message || 'error'));
+  }
+  if (results[1].status === 'fulfilled') {
+    renderKpiConfigFormulas(results[1].value.formulas || []);
+  } else {
+    errors.push('Fórmulas: ' + (results[1].reason?.message || 'error'));
+  }
+  if (results[2].status === 'fulfilled') {
+    fillKpiSettingsForm(results[2].value);
+  } else {
+    errors.push('Parámetros: ' + (results[2].reason?.message || 'error'));
+  }
+  if (errors.length && errEl) {
+    errEl.textContent = errors.join(' · ');
+    errEl.classList.remove('hidden');
+  }
 }
 
 function renderKpiConfigEmployees(config) {
@@ -6179,7 +6293,31 @@ function initKpiDashboard() {
   loadKpiDashboard();
 }
 
+
+function bindKpiModalBackdropClose(overlayId) {
+  const overlay = document.getElementById(overlayId);
+  if (!overlay || overlay.dataset.kpiBackdropBound === '1') return;
+  overlay.dataset.kpiBackdropBound = '1';
+  let downOnBackdrop = false;
+  overlay.addEventListener('mousedown', function(ev) {
+    downOnBackdrop = ev.target === overlay;
+  });
+  overlay.addEventListener('click', function(ev) {
+    if (downOnBackdrop && ev.target === overlay) {
+      overlay.classList.add('hidden');
+      if (overlayId === 'kpi-reauth-modal') {
+        const resolve = closeKpiReauthModal();
+        if (resolve) resolve(false);
+      }
+    }
+    downOnBackdrop = false;
+  });
+}
+
 (function initKpiModule() {
+  bindKpiModalBackdropClose('kpi-reauth-modal');
+  bindKpiModalBackdropClose('kpi-manual-quotes-modal');
+  bindKpiModalBackdropClose('kpi-config-modal');
   const kpiTab = document.getElementById('kpis-tab');
   if (kpiTab) {
     kpiTab.addEventListener('click', function() { switchView('kpis'); });
@@ -6214,29 +6352,47 @@ function initKpiDashboard() {
   if (mqForm) {
     mqForm.addEventListener('submit', async function(e) {
       e.preventDefault();
+      const msg = document.getElementById('kpi-mq-message');
+      const empVal = document.getElementById('kpi-mq-employee').value;
+      if (!empVal) {
+        if (msg) { msg.textContent = 'Seleccione una vendedora.'; msg.classList.remove('hidden'); }
+        return;
+      }
+      const currency = document.getElementById('kpi-mq-currency').value;
+      const quotedOriginal = parsePlainAmount(document.getElementById('kpi-mq-amount').value);
+      const exchangeRate = currency === 'MXN' ? 1 : (Number(document.getElementById('kpi-mq-rate').value) || 0);
+      if (currency !== 'MXN' && exchangeRate <= 0) {
+        if (msg) { msg.textContent = 'Tipo de cambio debe ser mayor a cero.'; msg.classList.remove('hidden'); }
+        return;
+      }
+      const quotedMxn = currency === 'MXN' ? quotedOriginal : quotedOriginal * exchangeRate;
       const id = document.getElementById('kpi-mq-id').value;
       const body = {
         year: Number(document.getElementById('kpi-mq-year').value),
         month: Number(document.getElementById('kpi-mq-month').value),
-        department: document.getElementById('kpi-mq-department').value,
-        employee_id: document.getElementById('kpi-mq-employee').value || null,
+        department: 'Ventas',
+        employee_id: Number(empVal),
         quotes_sent_count: Number(document.getElementById('kpi-mq-count').value),
-        quoted_amount_original: parsePlainAmount(document.getElementById('kpi-mq-amount').value),
-        currency: document.getElementById('kpi-mq-currency').value,
-        exchange_rate_to_mxn: Number(document.getElementById('kpi-mq-rate').value) || 1,
-        quoted_amount_mxn: parsePlainAmount(document.getElementById('kpi-mq-mxn').value),
+        quoted_amount_original: quotedOriginal,
+        currency: currency,
+        exchange_rate_to_mxn: exchangeRate,
+        quoted_amount_mxn: Math.round(quotedMxn * 100) / 100,
         notes: document.getElementById('kpi-mq-notes').value,
       };
-      if (body.employee_id) body.employee_id = Number(body.employee_id);
-      if (id) await api('/api/kpis/manual-quotes/' + id, { method: 'PUT', body: body });
-      else await api('/api/kpis/manual-quotes', { method: 'POST', body: body });
-      document.getElementById('kpi-mq-id').value = '';
-      await refreshKpiManualQuotesList();
-      await loadKpiDashboard();
+      if (msg) { msg.textContent = ''; msg.classList.add('hidden'); }
+      try {
+        if (id) await api('/api/kpis/manual-quotes/' + id, { method: 'PUT', body: body });
+        else await api('/api/kpis/manual-quotes', { method: 'POST', body: body });
+        resetKpiManualQuoteForm();
+        await refreshKpiManualQuotesList();
+        await loadKpiDashboard();
+      } catch (err) {
+        if (msg) { msg.textContent = err.message || 'No se pudo guardar la captura.'; msg.classList.remove('hidden'); }
+      }
     });
     ['kpi-mq-amount', 'kpi-mq-currency', 'kpi-mq-rate'].forEach(function(id) {
       const el = document.getElementById(id);
-      if (el) el.addEventListener('input', updateKpiManualQuoteMxnPreview);
+      if (el) el.addEventListener('input', syncKpiQuoteAmountFields);
     });
     document.getElementById('kpi-mq-year')?.addEventListener('change', refreshKpiManualQuotesList);
     document.getElementById('kpi-mq-month')?.addEventListener('change', refreshKpiManualQuotesList);

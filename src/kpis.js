@@ -434,26 +434,18 @@ function loadManualQuoteCapturesForPeriod(db, period) {
 }
 
 function aggregateManualQuotesForMonth(captures, year, month) {
-  const monthRows = captures.filter((c) => c.year === year && c.month === month);
-  const byEmployee = monthRows.filter((c) => c.employee_id != null);
-  if (byEmployee.length) {
-    return {
-      quotesSent: byEmployee.reduce((s, c) => s + (c.quotes_sent_count || 0), 0),
-      quotedAmountMxn: roundMoney(byEmployee.reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0)),
-      hasCapture: true,
-      byEmployee: true,
-    };
+  const byEmployee = captures.filter(
+    (c) => c.year === year && c.month === month && c.employee_id != null,
+  );
+  if (!byEmployee.length) {
+    return { quotesSent: 0, quotedAmountMxn: 0, hasCapture: false, byEmployee: true };
   }
-  const global = monthRows.find((c) => c.employee_id == null);
-  if (global) {
-    return {
-      quotesSent: global.quotes_sent_count || 0,
-      quotedAmountMxn: roundMoney(global.quoted_amount_mxn || 0),
-      hasCapture: true,
-      byEmployee: false,
-    };
-  }
-  return { quotesSent: 0, quotedAmountMxn: 0, hasCapture: false, byEmployee: false };
+  return {
+    quotesSent: byEmployee.reduce((s, c) => s + (c.quotes_sent_count || 0), 0),
+    quotedAmountMxn: roundMoney(byEmployee.reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0)),
+    hasCapture: true,
+    byEmployee: true,
+  };
 }
 
 function aggregateManualQuotesForPeriod(captures, period) {
@@ -489,13 +481,6 @@ function getManualQuotesForEmployee(captures, period, employeeId) {
       hasAny = true;
       quotesSent += empRow.quotes_sent_count || 0;
       quotedAmountMxn += empRow.quoted_amount_mxn || 0;
-      continue;
-    }
-    const agg = aggregateManualQuotesForMonth(captures, mo.year, mo.month);
-    if (agg.hasCapture && !agg.byEmployee) {
-      hasAny = true;
-      quotesSent += agg.quotesSent;
-      quotedAmountMxn += agg.quotedAmountMxn;
     }
   }
   return { quotesSent, quotedAmountMxn: roundMoney(quotedAmountMxn), hasCapture: hasAny };

@@ -110,11 +110,17 @@ function validateManualQuoteBody(body, isUpdate = false) {
   const quotedMxn = Number(body.quoted_amount_mxn ?? body.quotedAmountMXN);
   const computedMxn = currency === 'MXN' ? quotedOriginal : round2(quotedOriginal * exchangeRate);
   const finalMxn = Number.isFinite(quotedMxn) && quotedMxn >= 0 ? round2(quotedMxn) : computedMxn;
+  const employeeIdRaw = body.employee_id != null ? body.employee_id : body.employeeId;
+  const employeeId = employeeIdRaw != null && employeeIdRaw !== '' ? Number(employeeIdRaw) : null;
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    throw Object.assign(new Error('Vendedora es obligatoria.'), { statusCode: 400 });
+  }
+
   return {
     year,
     month,
-    department: body.department || 'Ventas',
-    employee_id: body.employee_id != null ? Number(body.employee_id) : (body.employeeId != null ? Number(body.employeeId) : null),
+    department: 'Ventas',
+    employee_id: employeeId,
     employee_name_snapshot: body.employee_name_snapshot || body.employeeNameSnapshot || null,
     quotes_sent_count: Math.floor(quotesSent),
     quoted_amount_original: round2(quotedOriginal),
@@ -128,6 +134,26 @@ function validateManualQuoteBody(body, isUpdate = false) {
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
 }
+
+function validateSalesEmployee(db, employeeId) {
+  const emp = db.prepare(`
+    SELECT id, full_name, kpi_area, primary_department, kpi_eligible, active
+    FROM employees WHERE id = ?
+  `).get(employeeId);
+  if (!emp || !emp.active) {
+    throw Object.assign(new Error('Vendedora no encontrada o inactiva.'), { statusCode: 400 });
+  }
+  if (emp.kpi_eligible === 0) {
+    throw Object.assign(new Error('La vendedora no esta habilitada para KPIs.'), { statusCode: 400 });
+  }
+  const area = emp.kpi_area || emp.primary_department || '';
+  const normalized = String(area).trim();
+  if (normalized !== 'Ventas') {
+    throw Object.assign(new Error('La vendedora debe tener area KPI Ventas.'), { statusCode: 400 });
+  }
+  return emp;
+}
+
 
 function registerKpiRoutes(app, db, { requireAuth }) {
   const kpiDeniedMessage = 'Acceso restringido. Solo el administrador puede consultar el Tablero KPIs.';
@@ -236,22 +262,23 @@ function registerKpiRoutes(app, db, { requireAuth }) {
     }
   });
 
-  app.post('/api/kpis/admin-reauth', requireAuth, requireKpiAdmin, (req, res, next) => {
-    try {
-      const password = req.body?.password;
-      if (!password) throw Object.assign(new Error('Contrasena requerida.'), { statusCode: 400 });
-      const admin = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'admin' AND is_active = 1").get(req.session.userId);
-      if (!admin || !bcrypt.compareSync(password, admin.password_hash)) {
-        logAuditEvent(db, { req, action: 'kpi_reauth_failed', module: 'kpis' });
-        throw Object.assign(new Error('Contrasena incorrecta.'), { statusCode: 403 });
-      }
-      req.session.kpiReauthAt = Date.now();
-      logAuditEvent(db, { req, action: 'kpi_reauth_success', module: 'kpis' });
-      res.json({ success: true, expires_in_ms: KPI_REAUTH_MS });
-    } catch (error) {
-      error.statusCode = error.statusCode || 400;
-      next(error);
+  app.post('/api/kpis/admin-reauth', requireAuth, requireKpiAdmin, (req, res) => {
+    const password = req.body?.password;
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({ success: false, message: 'Contrasena requerida.' });
     }
+    const admin = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'admin' AND is_active = 1").get(req.session.userId);
+    if (!admin || !bcrypt.compareSync(password, admin.password_hash)) {
+      logAuditEvent(db, { req, action: 'kpi_reauth_failed', module: 'kpis' });
+      return res.status(403).json({
+        success: false,
+        message: 'Contrasena incorrecta o acceso no autorizado.',
+      });
+    }
+    req.session.kpiReauthAt = Date.now();
+    logAuditEvent(db, { req, action: 'kpi_reauth_success', module: 'kpis' });
+    const expiresAt = new Date(Date.now() + KPI_REAUTH_MS).toISOString();
+    return res.json({ success: true, expires_in_ms: KPI_REAUTH_MS, expiresAt });
   });
 
   app.get('/api/kpis/reauth-status', requireAuth, requireKpiAdmin, (req, res) => {
@@ -278,15 +305,21 @@ function registerKpiRoutes(app, db, { requireAuth }) {
   app.post('/api/kpis/manual-quotes', requireAuth, requireKpiAdmin, (req, res, next) => {
     try {
       const data = validateManualQuoteBody(req.body);
-      if (data.employee_id) {
-        const emp = db.prepare('SELECT full_name FROM employees WHERE id = ? AND active = 1').get(data.employee_id);
-        if (!emp) throw Object.assign(new Error('Empleado no encontrado o inactivo.'), { statusCode: 400 });
-        data.employee_name_snapshot = emp.full_name;
-      }
+      const emp = validateSalesEmployee(db, data.employee_id);
+      data.employee_name_snapshot = emp.full_name;
       const dup = db.prepare(
         'SELECT id FROM kpi_manual_quote_captures WHERE deleted_at IS NULL AND year = ? AND month = ? AND COALESCE(employee_id, -1) = COALESCE(?, -1)',
       ).get(data.year, data.month, data.employee_id);
-      if (dup) throw Object.assign(new Error('Ya existe captura para este ano, mes y empleado.'), { statusCode: 409 });
+      if (dup) {
+        logAuditEvent(db, {
+          req,
+          action: 'duplicate_blocked',
+          module: 'kpis',
+          entityType: 'kpi_manual_quote_capture',
+          metadata: { year: data.year, month: data.month, employee_id: data.employee_id },
+        });
+        throw Object.assign(new Error('Ya existe captura para este ano, mes y vendedora.'), { statusCode: 409 });
+      }
       const audit = createdByFields(req);
       const now = audit.created_at;
       const result = db.prepare(`
@@ -324,10 +357,8 @@ function registerKpiRoutes(app, db, { requireAuth }) {
       const before = db.prepare('SELECT * FROM kpi_manual_quote_captures WHERE id = ? AND deleted_at IS NULL').get(id);
       if (!before) throw Object.assign(new Error('Captura no encontrada.'), { statusCode: 404 });
       const data = validateManualQuoteBody({ ...before, ...req.body }, true);
-      if (data.employee_id) {
-        const emp = db.prepare('SELECT full_name FROM employees WHERE id = ?').get(data.employee_id);
-        data.employee_name_snapshot = emp?.full_name || data.employee_name_snapshot;
-      }
+      const emp = validateSalesEmployee(db, data.employee_id);
+      data.employee_name_snapshot = emp.full_name;
       const audit = updatedByFields(req);
       db.prepare(`
         UPDATE kpi_manual_quote_captures SET
@@ -487,6 +518,24 @@ function registerKpiRoutes(app, db, { requireAuth }) {
       error.statusCode = error.statusCode || 400;
       next(error);
     }
+  });
+
+  app.get('/api/kpis/sales-employees', requireAuth, requireKpiAdmin, (req, res) => {
+    const rows = db.prepare(`
+      SELECT id, full_name, position, kpi_area, primary_department, kpi_eligible, user_id
+      FROM employees
+      WHERE active = 1 AND kpi_eligible != 0
+        AND (kpi_area = 'Ventas' OR (kpi_area IS NULL AND primary_department = 'Ventas'))
+      ORDER BY full_name
+    `).all();
+    res.json({
+      employees: rows.map((r) => ({
+        employee_id: r.id,
+        full_name: r.full_name,
+        position: r.position,
+        kpi_area: r.kpi_area || r.primary_department || 'Ventas',
+      })),
+    });
   });
 
   app.get('/api/kpis/filters', requireAuth, requireKpiAdmin, (req, res) => {

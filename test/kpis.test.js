@@ -351,10 +351,20 @@ describe('KPIs integration - admin only', () => {
     const d = new Date();
     const year = d.getFullYear();
     const month = d.getMonth() + 1;
+    const empRes = await request('POST', '/api/employees', {
+      employee_number: 'KPI-MQ-' + Date.now(),
+      full_name: 'Vendedora Test MQ',
+      hire_date: '2024-01-01',
+      primary_department: 'Ventas',
+      active: true,
+    }, adminCookie);
+    assert.strictEqual(empRes.status, 201);
+    const employeeId = empRes.body.id;
     const create = await request('POST', '/api/kpis/manual-quotes', {
       year,
       month,
       department: 'Ventas',
+      employee_id: employeeId,
       quotes_sent_count: 7,
       quoted_amount_original: 1425,
       currency: 'MXN',
@@ -373,14 +383,53 @@ describe('KPIs integration - admin only', () => {
     assert.ok(summary.body.facturacion.billing_admin_note);
   });
 
-  it('admin reauth rejects wrong password', async () => {
-    const res = await request('POST', '/api/kpis/admin-reauth', { password: 'wrong-password-xyz' }, adminCookie);
-    assert.ok(res.status >= 400);
-  });
-
   it('settings requires reauth', async () => {
     const res = await request('GET', '/api/kpis/settings', null, adminCookie);
     assert.strictEqual(res.status, 403);
+  });
+
+  it('admin reauth accepts correct password', async () => {
+    const res = await request('POST', '/api/kpis/admin-reauth', { password: 'admin123' }, adminCookie);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.success, true);
+    assert.ok(res.body.expiresAt || res.body.expires_in_ms);
+  });
+
+  it('admin reauth rejects wrong password with JSON body', async () => {
+    const res = await request('POST', '/api/kpis/admin-reauth', { password: 'wrong-password-xyz' }, adminCookie);
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.success, false);
+    assert.ok(res.body.message);
+    assert.doesNotMatch(String(res.body.message), /\[object Object\]/);
+  });
+
+  it('manual quote requires vendedora', async () => {
+    const d = new Date();
+    const res = await request('POST', '/api/kpis/manual-quotes', {
+      year: d.getFullYear(),
+      month: d.getMonth() + 1,
+      department: 'Ventas',
+      quotes_sent_count: 1,
+      quoted_amount_original: 100,
+      currency: 'MXN',
+      exchange_rate_to_mxn: 1,
+    }, adminCookie);
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.message, /Vendedora/i);
+  });
+
+  it('sales-employees returns Ventas eligible list', async () => {
+    await request('POST', '/api/employees', {
+      employee_number: 'KPI-SALES-' + Date.now(),
+      full_name: 'Vendedora Sales API',
+      hire_date: '2024-01-01',
+      primary_department: 'Ventas',
+      active: true,
+    }, adminCookie);
+    const res = await request('GET', '/api/kpis/sales-employees', null, adminCookie);
+    assert.strictEqual(res.status, 200);
+    assert.ok(Array.isArray(res.body.employees));
+    assert.ok(res.body.employees.some((e) => e.full_name === 'Vendedora Sales API'));
   });
 
   it('excel export returns spreadsheet', async () => {
@@ -468,6 +517,38 @@ describe('KPIs Fase 2', () => {
     const formulas = getFormulaDefinitions(settings);
     const margin = formulas.find((f) => f.key === 'gross_margin_real');
     assert.ok(margin.parameters.some((p) => p.value === 40 || p.value >= 30));
+  });
+
+  it('aggregateManualQuotes ignores global captures without employee', () => {
+    const captures = [
+      { year: 2026, month: 6, employee_id: null, quotes_sent_count: 99, quoted_amount_mxn: 99999 },
+      { year: 2026, month: 6, employee_id: 1, quotes_sent_count: 2, quoted_amount_mxn: 500 },
+    ];
+    const period = { startDate: '2026-06-01', endDate: '2026-06-30' };
+    const agg = aggregateManualQuotesForPeriod(captures, period);
+    assert.equal(agg.quotesSent, 2);
+    assert.equal(agg.quotedAmountMxn, 500);
+  });
+
+  it('index.html has no captura global option', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    assert.doesNotMatch(html, /Captura global del mes/i);
+    assert.match(html, /id="kpi-mq-mxn-display"/);
+    assert.match(html, /id="kpi-reauth-submit"/);
+  });
+
+  it('app.js serializes JSON body in api()', () => {
+    const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    assert.match(js, /JSON\.stringify\(body\)/);
+    assert.match(js, /syncKpiQuoteAmountFields/);
+    assert.match(js, /loadKpiSalesEmployees/);
+    assert.doesNotMatch(js, /Captura global del mes/i);
+  });
+
+  it('styles.css uses solid KPI modal panels', () => {
+    const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+    assert.match(css, /#kpi-reauth-modal \.modal/);
+    assert.match(css, /opacity: 1/);
   });
 
   it('index.html has Captura Cotizaciones and Configuracion buttons', () => {

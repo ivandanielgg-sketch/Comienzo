@@ -1062,6 +1062,46 @@ th.col-number {
   display: none;
 }
 
+
+/* Tablero KPIs: paneles solidos para lectura */
+#kpi-reauth-modal .modal,
+#kpi-manual-quotes-modal .modal,
+#kpi-config-modal .modal {
+  background: var(--surface, #fff);
+  opacity: 1;
+  border: 1px solid var(--border, #d1d5db);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  backdrop-filter: none;
+}
+
+#kpi-reauth-modal .modal input,
+#kpi-manual-quotes-modal .modal input,
+#kpi-manual-quotes-modal .modal select,
+#kpi-manual-quotes-modal .modal textarea,
+#kpi-config-modal .modal input,
+#kpi-config-modal .modal select,
+#kpi-config-modal .modal textarea {
+  background: var(--input-bg, #fff);
+  opacity: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  #kpi-reauth-modal .modal,
+  #kpi-manual-quotes-modal .modal,
+  #kpi-config-modal .modal {
+    background: var(--surface, #1e293b);
+  }
+  #kpi-reauth-modal .modal input,
+  #kpi-manual-quotes-modal .modal input,
+  #kpi-manual-quotes-modal .modal select,
+  #kpi-manual-quotes-modal .modal textarea,
+  #kpi-config-modal .modal input,
+  #kpi-config-modal .modal select,
+  #kpi-config-modal .modal textarea {
+    background: var(--input-bg, #0f172a);
+  }
+}
+
 .modal-content {
   background: #fff;
   border-radius: 8px;

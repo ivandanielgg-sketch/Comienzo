@@ -1856,7 +1856,7 @@
               <p id="kpi-reauth-message" style="min-height:1.2em;color:var(--danger);"></p>
               <div class="modal-actions">
                 <button type="button" id="kpi-reauth-cancel" class="secondary">Cancelar</button>
-                <button type="submit">Continuar</button>
+                <button type="submit" id="kpi-reauth-submit">Continuar</button>
               </div>
             </form>
           </div>
@@ -1873,18 +1873,25 @@
                 <label>Departamento
                   <select id="kpi-mq-department" name="department"><option value="Ventas">Ventas</option></select>
                 </label>
-                <label>Empleado/Vendedora (opcional)
-                  <select id="kpi-mq-employee" name="employee_id"><option value="">Captura global del mes</option></select>
+                <label>Vendedora *
+                  <select id="kpi-mq-employee" name="employee_id" required>
+                    <option value="">Seleccione vendedora</option>
+                  </select>
                 </label>
-                <label>No. cotizaciones enviadas <input id="kpi-mq-count" name="quotes_sent_count" type="number" min="0" step="1" required /></label>
-                <label>Monto cotizado <input id="kpi-mq-amount" name="quoted_amount_original" type="text" inputmode="decimal" autocomplete="off" required /></label>
-                <label>Moneda
+                <label>No. cotizaciones enviadas * <input id="kpi-mq-count" name="quotes_sent_count" type="number" min="0" step="1" required /></label>
+                <label>Moneda *
                   <select id="kpi-mq-currency" name="currency"><option value="MXN">MXN</option><option value="USD">USD</option><option value="EUR">EUR</option></select>
                 </label>
-                <label>Tipo de cambio a MXN <input id="kpi-mq-rate" name="exchange_rate_to_mxn" type="number" min="0" step="0.0001" value="1" /></label>
-                <label>Monto cotizado MXN <input id="kpi-mq-mxn" name="quoted_amount_mxn" type="text" readonly /></label>
+                <label id="kpi-mq-amount-label">Monto cotizado * <input id="kpi-mq-amount" name="quoted_amount_original" type="text" inputmode="decimal" autocomplete="off" required /></label>
+                <label id="kpi-mq-rate-wrap" class="hidden">Tipo de cambio a MXN *
+                  <input id="kpi-mq-rate" name="exchange_rate_to_mxn" type="number" min="0" step="0.0001" value="1" />
+                </label>
+                <label id="kpi-mq-mxn-wrap" class="hidden">Equivalente MXN (calculado)
+                  <input id="kpi-mq-mxn-display" type="text" readonly tabindex="-1" />
+                </label>
                 <label style="grid-column:1/-1;">Observaciones <textarea id="kpi-mq-notes" name="notes" rows="2"></textarea></label>
               </div>
+              <p id="kpi-mq-message" class="message hidden" style="color:var(--danger);"></p>
               <div id="kpi-mq-list" class="table-wrapper" style="margin-top:12px;max-height:180px;overflow:auto;"></div>
               <div class="modal-actions">
                 <button type="button" id="kpi-mq-cancel" class="secondary">Cerrar</button>
@@ -1897,6 +1904,7 @@
         <div id="kpi-config-modal" class="modal-overlay hidden">
           <div class="modal" style="max-width:720px;max-height:90vh;overflow:auto;">
             <h3>Configuracion Tablero KPIs</h3>
+            <p id="kpi-config-load-error" class="hidden" style="color:var(--danger);"></p>
             <section id="kpi-config-employees-section">
               <h4>Empleados KPI (Vacaciones)</h4>
               <div class="table-wrapper"><table><thead><tr><th>Nombre</th><th>Puesto</th><th>Area KPI</th><th>Elegible</th><th>Usuario</th><th></th></tr></thead><tbody id="kpi-config-employees-table"></tbody></table></div>
