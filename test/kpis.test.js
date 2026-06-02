@@ -177,6 +177,21 @@ describe('KPIs unit tests', () => {
       CREATE TABLE project_costs (id INTEGER PRIMARY KEY, project_id INTEGER, category TEXT, description TEXT, amount REAL, currency TEXT, cost_date TEXT);
       CREATE TABLE project_reports (id INTEGER PRIMARY KEY, project_id INTEGER, report_folio TEXT, client_name TEXT, service_name TEXT, report_date TEXT, report_type TEXT, deleted_at TEXT, technician_name TEXT, equipment_model_serial TEXT);
       CREATE TABLE employees (id INTEGER PRIMARY KEY, employee_number TEXT, full_name TEXT, hire_date TEXT, department TEXT, primary_department TEXT, secondary_department TEXT, position TEXT, active INTEGER, kpi_eligible INTEGER DEFAULT 1, user_id INTEGER);
+      CREATE TABLE kpi_settings (
+        id INTEGER PRIMARY KEY, margin_green_threshold REAL, margin_yellow_threshold REAL, margin_red_threshold REAL,
+        receivable_bucket1_days INTEGER, receivable_bucket2_days INTEGER, receivable_bucket3_days INTEGER,
+        receivable_critical_days INTEGER, report_missing_critical_days INTEGER, require_manual_quote_capture INTEGER,
+        created_at TEXT, updated_at TEXT, updated_by_user_id INTEGER, updated_by_name TEXT
+      );
+      INSERT INTO kpi_settings VALUES (1,0.4,0.3,0.2,30,60,90,120,7,0,datetime('now'),datetime('now'),NULL,NULL);
+      CREATE TABLE kpi_manual_quote_captures (
+        id INTEGER PRIMARY KEY, year INTEGER, month INTEGER, department TEXT, employee_id INTEGER,
+        employee_name_snapshot TEXT, quotes_sent_count INTEGER, quoted_amount_original REAL, currency TEXT,
+        exchange_rate_to_mxn REAL, quoted_amount_mxn REAL, notes TEXT, created_by_user_id INTEGER, created_by_name TEXT,
+        created_at TEXT, updated_by_user_id INTEGER, updated_by_name TEXT, updated_at TEXT, deleted_at TEXT,
+        deleted_by_user_id INTEGER, deleted_by_name TEXT, delete_reason TEXT
+      );
+      INSERT INTO kpi_manual_quote_captures VALUES (1,2026,6,'Ventas',NULL,NULL,5,5000,'MXN',1,5000,NULL,NULL,NULL,datetime('now'),NULL,NULL,datetime('now'),NULL,NULL,NULL,NULL);
     `);
     const summary = computeSummary(db, { periodType: 'current_year' });
     assert.ok(summary.ventas);
@@ -265,7 +280,7 @@ describe('KPIs integration - admin only', () => {
 
   it('admin can access KPI summary', async () => {
     const res = await request('GET', '/api/kpis/summary?periodType=current_month', null, adminCookie);
-    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body).slice(0, 500));
     assert.ok(res.body.ventas);
     assert.ok(res.body.cobranza);
     assert.strictEqual(res.body.has_weighted_score, false);
@@ -325,6 +340,56 @@ describe('KPIs integration - admin only', () => {
     const res = await request('GET', '/', null, null);
     assert.strictEqual(res.status, 200);
   });
+
+  it('admin can access formulas endpoint', async () => {
+    const res = await request('GET', '/api/kpis/formulas', null, adminCookie);
+    assert.strictEqual(res.status, 200);
+    assert.ok(Array.isArray(res.body.formulas));
+  });
+
+  it('manual quote CRUD reflects in summary', async () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    const create = await request('POST', '/api/kpis/manual-quotes', {
+      year,
+      month,
+      department: 'Ventas',
+      quotes_sent_count: 7,
+      quoted_amount_original: 1425,
+      currency: 'MXN',
+      exchange_rate_to_mxn: 1,
+    }, adminCookie);
+    assert.strictEqual(create.status, 201);
+    const summary = await request('GET', '/api/kpis/summary?periodType=current_month', null, adminCookie);
+    assert.strictEqual(summary.status, 200);
+    const qs = summary.body.ventas.quotes_sent;
+    assert.ok(String(qs.display).includes('7') || qs.value === 7);
+  });
+
+  it('billing uses all projects in period as invoiced', async () => {
+    const summary = await request('GET', '/api/kpis/summary?periodType=current_year', null, adminCookie);
+    assert.strictEqual(summary.status, 200);
+    assert.ok(summary.body.facturacion.billing_admin_note);
+  });
+
+  it('admin reauth rejects wrong password', async () => {
+    const res = await request('POST', '/api/kpis/admin-reauth', { password: 'wrong-password-xyz' }, adminCookie);
+    assert.ok(res.status >= 400);
+  });
+
+  it('settings requires reauth', async () => {
+    const res = await request('GET', '/api/kpis/settings', null, adminCookie);
+    assert.strictEqual(res.status, 403);
+  });
+
+  it('excel export returns spreadsheet', async () => {
+    const res = await request('GET', '/api/kpis/export/excel?periodType=current_month', null, adminCookie);
+    if (res.status !== 200) throw new Error('excel failed: ' + res.status + ' ' + (typeof res.body === 'string' ? res.body.slice(0,400) : JSON.stringify(res.body)));
+    assert.strictEqual(res.status, 200);
+    assert.ok(String(res.body).includes('Workbook'));
+
+  });
 });
 
 describe('KPIs frontend markup', () => {
@@ -351,5 +416,74 @@ describe('KPIs frontend markup', () => {
     assert.match(js, /Cotizaciones enviadas/);
     assert.match(js, /getKpiFieldLabel/);
   });
-
 });
+
+const { formatCurrencyMXN, buildKpiExcelWorkbook } = require('../src/kpisExport');
+const {
+  aggregateManualQuotesForPeriod,
+  loadKpiSettings,
+  getFormulaDefinitions,
+  NOT_CAPTURED,
+} = require('../src/kpis');
+
+describe('KPIs Fase 2', () => {
+  it('formatCurrencyMXN formats 1425 as $1,425.00', () => {
+    assert.equal(formatCurrencyMXN(1425), '$1,425.00');
+  });
+  it('formatCurrencyMXN formats 1000000 with thousands separator', () => {
+    assert.equal(formatCurrencyMXN(1000000), '$1,000,000.00');
+  });
+  it('formatCurrencyMXN does not return NaN', () => {
+    assert.equal(formatCurrencyMXN(NaN), '$0.00');
+    assert.ok(!formatCurrencyMXN(null).includes('NaN'));
+  });
+
+  it('manual quote aggregation uses employee rows when present', () => {
+    const captures = [
+      { year: 2026, month: 6, employee_id: 1, quotes_sent_count: 3, quoted_amount_mxn: 1000 },
+      { year: 2026, month: 6, employee_id: 2, quotes_sent_count: 2, quoted_amount_mxn: 500 },
+    ];
+    const period = { startDate: '2026-06-01', endDate: '2026-06-30' };
+    const agg = aggregateManualQuotesForPeriod(captures, period);
+    assert.equal(agg.quotesSent, 5);
+    assert.equal(agg.quotedAmountMxn, 1500);
+    assert.equal(agg.hasCapture, true);
+  });
+
+  it('manual quote missing capture marks not captured', () => {
+    const period = { startDate: '2026-06-01', endDate: '2026-06-30' };
+    const agg = aggregateManualQuotesForPeriod([], period);
+    assert.equal(agg.hasCapture, false);
+  });
+
+  it('backup registry includes kpiManualQuoteCaptures and kpiSettings', () => {
+    const { BACKUP_ENTITIES } = require('../src/backupRegistry');
+    const keys = BACKUP_ENTITIES.map((e) => e.key);
+    assert.ok(keys.includes('kpiManualQuoteCaptures'));
+    assert.ok(keys.includes('kpiSettings'));
+  });
+
+  it('formulas show percentages as 40 not 0.40', () => {
+    const settings = { margin_green_threshold: 0.4, margin_yellow_threshold: 0.3, margin_red_threshold: 0.2, receivable_bucket1_days: 30, receivable_bucket2_days: 60, receivable_bucket3_days: 90, receivable_critical_days: 120, report_missing_critical_days: 7, require_manual_quote_capture: 1 };
+    const formulas = getFormulaDefinitions(settings);
+    const margin = formulas.find((f) => f.key === 'gross_margin_real');
+    assert.ok(margin.parameters.some((p) => p.value === 40 || p.value >= 30));
+  });
+
+  it('index.html has Captura Cotizaciones and Configuracion buttons', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    assert.match(html, /Captura Cotizaciones/);
+    assert.match(html, /id="kpi-btn-config"/);
+    assert.match(html, /kpi-btn-export-pdf/);
+  });
+
+  it('app.js defines formatCurrencyMXN and KPI config handlers', () => {
+    const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    assert.match(js, /function formatCurrencyMXN/);
+    assert.match(js, /ensureKpiReauth/);
+    assert.match(js, /openKpiManualQuotesModal/);
+    assert.match(js, /exportKpiExcel/);
+  });
+});
+
+

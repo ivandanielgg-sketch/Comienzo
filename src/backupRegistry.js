@@ -67,6 +67,22 @@ const BACKUP_ENTITIES = [
     module: 'vacations',
   },
   {
+    key: 'kpiManualQuoteCaptures',
+    table: 'kpi_manual_quote_captures',
+    query: 'SELECT * FROM kpi_manual_quote_captures WHERE deleted_at IS NULL ORDER BY year DESC, month DESC, id',
+    stableKeys: ['year', 'month', 'employee_id'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'kpis',
+  },
+  {
+    key: 'kpiSettings',
+    table: 'kpi_settings',
+    query: 'SELECT * FROM kpi_settings ORDER BY id',
+    stableKeys: ['id'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'kpis',
+  },
+  {
     key: 'vacationRequests',
     table: 'vacation_requests',
     query: 'SELECT * FROM vacation_requests ORDER BY id',

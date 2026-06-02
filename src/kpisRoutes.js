@@ -1,6 +1,9 @@
 'use strict';
 
-const { logAuditEvent } = require('./audit');
+const bcrypt = require('bcryptjs');
+const { logAuditEvent, createdByFields, updatedByFields } = require('./audit');
+const { TIMEZONE } = require('./dateHelper');
+const { buildKpiExcelWorkbook } = require('./kpisExport');
 const {
   computeSummary,
   computeDepartments,
@@ -8,7 +11,14 @@ const {
   computeAlerts,
   computeDetail,
   getPeriodRange,
+  loadKpiSettings,
+  settingsToApi,
+  getFormulaDefinitions,
+  normalizeKpiArea,
 } = require('./kpis');
+
+const KPI_REAUTH_MS = 15 * 60 * 1000;
+const KPI_AREAS_PHASE1 = ['Ventas', 'Técnico', 'Sin asignar'];
 
 function requireAdminOnly(db, moduleName, deniedMessage) {
   return (req, res, next) => {
@@ -20,6 +30,20 @@ function requireAdminOnly(db, moduleName, deniedMessage) {
         metadata: { reason: 'admin_only', endpoint: req.originalUrl },
       });
       return res.status(403).json({ message: deniedMessage });
+    }
+    return next();
+  };
+}
+
+function isKpiReauthValid(req) {
+  const at = req.session.kpiReauthAt || 0;
+  return Date.now() - at < KPI_REAUTH_MS;
+}
+
+function requireKpiReauth(db) {
+  return (req, res, next) => {
+    if (!isKpiReauthValid(req)) {
+      return res.status(403).json({ message: 'Reautenticacion admin requerida para configuracion KPI.' });
     }
     return next();
   };
@@ -39,14 +63,80 @@ function parseKpiQuery(query) {
   };
 }
 
+function mapManualQuoteRow(row) {
+  return {
+    id: row.id,
+    year: row.year,
+    month: row.month,
+    department: row.department,
+    employee_id: row.employee_id,
+    employee_name_snapshot: row.employee_name_snapshot,
+    quotes_sent_count: row.quotes_sent_count,
+    quoted_amount_original: row.quoted_amount_original,
+    currency: row.currency,
+    exchange_rate_to_mxn: row.exchange_rate_to_mxn,
+    quoted_amount_mxn: row.quoted_amount_mxn,
+    notes: row.notes,
+    created_by_name: row.created_by_name,
+    updated_by_name: row.updated_by_name,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function validateManualQuoteBody(body, isUpdate = false) {
+  const year = Number(body.year);
+  const month = Number(body.month);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw Object.assign(new Error('Ano invalido.'), { statusCode: 400 });
+  }
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    throw Object.assign(new Error('Mes invalido.'), { statusCode: 400 });
+  }
+  const quotesSent = Number(body.quotes_sent_count ?? body.quotesSentCount);
+  const quotedOriginal = Number(body.quoted_amount_original ?? body.quotedAmountOriginal);
+  if (!Number.isFinite(quotesSent) || quotesSent < 0) {
+    throw Object.assign(new Error('Numero de cotizaciones debe ser >= 0.'), { statusCode: 400 });
+  }
+  if (!Number.isFinite(quotedOriginal) || quotedOriginal < 0) {
+    throw Object.assign(new Error('Monto cotizado debe ser >= 0.'), { statusCode: 400 });
+  }
+  const currency = (body.currency || 'MXN').toUpperCase();
+  let exchangeRate = Number(body.exchange_rate_to_mxn ?? body.exchangeRateToMXN ?? 1);
+  if (currency === 'MXN') exchangeRate = 1;
+  if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) {
+    throw Object.assign(new Error('Tipo de cambio invalido.'), { statusCode: 400 });
+  }
+  const quotedMxn = Number(body.quoted_amount_mxn ?? body.quotedAmountMXN);
+  const computedMxn = currency === 'MXN' ? quotedOriginal : round2(quotedOriginal * exchangeRate);
+  const finalMxn = Number.isFinite(quotedMxn) && quotedMxn >= 0 ? round2(quotedMxn) : computedMxn;
+  return {
+    year,
+    month,
+    department: body.department || 'Ventas',
+    employee_id: body.employee_id != null ? Number(body.employee_id) : (body.employeeId != null ? Number(body.employeeId) : null),
+    employee_name_snapshot: body.employee_name_snapshot || body.employeeNameSnapshot || null,
+    quotes_sent_count: Math.floor(quotesSent),
+    quoted_amount_original: round2(quotedOriginal),
+    currency,
+    exchange_rate_to_mxn: exchangeRate,
+    quoted_amount_mxn: finalMxn,
+    notes: body.notes || null,
+  };
+}
+
+function round2(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
 function registerKpiRoutes(app, db, { requireAuth }) {
   const kpiDeniedMessage = 'Acceso restringido. Solo el administrador puede consultar el Tablero KPIs.';
   const requireKpiAdmin = requireAdminOnly(db, 'kpis', kpiDeniedMessage);
 
-  function auditKpiAccess(req, filters) {
+  function auditKpiAccess(req, filters, action = 'view') {
     logAuditEvent(db, {
       req,
-      action: 'view',
+      action,
       module: 'kpis',
       entityType: 'kpi_dashboard',
       entityLabel: 'Tablero KPIs',
@@ -54,15 +144,15 @@ function registerKpiRoutes(app, db, { requireAuth }) {
     });
   }
 
-  function kpiHandler(computeFn) {
+  function kpiHandler(computeFn, auditAction = 'view') {
     return (req, res, next) => {
       try {
         const params = parseKpiQuery(req.query);
         getPeriodRange(params.periodType, params.startDate, params.endDate);
-        auditKpiAccess(req, params);
+        auditKpiAccess(req, params, auditAction);
         res.json(computeFn(db, params));
       } catch (error) {
-        error.statusCode = 400;
+        error.statusCode = error.statusCode || 400;
         next(error);
       }
     };
@@ -74,9 +164,334 @@ function registerKpiRoutes(app, db, { requireAuth }) {
   app.get('/api/kpis/alerts', requireAuth, requireKpiAdmin, kpiHandler(computeAlerts));
   app.get('/api/kpis/detail', requireAuth, requireKpiAdmin, kpiHandler(computeDetail));
 
+  app.get('/api/kpis/formulas', requireAuth, requireKpiAdmin, (req, res) => {
+    const settings = loadKpiSettings(db);
+    auditKpiAccess(req, {}, 'view_formulas');
+    res.json({ formulas: getFormulaDefinitions(settings), timezone: TIMEZONE });
+  });
+
+  app.get('/api/kpis/settings', requireAuth, requireKpiAdmin, requireKpiReauth(db), (req, res) => {
+    const settings = loadKpiSettings(db);
+    res.json(settingsToApi(settings));
+  });
+
+  app.put('/api/kpis/settings', requireAuth, requireKpiAdmin, requireKpiReauth(db), (req, res, next) => {
+    try {
+      const body = req.body || {};
+      const green = Number(body.margin_green_percent ?? body.marginGreenPercent);
+      const yellow = Number(body.margin_yellow_percent ?? body.marginYellowPercent);
+      const red = Number(body.margin_red_percent ?? body.marginRedPercent);
+      if (![green, yellow, red].every((v) => Number.isFinite(v) && v >= 0 && v <= 100)) {
+        throw Object.assign(new Error('Umbrales de margen invalidos.'), { statusCode: 400 });
+      }
+      if (green <= yellow || yellow <= red) {
+        throw Object.assign(new Error('Umbrales deben cumplir: verde > amarillo > rojo.'), { statusCode: 400 });
+      }
+      const before = loadKpiSettings(db);
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE kpi_settings SET
+          margin_green_threshold = ?,
+          margin_yellow_threshold = ?,
+          margin_red_threshold = ?,
+          receivable_bucket1_days = ?,
+          receivable_bucket2_days = ?,
+          receivable_bucket3_days = ?,
+          receivable_critical_days = ?,
+          report_missing_critical_days = ?,
+          require_manual_quote_capture = ?,
+          updated_at = ?,
+          updated_by_user_id = ?,
+          updated_by_name = ?
+        WHERE id = 1
+      `).run(
+        green / 100,
+        yellow / 100,
+        red / 100,
+        Number(body.receivable_bucket1_days) || before.receivable_bucket1_days,
+        Number(body.receivable_bucket2_days) || before.receivable_bucket2_days,
+        Number(body.receivable_bucket3_days) || before.receivable_bucket3_days,
+        Number(body.receivable_critical_days) || before.receivable_critical_days,
+        Number(body.report_missing_critical_days) || before.report_missing_critical_days,
+        body.require_manual_quote_capture === false ? 0 : 1,
+        now,
+        req.session.userId,
+        req.session.userName,
+      );
+      const after = loadKpiSettings(db);
+      logAuditEvent(db, {
+        req,
+        action: 'update',
+        module: 'kpis',
+        entityType: 'kpi_settings',
+        entityId: 1,
+        entityLabel: 'Parametros KPI',
+        before: settingsToApi(before),
+        after: settingsToApi(after),
+      });
+      res.json(settingsToApi(after));
+    } catch (error) {
+      error.statusCode = error.statusCode || 400;
+      next(error);
+    }
+  });
+
+  app.post('/api/kpis/admin-reauth', requireAuth, requireKpiAdmin, (req, res, next) => {
+    try {
+      const password = req.body?.password;
+      if (!password) throw Object.assign(new Error('Contrasena requerida.'), { statusCode: 400 });
+      const admin = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'admin' AND is_active = 1").get(req.session.userId);
+      if (!admin || !bcrypt.compareSync(password, admin.password_hash)) {
+        logAuditEvent(db, { req, action: 'kpi_reauth_failed', module: 'kpis' });
+        throw Object.assign(new Error('Contrasena incorrecta.'), { statusCode: 403 });
+      }
+      req.session.kpiReauthAt = Date.now();
+      logAuditEvent(db, { req, action: 'kpi_reauth_success', module: 'kpis' });
+      res.json({ success: true, expires_in_ms: KPI_REAUTH_MS });
+    } catch (error) {
+      error.statusCode = error.statusCode || 400;
+      next(error);
+    }
+  });
+
+  app.get('/api/kpis/reauth-status', requireAuth, requireKpiAdmin, (req, res) => {
+    res.json({ authenticated: isKpiReauthValid(req), expires_in_ms: KPI_REAUTH_MS });
+  });
+
+  app.get('/api/kpis/manual-quotes', requireAuth, requireKpiAdmin, (req, res) => {
+    const year = req.query.year ? Number(req.query.year) : null;
+    const month = req.query.month ? Number(req.query.month) : null;
+    let rows;
+    if (year && month) {
+      rows = db.prepare(
+        'SELECT * FROM kpi_manual_quote_captures WHERE deleted_at IS NULL AND year = ? AND month = ? ORDER BY employee_id',
+      ).all(year, month);
+    } else {
+      rows = db.prepare(
+        'SELECT * FROM kpi_manual_quote_captures WHERE deleted_at IS NULL ORDER BY year DESC, month DESC, id DESC LIMIT 500',
+      ).all();
+    }
+    auditKpiAccess(req, { year, month }, 'view_manual_quotes');
+    res.json({ captures: rows.map(mapManualQuoteRow) });
+  });
+
+  app.post('/api/kpis/manual-quotes', requireAuth, requireKpiAdmin, (req, res, next) => {
+    try {
+      const data = validateManualQuoteBody(req.body);
+      if (data.employee_id) {
+        const emp = db.prepare('SELECT full_name FROM employees WHERE id = ? AND active = 1').get(data.employee_id);
+        if (!emp) throw Object.assign(new Error('Empleado no encontrado o inactivo.'), { statusCode: 400 });
+        data.employee_name_snapshot = emp.full_name;
+      }
+      const dup = db.prepare(
+        'SELECT id FROM kpi_manual_quote_captures WHERE deleted_at IS NULL AND year = ? AND month = ? AND COALESCE(employee_id, -1) = COALESCE(?, -1)',
+      ).get(data.year, data.month, data.employee_id);
+      if (dup) throw Object.assign(new Error('Ya existe captura para este ano, mes y empleado.'), { statusCode: 409 });
+      const audit = createdByFields(req);
+      const now = audit.created_at;
+      const result = db.prepare(`
+        INSERT INTO kpi_manual_quote_captures (
+          year, month, department, employee_id, employee_name_snapshot,
+          quotes_sent_count, quoted_amount_original, currency, exchange_rate_to_mxn, quoted_amount_mxn,
+          notes, created_by_user_id, created_by_name, created_at, updated_by_user_id, updated_by_name, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        data.year, data.month, data.department, data.employee_id, data.employee_name_snapshot,
+        data.quotes_sent_count, data.quoted_amount_original, data.currency, data.exchange_rate_to_mxn, data.quoted_amount_mxn,
+        data.notes, audit.created_by_user_id, audit.created_by_name, now,
+        audit.created_by_user_id, audit.created_by_name, now,
+      );
+      const row = db.prepare('SELECT * FROM kpi_manual_quote_captures WHERE id = ?').get(result.lastInsertRowid);
+      logAuditEvent(db, {
+        req,
+        action: 'create',
+        module: 'kpis',
+        entityType: 'kpi_manual_quote_capture',
+        entityId: row.id,
+        entityLabel: `Captura ${data.month}/${data.year}`,
+        after: mapManualQuoteRow(row),
+      });
+      res.status(201).json(mapManualQuoteRow(row));
+    } catch (error) {
+      error.statusCode = error.statusCode || 400;
+      next(error);
+    }
+  });
+
+  app.put('/api/kpis/manual-quotes/:id', requireAuth, requireKpiAdmin, (req, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      const before = db.prepare('SELECT * FROM kpi_manual_quote_captures WHERE id = ? AND deleted_at IS NULL').get(id);
+      if (!before) throw Object.assign(new Error('Captura no encontrada.'), { statusCode: 404 });
+      const data = validateManualQuoteBody({ ...before, ...req.body }, true);
+      if (data.employee_id) {
+        const emp = db.prepare('SELECT full_name FROM employees WHERE id = ?').get(data.employee_id);
+        data.employee_name_snapshot = emp?.full_name || data.employee_name_snapshot;
+      }
+      const audit = updatedByFields(req);
+      db.prepare(`
+        UPDATE kpi_manual_quote_captures SET
+          year = ?, month = ?, department = ?, employee_id = ?, employee_name_snapshot = ?,
+          quotes_sent_count = ?, quoted_amount_original = ?, currency = ?,
+          exchange_rate_to_mxn = ?, quoted_amount_mxn = ?, notes = ?,
+          updated_by_user_id = ?, updated_by_name = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        data.year, data.month, data.department, data.employee_id, data.employee_name_snapshot,
+        data.quotes_sent_count, data.quoted_amount_original, data.currency,
+        data.exchange_rate_to_mxn, data.quoted_amount_mxn, data.notes,
+        audit.updated_by_user_id, audit.updated_by_name, audit.updated_at,
+        id,
+      );
+      const after = db.prepare('SELECT * FROM kpi_manual_quote_captures WHERE id = ?').get(id);
+      logAuditEvent(db, {
+        req,
+        action: 'update',
+        module: 'kpis',
+        entityType: 'kpi_manual_quote_capture',
+        entityId: id,
+        entityLabel: `Captura ${data.month}/${data.year}`,
+        before: mapManualQuoteRow(before),
+        after: mapManualQuoteRow(after),
+      });
+      res.json(mapManualQuoteRow(after));
+    } catch (error) {
+      error.statusCode = error.statusCode || 400;
+      next(error);
+    }
+  });
+
+  app.get('/api/kpis/employee-config', requireAuth, requireKpiAdmin, requireKpiReauth(db), (req, res) => {
+    const rows = db.prepare(`
+      SELECT id, full_name, position, active, department, kpi_area, kpi_eligible, user_id,
+             kpi_configured_at, kpi_configured_by_name
+      FROM employees WHERE active = 1 ORDER BY full_name
+    `).all();
+    logAuditEvent(db, { req, action: 'view', module: 'kpis', entityType: 'kpi_employee_config', entityLabel: 'Config empleados KPI' });
+    res.json({
+      employees: rows.map((r) => ({
+        employee_id: r.id,
+        full_name: r.full_name,
+        position: r.position,
+        active: !!r.active,
+        kpi_area: r.kpi_area || 'Sin asignar',
+        kpi_eligible: r.kpi_eligible !== 0,
+        user_id: r.user_id,
+        kpi_configured_at: r.kpi_configured_at,
+        kpi_configured_by_name: r.kpi_configured_by_name,
+      })),
+      allowed_areas: KPI_AREAS_PHASE1,
+    });
+  });
+
+  app.put('/api/kpis/employee-config/:id', requireAuth, requireKpiAdmin, requireKpiReauth(db), (req, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      const before = db.prepare('SELECT * FROM employees WHERE id = ?').get(id);
+      if (!before || !before.active) throw Object.assign(new Error('Empleado no encontrado o inactivo.'), { statusCode: 400 });
+      const kpiArea = req.body.kpi_area || req.body.kpiArea || 'Sin asignar';
+      if (!KPI_AREAS_PHASE1.includes(kpiArea)) {
+        throw Object.assign(new Error('Area KPI invalida. Use Ventas, Tecnico o Sin asignar.'), { statusCode: 400 });
+      }
+      const kpiEligible = req.body.kpi_eligible === false || req.body.kpi_eligible === 0 ? 0 : 1;
+      const primaryDept = kpiArea === 'Sin asignar' ? null : kpiArea;
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE employees SET
+          kpi_area = ?,
+          primary_department = ?,
+          kpi_eligible = ?,
+          kpi_configured_at = ?,
+          kpi_configured_by_user_id = ?,
+          kpi_configured_by_name = ?,
+          updated_at = ?
+        WHERE id = ?
+      `).run(
+        kpiArea === 'Sin asignar' ? null : kpiArea,
+        primaryDept,
+        kpiEligible,
+        now,
+        req.session.userId,
+        req.session.userName,
+        now,
+        id,
+      );
+      const after = db.prepare('SELECT * FROM employees WHERE id = ?').get(id);
+      logAuditEvent(db, {
+        req,
+        action: 'update',
+        module: 'kpis',
+        entityType: 'employee_kpi_config',
+        entityId: id,
+        entityLabel: after.full_name,
+        before: { kpi_area: before.kpi_area, kpi_eligible: before.kpi_eligible },
+        after: { kpi_area: after.kpi_area, kpi_eligible: after.kpi_eligible },
+      });
+      res.json({
+        employee_id: after.id,
+        full_name: after.full_name,
+        kpi_area: after.kpi_area || 'Sin asignar',
+        kpi_eligible: after.kpi_eligible !== 0,
+      });
+    } catch (error) {
+      error.statusCode = error.statusCode || 400;
+      next(error);
+    }
+  });
+
+  app.get('/api/kpis/export/excel', requireAuth, requireKpiAdmin, (req, res, next) => {
+    try {
+      const params = parseKpiQuery(req.query);
+      const period = getPeriodRange(params.periodType, params.startDate, params.endDate);
+      const summary = computeSummary(db, params);
+      const employees = computeEmployees(db, params);
+      const alerts = computeAlerts(db, params);
+      const settings = loadKpiSettings(db);
+      const settingsApi = settingsToApi(settings);
+      const payload = {
+        summary_cards: summary.summary_cards,
+        ventas: summary.ventas,
+        proyectos: summary.proyectos,
+        reportes: summary.reportes,
+        cobranza: summary.cobranza,
+        facturacion: summary.facturacion,
+        employees: employees.employees,
+        formulas: getFormulaDefinitions(settings),
+        alerts: alerts.alerts,
+        settings_rows: [
+          { label: 'Margen verde >=', value: `${settingsApi.margin_green_percent}%` },
+          { label: 'Margen amarillo >=', value: `${settingsApi.margin_yellow_percent}%` },
+          { label: 'Margen rojo >=', value: `${settingsApi.margin_red_percent}%` },
+          { label: 'Alerta captura cotizaciones', value: settingsApi.require_manual_quote_capture ? 'Activa' : 'Inactiva' },
+        ],
+        meta: {
+          period_label: period.label,
+          generated_at: new Date().toLocaleString('es-MX', { timeZone: TIMEZONE }),
+          generated_by: req.session.userName,
+          filters: params,
+        },
+      };
+      const xml = buildKpiExcelWorkbook(payload);
+      logAuditEvent(db, {
+        req,
+        action: 'export',
+        module: 'kpis',
+        entityType: 'kpi_export',
+        entityLabel: 'Excel Tablero KPIs',
+        metadata: { format: 'excel', period: period.label },
+      });
+      res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="tablero-kpis.xls"');
+      res.send(xml);
+    } catch (error) {
+      error.statusCode = error.statusCode || 400;
+      next(error);
+    }
+  });
+
   app.get('/api/kpis/filters', requireAuth, requireKpiAdmin, (req, res) => {
     const employees = db.prepare(
-      'SELECT id, full_name, department, primary_department, active, kpi_eligible FROM employees WHERE active = 1 AND kpi_eligible != 0 ORDER BY full_name',
+      'SELECT id, full_name, department, primary_department, kpi_area, active, kpi_eligible FROM employees WHERE active = 1 AND kpi_eligible != 0 ORDER BY full_name',
     ).all();
     const clients = db.prepare(
       'SELECT DISTINCT client_name FROM projects WHERE deleted_at IS NULL ORDER BY client_name',
@@ -87,6 +502,7 @@ function registerKpiRoutes(app, db, { requireAuth }) {
     auditKpiAccess(req, { action: 'filters' });
     res.json({
       departments: ['Ventas', 'Técnico', 'Cobranza', 'Facturación'],
+      kpi_areas_phase1: KPI_AREAS_PHASE1,
       period_types: [
         { value: 'current_month', label: 'Mes actual' },
         { value: 'previous_month', label: 'Mes anterior' },
@@ -103,7 +519,7 @@ function registerKpiRoutes(app, db, { requireAuth }) {
       employees: employees.map((e) => ({
         employeeId: e.id,
         fullName: e.full_name,
-        department: e.primary_department || e.department,
+        department: e.kpi_area || e.primary_department || e.department,
       })),
       clients: clients.map((c) => c.client_name),
       projects,
@@ -111,4 +527,4 @@ function registerKpiRoutes(app, db, { requireAuth }) {
   });
 }
 
-module.exports = { registerKpiRoutes, requireAdminOnly };
+module.exports = { registerKpiRoutes, requireAdminOnly, isKpiReauthValid, KPI_REAUTH_MS };

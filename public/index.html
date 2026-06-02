@@ -1808,6 +1808,20 @@
                 </label>
                 <button type="submit">Consultar</button>
               </form>
+              
+              <div class="kpi-toolbar" style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0;">
+                <button type="button" id="kpi-btn-manual-quotes" class="secondary">Captura Cotizaciones</button>
+                <button type="button" id="kpi-btn-config" class="secondary">Configuracion</button>
+                <button type="button" id="kpi-btn-export-pdf" class="secondary">Exportar PDF</button>
+                <button type="button" id="kpi-btn-export-excel" class="secondary">Exportar Excel</button>
+              </div>
+              <div id="kpi-charts-section" class="kpi-charts-grid">
+                <div class="panel kpi-chart-panel"><h3>Tendencia mensual</h3><canvas id="kpi-chart-trend" height="200"></canvas></div>
+                <div class="panel kpi-chart-panel"><h3>Comparativo por empleado</h3><canvas id="kpi-chart-employees" height="200"></canvas></div>
+                <div class="panel kpi-chart-panel"><h3>Cartera por vencimiento</h3><canvas id="kpi-chart-receivable" height="200"></canvas></div>
+                <div class="panel kpi-chart-panel"><h3>Reportes tecnicos</h3><canvas id="kpi-chart-reports" height="200"></canvas></div>
+              </div>
+
               <p id="kpi-period-label" class="muted" style="margin:8px 0;"></p>
               <div id="kpi-summary-cards" class="kpi-cards"></div>
               <div id="kpi-loading" class="muted hidden">Cargando indicadores...</div>
@@ -1829,6 +1843,105 @@
             </div>
           </div>
         </section>
+
+        
+        <div id="kpi-reauth-modal" class="modal-overlay hidden">
+          <div class="modal">
+            <h3>Confirmar administrador</h3>
+            <p class="muted">Ingrese su contrasena para acceder a la configuracion del Tablero KPIs.</p>
+            <form id="kpi-reauth-form">
+              <label>Contrasena admin
+                <input id="kpi-reauth-password" type="password" autocomplete="current-password" required />
+              </label>
+              <p id="kpi-reauth-message" style="min-height:1.2em;color:var(--danger);"></p>
+              <div class="modal-actions">
+                <button type="button" id="kpi-reauth-cancel" class="secondary">Cancelar</button>
+                <button type="submit">Continuar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div id="kpi-manual-quotes-modal" class="modal-overlay hidden">
+          <div class="modal" style="max-width:560px;">
+            <h3>Captura mensual de cotizaciones</h3>
+            <form id="kpi-manual-quotes-form">
+              <input type="hidden" id="kpi-mq-id" name="id" />
+              <div class="form-grid">
+                <label>Ano <input id="kpi-mq-year" name="year" type="number" min="2000" max="2100" required /></label>
+                <label>Mes <select id="kpi-mq-month" name="month" required></select></label>
+                <label>Departamento
+                  <select id="kpi-mq-department" name="department"><option value="Ventas">Ventas</option></select>
+                </label>
+                <label>Empleado/Vendedora (opcional)
+                  <select id="kpi-mq-employee" name="employee_id"><option value="">Captura global del mes</option></select>
+                </label>
+                <label>No. cotizaciones enviadas <input id="kpi-mq-count" name="quotes_sent_count" type="number" min="0" step="1" required /></label>
+                <label>Monto cotizado <input id="kpi-mq-amount" name="quoted_amount_original" type="text" inputmode="decimal" autocomplete="off" required /></label>
+                <label>Moneda
+                  <select id="kpi-mq-currency" name="currency"><option value="MXN">MXN</option><option value="USD">USD</option><option value="EUR">EUR</option></select>
+                </label>
+                <label>Tipo de cambio a MXN <input id="kpi-mq-rate" name="exchange_rate_to_mxn" type="number" min="0" step="0.0001" value="1" /></label>
+                <label>Monto cotizado MXN <input id="kpi-mq-mxn" name="quoted_amount_mxn" type="text" readonly /></label>
+                <label style="grid-column:1/-1;">Observaciones <textarea id="kpi-mq-notes" name="notes" rows="2"></textarea></label>
+              </div>
+              <div id="kpi-mq-list" class="table-wrapper" style="margin-top:12px;max-height:180px;overflow:auto;"></div>
+              <div class="modal-actions">
+                <button type="button" id="kpi-mq-cancel" class="secondary">Cerrar</button>
+                <button type="submit">Guardar captura</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div id="kpi-config-modal" class="modal-overlay hidden">
+          <div class="modal" style="max-width:720px;max-height:90vh;overflow:auto;">
+            <h3>Configuracion Tablero KPIs</h3>
+            <section id="kpi-config-employees-section">
+              <h4>Empleados KPI (Vacaciones)</h4>
+              <div class="table-wrapper"><table><thead><tr><th>Nombre</th><th>Puesto</th><th>Area KPI</th><th>Elegible</th><th>Usuario</th><th></th></tr></thead><tbody id="kpi-config-employees-table"></tbody></table></div>
+            </section>
+            <section id="kpi-config-formulas-section" style="margin-top:16px;">
+              <h4>Formulas utilizadas</h4>
+              <div id="kpi-config-formulas"></div>
+            </section>
+            <section id="kpi-config-params-section" style="margin-top:16px;">
+              <h4>Parametros editables</h4>
+              <form id="kpi-settings-form" class="form-grid">
+                <label>Margen verde &gt;= (%)
+                  <input id="kpi-set-margin-green" name="margin_green_percent" type="number" min="0" max="100" step="0.01" />
+                </label>
+                <label>Margen amarillo &gt;= (%)
+                  <input id="kpi-set-margin-yellow" name="margin_yellow_percent" type="number" min="0" max="100" step="0.01" />
+                </label>
+                <label>Margen rojo &gt;= (%)
+                  <input id="kpi-set-margin-red" name="margin_red_percent" type="number" min="0" max="100" step="0.01" />
+                </label>
+                <label>Cartera 1-30 dias (limite)
+                  <input id="kpi-set-bucket1" name="receivable_bucket1_days" type="number" min="1" />
+                </label>
+                <label>Cartera 31-60 dias (limite)
+                  <input id="kpi-set-bucket2" name="receivable_bucket2_days" type="number" min="1" />
+                </label>
+                <label>Cartera 61-90 dias (limite)
+                  <input id="kpi-set-bucket3" name="receivable_bucket3_days" type="number" min="1" />
+                </label>
+                <label>Cartera critica (dias)
+                  <input id="kpi-set-bucket-crit" name="receivable_critical_days" type="number" min="1" />
+                </label>
+                <label>Reporte faltante critico (dias)
+                  <input id="kpi-set-report-days" name="report_missing_critical_days" type="number" min="1" />
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;">
+                  <input id="kpi-set-require-capture" name="require_manual_quote_capture" type="checkbox" checked />
+                  Alerta si falta captura mensual de cotizaciones
+                </label>
+                <button type="submit">Guardar parametros</button>
+              </form>
+            </section>
+            <div class="modal-actions"><button type="button" id="kpi-config-close" class="secondary">Cerrar</button></div>
+          </div>
+        </div>
 
         <section id="activity-monitor-view" class="hidden">
           <div class="panel">
@@ -1910,5 +2023,6 @@
     </div>
 
     <script src="/app.js"></script>
-  </body>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</body>
 </html>

@@ -21,6 +21,26 @@ const MARGIN_MIN = 0.30;
 const MARGIN_TARGET = 0.40;
 
 const UNAVAILABLE = 'Dato no disponible';
+const NOT_CAPTURED = 'Dato no capturado';
+
+function formatCurrencyMXN(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '$0.00';
+  return new Intl.NumberFormat('es-MX', {
+    style: 'currency',
+    currency: 'MXN',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+}
+
+function formatPercentDisplay(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+  return `${Number(value)}%`;
+}
+
+const CURRENCY_KPI_KEYS = /(_mxn$|^quoted_amount|^sold_amount|^invoiced_amount|^collected_amount|^overdue_amount|^quoted_amount_mxn)/i;
+const PERCENT_KPI_KEYS = /(rate|margin|portfolio|compliance|evidence|percent)/i;
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -164,9 +184,19 @@ function normalizeDepartment(dept) {
   return null;
 }
 
+function normalizeKpiArea(area) {
+  if (!area) return null;
+  const d = normalizeText(area);
+  if (d === 'ventas') return 'Ventas';
+  if (d === 'tecnico' || d === 'tecnico') return 'Técnico';
+  if (d === 'sin asignar' || d === 'sin_asignar') return null;
+  return normalizeDepartment(area);
+}
+
 function mapKpiEmployee(row) {
-  const primary = row.primary_department || row.department || null;
-  const kpiDept = normalizeDepartment(primary);
+  const area = row.kpi_area || row.primary_department || row.department || null;
+  const primary = area;
+  const kpiDept = normalizeKpiArea(area);
   return {
     employeeId: row.id,
     fullName: row.full_name,
@@ -177,6 +207,7 @@ function mapKpiEmployee(row) {
     primaryDepartment: primary,
     secondaryDepartment: row.secondary_department || null,
     kpiDepartment: kpiDept,
+    kpiArea: row.kpi_area || null,
     kpiEligible: row.kpi_eligible !== 0,
   };
 }
@@ -218,10 +249,22 @@ function safePercent(value) {
   return roundMoney(value * 100);
 }
 
-function kpiValue(value, unavailable = false) {
-  if (unavailable) return { value: null, display: UNAVAILABLE, available: false };
-  if (value === null || value === undefined) return { value: null, display: '—', available: true };
-  return { value, display: String(value), available: true };
+function kpiValue(value, options = {}) {
+  const opts = typeof options === 'boolean' ? { unavailable: options } : options;
+  const {
+    unavailable = false,
+    notCaptured = false,
+    type = null,
+    key = null,
+  } = opts;
+  if (unavailable) return { value: null, display: UNAVAILABLE, available: false, not_captured: false };
+  if (notCaptured) return { value: null, display: NOT_CAPTURED, available: false, not_captured: true };
+  if (value === null || value === undefined) return { value: null, display: '—', available: true, not_captured: false };
+  let display = String(value);
+  const resolvedType = type || (key && CURRENCY_KPI_KEYS.test(key) ? 'currency' : (key && PERCENT_KPI_KEYS.test(key) ? 'percent' : null));
+  if (resolvedType === 'currency') display = formatCurrencyMXN(value);
+  else if (resolvedType === 'percent') display = formatPercentDisplay(value);
+  return { value, display, available: true, not_captured: false };
 }
 
 function getMarginTrafficLight(margin) {
@@ -325,10 +368,220 @@ function applyFilters(projects, filters) {
   return result;
 }
 
-function computeSalesKpis(projects, period, hasLeadModule) {
-  const inPeriod = projects.filter((p) => isDateInRange(p.created_at, period.startDate, period.endDate));
-  const quotesSent = inPeriod.length;
-  const quotedAmount = roundMoney(inPeriod.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0));
+
+function loadKpiSettings(db) {
+  const row = db.prepare('SELECT * FROM kpi_settings WHERE id = 1').get();
+  if (!row) {
+    return {
+      margin_green_threshold: MARGIN_TARGET,
+      margin_yellow_threshold: MARGIN_MIN,
+      margin_red_threshold: 0.20,
+      receivable_bucket1_days: 30,
+      receivable_bucket2_days: 60,
+      receivable_bucket3_days: 90,
+      receivable_critical_days: 120,
+      report_missing_critical_days: 7,
+      require_manual_quote_capture: 1,
+    };
+  }
+  return row;
+}
+
+function settingsToApi(settings) {
+  return {
+    margin_green_percent: roundMoney((settings.margin_green_threshold || MARGIN_TARGET) * 100),
+    margin_yellow_percent: roundMoney((settings.margin_yellow_threshold || MARGIN_MIN) * 100),
+    margin_red_percent: roundMoney((settings.margin_red_threshold || 0.20) * 100),
+    receivable_bucket1_days: settings.receivable_bucket1_days,
+    receivable_bucket2_days: settings.receivable_bucket2_days,
+    receivable_bucket3_days: settings.receivable_bucket3_days,
+    receivable_critical_days: settings.receivable_critical_days,
+    report_missing_critical_days: settings.report_missing_critical_days,
+    require_manual_quote_capture: !!settings.require_manual_quote_capture,
+    margin_green_threshold: settings.margin_green_threshold,
+    margin_yellow_threshold: settings.margin_yellow_threshold,
+    margin_red_threshold: settings.margin_red_threshold,
+  };
+}
+
+function getMonthsInPeriod(period) {
+  const start = period.startDate;
+  const end = period.endDate;
+  const sy = Number(start.slice(0, 4));
+  const sm = Number(start.slice(5, 7));
+  const ey = Number(end.slice(0, 4));
+  const em = Number(end.slice(5, 7));
+  const months = [];
+  let y = sy;
+  let m = sm;
+  while (y < ey || (y === ey && m <= em)) {
+    months.push({ year: y, month: m });
+    m += 1;
+    if (m > 12) { m = 1; y += 1; }
+  }
+  return months;
+}
+
+function loadManualQuoteCapturesForPeriod(db, period) {
+  const months = getMonthsInPeriod(period);
+  if (!months.length) return [];
+  const clauses = months.map(() => '(year = ? AND month = ?)').join(' OR ');
+  const params = [];
+  months.forEach((mo) => { params.push(mo.year, mo.month); });
+  return db.prepare(
+    `SELECT * FROM kpi_manual_quote_captures WHERE deleted_at IS NULL AND (${clauses}) ORDER BY year, month, employee_id`,
+  ).all(...params);
+}
+
+function aggregateManualQuotesForMonth(captures, year, month) {
+  const monthRows = captures.filter((c) => c.year === year && c.month === month);
+  const byEmployee = monthRows.filter((c) => c.employee_id != null);
+  if (byEmployee.length) {
+    return {
+      quotesSent: byEmployee.reduce((s, c) => s + (c.quotes_sent_count || 0), 0),
+      quotedAmountMxn: roundMoney(byEmployee.reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0)),
+      hasCapture: true,
+      byEmployee: true,
+    };
+  }
+  const global = monthRows.find((c) => c.employee_id == null);
+  if (global) {
+    return {
+      quotesSent: global.quotes_sent_count || 0,
+      quotedAmountMxn: roundMoney(global.quoted_amount_mxn || 0),
+      hasCapture: true,
+      byEmployee: false,
+    };
+  }
+  return { quotesSent: 0, quotedAmountMxn: 0, hasCapture: false, byEmployee: false };
+}
+
+function aggregateManualQuotesForPeriod(captures, period) {
+  const months = getMonthsInPeriod(period);
+  let quotesSent = 0;
+  let quotedAmountMxn = 0;
+  let missingMonths = [];
+  for (const mo of months) {
+    const agg = aggregateManualQuotesForMonth(captures, mo.year, mo.month);
+    if (!agg.hasCapture) missingMonths.push(`${mo.month}/${mo.year}`);
+    else {
+      quotesSent += agg.quotesSent;
+      quotedAmountMxn += agg.quotedAmountMxn;
+    }
+  }
+  return {
+    quotesSent,
+    quotedAmountMxn: roundMoney(quotedAmountMxn),
+    hasCapture: missingMonths.length === 0,
+    missingMonths,
+  };
+}
+
+function getManualQuotesForEmployee(captures, period, employeeId) {
+  const months = getMonthsInPeriod(period);
+  let quotesSent = 0;
+  let quotedAmountMxn = 0;
+  let hasAny = false;
+  for (const mo of months) {
+    const monthRows = captures.filter((c) => c.year === mo.year && c.month === mo.month);
+    const empRow = monthRows.find((c) => c.employee_id === employeeId);
+    if (empRow) {
+      hasAny = true;
+      quotesSent += empRow.quotes_sent_count || 0;
+      quotedAmountMxn += empRow.quoted_amount_mxn || 0;
+      continue;
+    }
+    const agg = aggregateManualQuotesForMonth(captures, mo.year, mo.month);
+    if (agg.hasCapture && !agg.byEmployee) {
+      hasAny = true;
+      quotesSent += agg.quotesSent;
+      quotedAmountMxn += agg.quotedAmountMxn;
+    }
+  }
+  return { quotesSent, quotedAmountMxn: roundMoney(quotedAmountMxn), hasCapture: hasAny };
+}
+
+function getFormulaDefinitions(settings) {
+  const s = settingsToApi(settings);
+  return [
+    {
+      key: 'quotes_sent',
+      name: 'Cotizaciones enviadas',
+      description: 'Numero de cotizaciones enviadas en el periodo segun captura manual mensual.',
+      formula_text: 'Cotizaciones enviadas = Suma de capturas manuales del periodo',
+      data_source: 'Captura manual de cotizaciones (kpi_manual_quote_captures)',
+      periodicity: 'Mensual',
+      editable: false,
+      parameters: [],
+    },
+    {
+      key: 'quoted_amount_mxn',
+      name: 'Monto cotizado',
+      description: 'Monto total cotizado en MXN segun captura manual.',
+      formula_text: 'Monto cotizado = Suma quoted_amount_mxn de capturas del periodo',
+      data_source: 'Captura manual de cotizaciones',
+      periodicity: 'Mensual',
+      editable: false,
+      parameters: [],
+    },
+    {
+      key: 'close_rate',
+      name: 'Tasa de cierre',
+      description: 'Porcentaje de proyectos autorizados respecto a cotizaciones enviadas capturadas.',
+      formula_text: 'Tasa de cierre = Proyectos autorizados / Cotizaciones enviadas',
+      data_source: 'Proyectos del sistema + Captura manual',
+      periodicity: 'Periodo consultado',
+      editable: false,
+      parameters: [],
+    },
+    {
+      key: 'gross_margin_real',
+      name: 'Margen bruto real',
+      description: 'Margen bruto promedio de proyectos.',
+      formula_text: 'Margen bruto real = (Venta MXN - Costo directo MXN) / Venta MXN',
+      data_source: 'Proyectos, pagos y costos',
+      periodicity: 'Periodo consultado',
+      editable: true,
+      parameters: [
+        { key: 'margin_green_percent', label: 'Verde >=', value: s.margin_green_percent, unit: '%' },
+        { key: 'margin_yellow_percent', label: 'Amarillo >=', value: s.margin_yellow_percent, unit: '%' },
+        { key: 'margin_red_percent', label: 'Rojo >=', value: s.margin_red_percent, unit: '%' },
+      ],
+      semaphore: {
+        green: `>= ${s.margin_green_percent}%`,
+        yellow: `${s.margin_yellow_percent}% a ${s.margin_green_percent - 0.01}%`,
+        red: `${s.margin_red_percent}% a ${s.margin_yellow_percent - 0.01}%`,
+        critical: `< ${s.margin_red_percent}%`,
+      },
+    },
+    {
+      key: 'invoices_issued',
+      name: 'Facturas emitidas (criterio administrativo)',
+      description: 'Todos los proyectos del periodo se consideran facturados para efectos del tablero.',
+      formula_text: 'Facturas emitidas = Numero de proyectos creados en el periodo',
+      data_source: 'Proyectos',
+      periodicity: 'Periodo consultado',
+      editable: false,
+      parameters: [],
+    },
+    {
+      key: 'invoiced_amount_mxn',
+      name: 'Monto facturado (criterio administrativo)',
+      description: 'Suma de montos de proyectos del periodo en MXN.',
+      formula_text: 'Monto facturado = Suma total_invoiced_mxn de proyectos del periodo',
+      data_source: 'Proyectos',
+      periodicity: 'Periodo consultado',
+      editable: false,
+      parameters: [],
+    },
+  ];
+}
+
+
+function computeSalesKpis(projects, period, hasLeadModule, manualQuotes, settings) {
+  const manualAgg = aggregateManualQuotesForPeriod(manualQuotes || [], period);
+  const requireCapture = settings?.require_manual_quote_capture !== 0;
+  const notCaptured = requireCapture && !manualAgg.hasCapture;
 
   const won = projects.filter(
     (p) => p.closed_at && isDateInRange(p.closed_at, period.startDate, period.endDate),
@@ -336,15 +589,20 @@ function computeSalesKpis(projects, period, hasLeadModule) {
   const soldAmount = roundMoney(won.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0));
   const wonCount = won.length;
 
-  const closeRate = safeRatio(wonCount, quotesSent);
+  const quotesSentVal = notCaptured ? null : manualAgg.quotesSent;
+  const quotedAmountVal = notCaptured ? null : manualAgg.quotedAmountMxn;
+
+  const inPeriod = projects.filter((p) => isDateInRange(p.created_at, period.startDate, period.endDate));
+
+  const closeRate = safeRatio(wonCount, quotesSentVal);
   const profitableWon = won.filter((p) => {
     const margin = p.expected_margin != null ? p.expected_margin / 100 : p.totals.final_margin;
-    return margin !== null && margin >= MARGIN_MIN;
+    return margin !== null && margin >= (settings?.margin_yellow_threshold ?? MARGIN_MIN);
   }).length;
-  const profitableCloseRate = safeRatio(profitableWon, quotesSent);
+  const profitableCloseRate = safeRatio(profitableWon, quotesSentVal);
 
   const hasNextActionField = projects.some((p) => 'next_commercial_action' in p);
-  let quotesWithoutFollowUp = kpiValue(null, !hasNextActionField);
+  let quotesWithoutFollowUp = kpiValue(null, { unavailable: !hasNextActionField });
   if (hasNextActionField) {
     const noFollowUp = inPeriod.filter(
       (p) => !p.next_commercial_action && !p.next_commercial_action_date && !p.closed_at,
@@ -359,7 +617,7 @@ function computeSalesKpis(projects, period, hasLeadModule) {
     ? roundMoney(margins.reduce((a, b) => a + b, 0) / margins.length)
     : null;
 
-  let leadsByChannel = kpiValue(null, !hasLeadModule);
+  let leadsByChannel = kpiValue(null, { unavailable: !hasLeadModule });
   const withChannel = inPeriod.filter((p) => p.lead_channel).length;
   if (withChannel > 0) {
     const byChannel = {};
@@ -372,9 +630,10 @@ function computeSalesKpis(projects, period, hasLeadModule) {
 
   return {
     leads_by_channel: leadsByChannel,
-    quotes_sent: kpiValue(quotesSent),
-    quoted_amount_mxn: kpiValue(quotedAmount),
-    sold_amount_mxn: kpiValue(soldAmount),
+    quotes_sent: kpiValue(quotesSentVal, { notCaptured, key: 'quotes_sent' }),
+    quoted_amount_mxn: kpiValue(quotedAmountVal, { notCaptured, type: 'currency', key: 'quoted_amount_mxn' }),
+    manual_capture_missing_months: manualAgg.missingMonths,
+    sold_amount_mxn: kpiValue(soldAmount, { type: 'currency', key: 'sold_amount_mxn' }),
     close_rate: kpiValue(closeRate !== null ? safePercent(closeRate) : null),
     profitable_close_rate: kpiValue(profitableCloseRate !== null ? safePercent(profitableCloseRate) : null),
     quotes_without_follow_up: quotesWithoutFollowUp,
@@ -385,7 +644,7 @@ function computeSalesKpis(projects, period, hasLeadModule) {
   };
 }
 
-function computeProjectsKpis(projects, reportsByProject) {
+function computeProjectsKpis(projects, reportsByProject, settings) {
   const active = projects.filter((p) => {
     const s = normalizeProjectStatus(p.status);
     return ['pendiente', 'en_proceso'].includes(s) && !p.closed_at;
@@ -399,7 +658,7 @@ function computeProjectsKpis(projects, reportsByProject) {
   });
 
   const redMargin = withMargin.filter(
-    (p) => p.grossMargin !== null && p.grossMargin < MARGIN_MIN,
+    (p) => p.grossMargin !== null && p.grossMargin < (settings?.margin_yellow_threshold ?? MARGIN_MIN),
   );
 
   const finished = projects.filter(
@@ -479,17 +738,12 @@ function computeReportsKpis(projects, reports) {
 }
 
 function computeBillingKpis(projects, period) {
+  const inPeriod = projects.filter((p) => isDateInRange(p.created_at, period.startDate, period.endDate));
+  const invoicedAmount = roundMoney(inPeriod.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0));
+
   const hasInvoiceIssuedAt = projects.some((p) => p.invoice_issued_at);
   const hasInvoiceDate = projects.some((p) => p.invoice_date && !p.invoice_date_na);
-
-  const invoiced = projects.filter((p) => {
-    const date = p.invoice_issued_at || (p.invoice_date_na ? null : p.invoice_date);
-    return date && isDateInRange(date, period.startDate, period.endDate);
-  });
-
-  const invoicedAmount = roundMoney(invoiced.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0));
-
-  let billingTimeDays = kpiValue(null, !hasInvoiceIssuedAt && !hasInvoiceDate);
+  let billingTimeDays = kpiValue(null, { unavailable: !hasInvoiceIssuedAt && !hasInvoiceDate });
   if (hasInvoiceIssuedAt || hasInvoiceDate) {
     const times = projects
       .map((p) => {
@@ -501,6 +755,8 @@ function computeBillingKpis(projects, period) {
     billingTimeDays = kpiValue(
       times.length ? roundMoney(times.reduce((a, b) => a + b, 0) / times.length) : null,
     );
+  } else {
+    billingTimeDays = kpiValue(null, { unavailable: true });
   }
 
   const cancelled = projects.filter((p) => p.invoice_cancelled);
@@ -508,9 +764,10 @@ function computeBillingKpis(projects, period) {
   const pendingDocs = projects.filter((p) => p.invoice_pending_docs);
 
   return {
-    invoices_issued: kpiValue(invoiced.length),
-    invoiced_amount_mxn: kpiValue(invoicedAmount),
+    invoices_issued: kpiValue(inPeriod.length),
+    invoiced_amount_mxn: kpiValue(invoicedAmount, { type: 'currency', key: 'invoiced_amount_mxn' }),
     billing_time_days: billingTimeDays,
+    billing_admin_note: 'Criterio administrativo: todos los proyectos del periodo se consideran facturados.',
     cancelled_invoices: kpiValue(cancelled.length),
     error_invoices: kpiValue(withError.length),
     pending_documentation: kpiValue(pendingDocs.length),
@@ -562,7 +819,7 @@ function computeCollectionKpis(projects, period, exchangeRates) {
   }
 
   return {
-    collected_amount_mxn: kpiValue(roundMoney(collectedAmount)),
+    collected_amount_mxn: kpiValue(roundMoney(collectedAmount), { type: 'currency', key: 'collected_amount_mxn' }),
     collected_invoices: kpiValue(collectedInvoices),
     avg_collection_days: kpiValue(
       collectionDays.length
@@ -570,9 +827,9 @@ function computeCollectionKpis(projects, period, exchangeRates) {
         : null,
     ),
     overdue_portfolio: kpiValue(safeRatio(overdueAmount, totalReceivable) !== null ? safePercent(safeRatio(overdueAmount, totalReceivable)) : null),
-    overdue_amount_mxn: kpiValue(roundMoney(overdueAmount)),
+    overdue_amount_mxn: kpiValue(roundMoney(overdueAmount), { type: 'currency', key: 'overdue_amount_mxn' }),
     accounts_over_120_days: kpiValue(over120Count),
-    accounts_over_120_amount_mxn: kpiValue(roundMoney(over120Amount)),
+    accounts_over_120_amount_mxn: kpiValue(roundMoney(over120Amount), { type: 'currency', key: 'accounts_over_120_amount_mxn' }),
     invoices_without_contact: kpiValue(withoutContact),
   };
 }
@@ -609,7 +866,7 @@ function computeDepartmentKpis(department, sales, projectsKpi, reports, billing,
   return { department, kpis: map[department] || {} };
 }
 
-function computeEmployeeKpis(employee, projects, reports, period) {
+function computeEmployeeKpis(employee, projects, reports, period, manualQuotes) {
   const name = normalizeText(employee.fullName);
   const dept = employee.kpiDepartment;
   const related = projects.filter((p) => {
@@ -625,16 +882,17 @@ function computeEmployeeKpis(employee, projects, reports, period) {
   let trafficLight = 'gray';
 
   if (dept === 'Ventas') {
-    const quotes = related.filter((p) => isDateInRange(p.created_at, period.startDate, period.endDate));
     const won = related.filter((p) => p.closed_at && isDateInRange(p.closed_at, period.startDate, period.endDate));
-    const noFollowUp = quotes.filter((p) => !p.next_commercial_action && !p.next_commercial_action_date).length;
+    const manualEmp = getManualQuotesForEmployee(manualQuotes || [], period, employee.employeeId);
+    const noFollowUp = related.filter((p) => !p.next_commercial_action && !p.next_commercial_action_date && !p.closed_at
+      && isDateInRange(p.created_at, period.startDate, period.endDate)).length;
+    const inPeriod = related.filter((p) => isDateInRange(p.created_at, period.startDate, period.endDate));
+    const margins = inPeriod.map((p) => p.expected_margin).filter((m) => m != null && Number.isFinite(m));
     kpis = {
-      quotes_sent: quotes.length,
+      quotes_sent: manualEmp.hasCapture ? manualEmp.quotesSent : NOT_CAPTURED,
       sold_amount_mxn: roundMoney(won.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0)),
-      close_rate: safePercent(safeRatio(won.length, quotes.length)),
-      avg_margin: safePercent(
-        quotes.length ? quotes.reduce((s, p) => s + (p.expected_margin || 0), 0) / quotes.length / 100 : null,
-      ),
+      close_rate: safePercent(safeRatio(won.length, manualEmp.hasCapture ? manualEmp.quotesSent : null)),
+      avg_margin: margins.length ? safePercent(margins.reduce((s, p) => s + p, 0) / margins.length / 100) : null,
       quotes_without_follow_up: noFollowUp,
     };
     trafficLight = noFollowUp > 0 ? 'red' : 'green';
@@ -691,7 +949,7 @@ function computeEmployeeKpis(employee, projects, reports, period) {
   };
 }
 
-function generateAlerts(projects, reports) {
+function generateAlerts(projects, reports, settings, sales) {
   const alerts = [];
   const today = extractDate(new Date().toISOString());
   const reportsByProject = {};
@@ -777,9 +1035,109 @@ function generateAlerts(projects, reports) {
     }
   }
 
+  if (settings?.require_manual_quote_capture && sales?.manual_capture_missing_months?.length) {
+    alerts.push({
+      type: 'falta_captura_cotizaciones',
+      severity: 'high',
+      responsible: 'Ventas',
+      date: extractDate(new Date().toISOString()),
+      suggested_action: 'Falta captura mensual de cotizaciones para este periodo.',
+      link: { module: 'kpis', action: 'manual_quotes' },
+    });
+  }
+
   const sev = { critical: 0, high: 1, medium: 2, low: 3 };
   return alerts.sort((a, b) => (sev[a.severity] || 9) - (sev[b.severity] || 9));
 }
+
+
+function computeReceivableBuckets(projects, settings) {
+  const today = extractDate(new Date().toISOString());
+  const b1 = settings.receivable_bucket1_days || 30;
+  const b2 = settings.receivable_bucket2_days || 60;
+  const b3 = settings.receivable_bucket3_days || 90;
+  const crit = settings.receivable_critical_days || 120;
+  const buckets = {
+    not_due: { label: 'No vencido', amount: 0, count: 0 },
+    days_1_30: { label: `1-${b1} dias`, amount: 0, count: 0 },
+    days_31_60: { label: `${b1 + 1}-${b2} dias`, amount: 0, count: 0 },
+    days_61_90: { label: `${b2 + 1}-${b3} dias`, amount: 0, count: 0 },
+    over_critical: { label: `Mas de ${crit} dias`, amount: 0, count: 0 },
+  };
+  for (const p of projects) {
+    const pending = p.totals?.pending_collection || 0;
+    if (pending <= 0.01) continue;
+    const due = p.due_date;
+    if (!due || today <= due) {
+      buckets.not_due.amount += pending;
+      buckets.not_due.count += 1;
+      continue;
+    }
+    const days = daysBetween(due, today) || 0;
+    if (days <= b1) { buckets.days_1_30.amount += pending; buckets.days_1_30.count += 1; }
+    else if (days <= b2) { buckets.days_31_60.amount += pending; buckets.days_31_60.count += 1; }
+    else if (days <= b3) { buckets.days_61_90.amount += pending; buckets.days_61_90.count += 1; }
+    else { buckets.over_critical.amount += pending; buckets.over_critical.count += 1; }
+  }
+  Object.values(buckets).forEach((b) => { b.amount = roundMoney(b.amount); });
+  return Object.values(buckets);
+}
+
+function computeKpiCharts(db, projects, period, manualQuotes, exchangeRates) {
+  const months = getMonthsInPeriod(period).slice(-12);
+  const trend = [];
+  for (const mo of months) {
+    const start = formatDate(mo.year, mo.month, 1);
+    const end = formatDate(mo.year, mo.month, lastDayOfMonth(mo.year, mo.month));
+    const subPeriod = { startDate: start, endDate: end, label: `${pad2(mo.month)}/${mo.year}` };
+    const monthProjects = projects.filter((p) => isDateInRange(p.created_at, start, end));
+    const manualAgg = aggregateManualQuotesForPeriod(
+      manualQuotes.filter((c) => c.year === mo.year && c.month === mo.month),
+      subPeriod,
+    );
+    const sold = monthProjects.filter((p) => p.closed_at && isDateInRange(p.closed_at, start, end));
+    let collected = 0;
+    for (const p of projects) {
+      for (const pay of p.payments || []) {
+        if (isDateInRange(pay.payment_date, start, end)) {
+          collected += convertAmountToMxn(pay.amount, pay.currency || 'MXN', exchangeRates);
+        }
+      }
+    }
+    trend.push({
+      label: subPeriod.label,
+      quoted_amount_mxn: manualAgg.quotedAmountMxn,
+      sold_amount_mxn: roundMoney(sold.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0)),
+      collected_amount_mxn: roundMoney(collected),
+    });
+  }
+
+  const settings = loadKpiSettings(db);
+  const receivable_buckets = computeReceivableBuckets(projects, settings);
+
+  const reports = db.prepare('SELECT * FROM project_reports WHERE deleted_at IS NULL').all();
+  const reportsByProject = {};
+  reports.forEach((r) => { reportsByProject[r.project_id] = r; });
+  const finished = projects.filter((p) => normalizeProjectStatus(p.status) === 'terminado' || p.closed_at);
+  let complete = 0;
+  let pending = 0;
+  let overdue = 0;
+  const critDays = settings.report_missing_critical_days || 7;
+  for (const p of finished) {
+    const report = reportsByProject[p.id];
+    if (report && isReportComplete(report)) { complete += 1; continue; }
+    const days = daysBetween(p.closed_at || p.updated_at, new Date().toISOString());
+    if (days !== null && days > critDays) overdue += 1;
+    else pending += 1;
+  }
+
+  return {
+    monthly_trend: trend,
+    receivable_buckets,
+    technical_reports: { complete, pending, overdue },
+  };
+}
+
 
 function buildKpiContext(db, query) {
   const periodType = query.periodType || 'current_month';
@@ -812,17 +1170,20 @@ function buildKpiContext(db, query) {
   const reportsByProject = {};
   reports.forEach((r) => { reportsByProject[r.project_id] = r; });
 
+  const settings = loadKpiSettings(db);
+  const manualQuotes = loadManualQuoteCapturesForPeriod(db, period);
   const hasLeadModule = false;
-  const sales = computeSalesKpis(projects, period, hasLeadModule);
-  const projectsKpi = computeProjectsKpis(projects, reportsByProject);
+  const sales = computeSalesKpis(projects, period, hasLeadModule, manualQuotes, settings);
+  const projectsKpi = computeProjectsKpis(projects, reportsByProject, settings);
   const reportsKpi = computeReportsKpis(projects, reports);
   const billing = computeBillingKpis(projects, period);
   const collection = computeCollectionKpis(projects, period, exchangeRates);
+  const charts = computeKpiCharts(db, projects, period, manualQuotes, exchangeRates);
   const unassigned = loadActiveKpiEmployees(db).filter((e) => !e.kpiDepartment);
 
   return {
     period, periodType, employees, unassignedEmployees: unassigned,
-    projects, reports, sales, projectsKpi, reportsKpi, billing, collection,
+    projects, reports, sales, projectsKpi, reportsKpi, billing, collection, settings, manualQuotes, charts,
     filters: {
       department: query.department || null,
       employeeId: query.employeeId ? Number(query.employeeId) : null,
@@ -838,7 +1199,7 @@ function computeSummary(db, query) {
   const departments = KPI_DEPARTMENTS.map((d) =>
     computeDepartmentKpis(d, ctx.sales, ctx.projectsKpi, ctx.reportsKpi, ctx.billing, ctx.collection),
   );
-  const alerts = generateAlerts(ctx.projects, ctx.reports);
+  const alerts = generateAlerts(ctx.projects, ctx.reports, ctx.settings, ctx.sales);
 
   return {
     period: ctx.period,
@@ -847,12 +1208,12 @@ function computeSummary(db, query) {
     timezone: TIMEZONE,
     summary_cards: [
       { label: 'Cotizaciones enviadas', value: ctx.sales.quotes_sent.display, section: 'ventas' },
-      { label: 'Monto vendido (MXN)', value: ctx.sales.sold_amount_mxn.display, section: 'ventas' },
-      { label: 'Proyectos activos', value: ctx.projectsKpi.active_projects.display, section: 'proyectos' },
+      { label: 'Monto cotizado', value: ctx.sales.quoted_amount_mxn.display, section: 'ventas' },
+      { label: 'Monto vendido', value: ctx.sales.sold_amount_mxn.display, section: 'ventas' },
+      { label: 'Margen real', value: ctx.projectsKpi.gross_margin_real.display, section: 'proyectos' },
+      { label: 'CxC vencida', value: ctx.collection.overdue_portfolio.display, section: 'cobranza' },
       { label: 'Reportes completos', value: ctx.reportsKpi.complete_reports.display, section: 'reportes' },
       { label: 'Facturas emitidas', value: ctx.billing.invoices_issued.display, section: 'facturacion' },
-      { label: 'Monto cobrado (MXN)', value: ctx.collection.collected_amount_mxn.display, section: 'cobranza' },
-      { label: 'Cartera vencida', value: ctx.collection.overdue_portfolio.display, section: 'cobranza' },
       { label: 'Alertas activas', value: String(alerts.length), section: 'alertas' },
     ],
     ventas: ctx.sales,
@@ -864,6 +1225,8 @@ function computeSummary(db, query) {
     unassigned_employees: ctx.unassignedEmployees.map((e) => ({
       employeeId: e.employeeId, fullName: e.fullName, department: e.department,
     })),
+    charts: ctx.charts,
+    settings_display: settingsToApi(ctx.settings),
     has_weighted_score: false,
     has_public_ranking: false,
   };
@@ -889,7 +1252,7 @@ function computeEmployees(db, query) {
 
   return {
     period: ctx.period,
-    employees: filtered.map((e) => computeEmployeeKpis(e, ctx.projects, ctx.reports, ctx.period)),
+    employees: filtered.map((e) => computeEmployeeKpis(e, ctx.projects, ctx.reports, ctx.period, ctx.manualQuotes)),
     has_weighted_score: false,
     has_public_ranking: false,
   };
@@ -897,7 +1260,8 @@ function computeEmployees(db, query) {
 
 function computeAlerts(db, query) {
   const ctx = buildKpiContext(db, query);
-  return { period: ctx.period, alerts: generateAlerts(ctx.projects, ctx.reports) };
+  const alerts = generateAlerts(ctx.projects, ctx.reports, ctx.settings, ctx.sales);
+  return { period: ctx.period, alerts };
 }
 
 function computeDetail(db, query) {
@@ -937,6 +1301,14 @@ module.exports = {
   MARGIN_MIN,
   MARGIN_TARGET,
   UNAVAILABLE,
+  NOT_CAPTURED,
+  formatCurrencyMXN,
+  formatPercentDisplay,
+  loadKpiSettings,
+  settingsToApi,
+  aggregateManualQuotesForPeriod,
+  getFormulaDefinitions,
+  normalizeKpiArea,
   getPeriodRange,
   normalizeProjectStatus,
   normalizeCollectionStatus,

@@ -454,6 +454,73 @@ function migrate(database) {
   ensureColumn(database, 'projects', 'collection_contact_at', 'TEXT');
   ensureColumn(database, 'projects', 'collection_notes', 'TEXT');
 
+  // Tablero KPIs Fase 2 — configuración empleados y capturas manuales
+  ensureColumn(database, 'employees', 'kpi_area', 'TEXT');
+  ensureColumn(database, 'employees', 'kpi_configured_at', 'TEXT');
+  ensureColumn(database, 'employees', 'kpi_configured_by_user_id', 'INTEGER');
+  ensureColumn(database, 'employees', 'kpi_configured_by_name', 'TEXT');
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS kpi_manual_quote_captures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      department TEXT NOT NULL DEFAULT 'Ventas',
+      employee_id INTEGER,
+      employee_name_snapshot TEXT,
+      quotes_sent_count INTEGER NOT NULL DEFAULT 0,
+      quoted_amount_original REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      quoted_amount_mxn REAL NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_kpi_manual_quotes_period
+      ON kpi_manual_quote_captures (year, month, COALESCE(employee_id, -1))
+      WHERE deleted_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS kpi_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      margin_green_threshold REAL NOT NULL DEFAULT 0.40,
+      margin_yellow_threshold REAL NOT NULL DEFAULT 0.30,
+      margin_red_threshold REAL NOT NULL DEFAULT 0.20,
+      receivable_bucket1_days INTEGER NOT NULL DEFAULT 30,
+      receivable_bucket2_days INTEGER NOT NULL DEFAULT 60,
+      receivable_bucket3_days INTEGER NOT NULL DEFAULT 90,
+      receivable_critical_days INTEGER NOT NULL DEFAULT 120,
+      report_missing_critical_days INTEGER NOT NULL DEFAULT 7,
+      require_manual_quote_capture INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT
+    );
+  `);
+
+  const kpiSettingsCount = database.prepare('SELECT COUNT(*) AS c FROM kpi_settings').get().c;
+  if (kpiSettingsCount === 0) {
+    const now = new Date().toISOString();
+    database.prepare(`
+      INSERT INTO kpi_settings (
+        id, margin_green_threshold, margin_yellow_threshold, margin_red_threshold,
+        receivable_bucket1_days, receivable_bucket2_days, receivable_bucket3_days,
+        receivable_critical_days, report_missing_critical_days, require_manual_quote_capture,
+        created_at, updated_at
+      ) VALUES (1, 0.40, 0.30, 0.20, 30, 60, 90, 120, 7, 1, ?, ?)
+    `).run(now, now);
+  }
+
   // Create audit_logs table
   database.exec(`
     CREATE TABLE IF NOT EXISTS audit_logs (

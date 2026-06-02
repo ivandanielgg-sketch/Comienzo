@@ -1214,3 +1214,35 @@ th.col-number {
   }
 }
 
+
+.kpi-toolbar button { white-space: nowrap; }
+
+.kpi-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.kpi-chart-panel {
+  padding: 12px;
+  min-height: 260px;
+}
+
+.kpi-chart-panel h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.kpi-chart-empty {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 24px 0;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .kpi-charts-grid {
+    grid-template-columns: 1fr;
+  }
+}

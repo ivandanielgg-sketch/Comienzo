@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tablero KPIs REVRAM</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    body { padding: 24px; background: #fff; color: #111; }
+    .print-header { border-bottom: 2px solid #333; margin-bottom: 16px; padding-bottom: 8px; }
+    .print-note { font-size: 0.85rem; color: #555; margin-top: 24px; }
+    .kpi-print-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; }
+    .kpi-print-card { border: 1px solid #ccc; padding: 10px; border-radius: 6px; }
+    .kpi-print-card span { display: block; font-size: 0.75rem; color: #666; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 12px 0; }
+    th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+    th { background: #f3f4f6; }
+    @media print {
+      .no-print { display: none !important; }
+      @page { size: letter; margin: 0.6in; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print" style="margin-bottom:16px;">
+    <button type="button" onclick="window.print()">Imprimir / Guardar PDF</button>
+    <button type="button" onclick="window.close()" class="secondary">Cerrar</button>
+  </div>
+  <div id="kpi-print-root">Cargando reporte...</div>
+  <script>
+    const money = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
+    function formatCurrencyMXN(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return '$0.00';
+      return money.format(n);
+    }
+    function escapeHtml(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    function cellDisplay(v) {
+      if (v && typeof v === 'object' && v.display != null) return v.display;
+      return v == null ? '—' : String(v);
+    }
+    async function load() {
+      const params = new URLSearchParams(window.location.search);
+      const qs = params.get('qs') || '';
+      const res = await fetch('/api/kpis/summary?' + qs, { credentials: 'include' });
+      if (!res.ok) {
+        document.getElementById('kpi-print-root').textContent = 'No autorizado o error al cargar.';
+        return;
+      }
+      const data = await res.json();
+      const alertsRes = await fetch('/api/kpis/alerts?' + qs, { credentials: 'include' });
+      const alertsData = alertsRes.ok ? await alertsRes.json() : { alerts: [] };
+      const generated = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+      const cards = (data.summary_cards || []).map(function(c) {
+        return '<div class="kpi-print-card"><span>' + escapeHtml(c.label) + '</span><strong>' + escapeHtml(c.value) + '</strong></div>';
+      }).join('');
+      const alertRows = (alertsData.alerts || []).slice(0, 30).map(function(a) {
+        return '<tr><td>' + escapeHtml(a.severity) + '</td><td>' + escapeHtml(a.type) + '</td><td>' + escapeHtml(a.responsible || '') + '</td><td>' + escapeHtml(a.suggested_action || '') + '</td></tr>';
+      }).join('');
+      document.getElementById('kpi-print-root').innerHTML =
+        '<div class="print-header"><h1>Tablero KPIs REVRAM</h1>' +
+        '<p><strong>Periodo:</strong> ' + escapeHtml(data.period && data.period.label) + '</p>' +
+        '<p><strong>Generado:</strong> ' + escapeHtml(generated) + ' (Hora CDMX)</p>' +
+        '<p><strong>Filtros:</strong> ' + escapeHtml(JSON.stringify(data.filters || {})) + '</p></div>' +
+        '<h2>Resumen</h2><div class="kpi-print-cards">' + cards + '</div>' +
+        '<h2>Ventas</h2><p>Cotizaciones: ' + cellDisplay(data.ventas && data.ventas.quotes_sent) +
+        ' · Monto cotizado: ' + cellDisplay(data.ventas && data.ventas.quoted_amount_mxn) +
+        ' · Monto vendido: ' + cellDisplay(data.ventas && data.ventas.sold_amount_mxn) + '</p>' +
+        '<h2>Alertas operativas</h2><table><thead><tr><th>Severidad</th><th>Tipo</th><th>Responsable</th><th>Accion</th></tr></thead><tbody>' +
+        (alertRows || '<tr><td colspan="4">Sin alertas</td></tr>') + '</tbody></table>' +
+        '<p class="print-note"><em>Reporte administrativo interno. Los montos en MXN usan formato de moneda. Criterio de facturacion: todos los proyectos del periodo se consideran facturados para efectos del tablero (no contabilidad fiscal).</em></p>';
+    }
+    load();
+  </script>
+</body>
+</html>
