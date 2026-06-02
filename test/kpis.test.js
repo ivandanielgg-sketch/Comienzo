@@ -419,17 +419,61 @@ describe('KPIs integration - admin only', () => {
   });
 
   it('sales-employees returns Ventas eligible list', async () => {
-    await request('POST', '/api/employees', {
+    await request('POST', '/api/kpis/admin-reauth', { password: 'admin123' }, adminCookie);
+    const empRes = await request('POST', '/api/employees', {
       employee_number: 'KPI-SALES-' + Date.now(),
       full_name: 'Vendedora Sales API',
       hire_date: '2024-01-01',
       primary_department: 'Ventas',
       active: true,
     }, adminCookie);
+    assert.strictEqual(empRes.status, 201);
+    const assign = await request('PUT', '/api/kpis/employee-config/' + empRes.body.id, {
+      kpi_area: 'Ventas',
+      kpi_eligible: true,
+    }, adminCookie);
+    assert.strictEqual(assign.status, 200);
+    assert.strictEqual(assign.body.kpi_eligible, true);
     const res = await request('GET', '/api/kpis/sales-employees', null, adminCookie);
     assert.strictEqual(res.status, 200);
     assert.ok(Array.isArray(res.body.employees));
     assert.ok(res.body.employees.some((e) => e.full_name === 'Vendedora Sales API'));
+  });
+
+  it('employee-config PUT toggles KPI assignment for vendedores', async () => {
+    await request('POST', '/api/kpis/admin-reauth', { password: 'admin123' }, adminCookie);
+    const empRes = await request('POST', '/api/employees', {
+      employee_number: 'KPI-CFG-' + Date.now(),
+      full_name: 'Vendedora Config Toggle',
+      hire_date: '2024-01-01',
+      position: 'Ventas',
+      active: true,
+    }, adminCookie);
+    assert.strictEqual(empRes.status, 201);
+    const employeeId = empRes.body.id;
+    const configBefore = await request('GET', '/api/kpis/employee-config', null, adminCookie);
+    assert.strictEqual(configBefore.status, 200);
+    const row = configBefore.body.vendedores.find((e) => e.employee_id === employeeId);
+    assert.ok(row);
+    assert.strictEqual(row.kpi_eligible, true);
+    assert.strictEqual(row.kpi_area, 'Sin asignar');
+    const enable = await request('PUT', '/api/kpis/employee-config/' + employeeId, {
+      kpi_area: 'Ventas',
+      kpi_eligible: true,
+    }, adminCookie);
+    assert.strictEqual(enable.status, 200);
+    assert.strictEqual(enable.body.kpi_eligible, true);
+    assert.strictEqual(enable.body.kpi_area, 'Ventas');
+    const sales = await request('GET', '/api/kpis/sales-employees', null, adminCookie);
+    assert.ok(sales.body.employees.some((e) => e.employee_id === employeeId));
+    const disable = await request('PUT', '/api/kpis/employee-config/' + employeeId, {
+      kpi_area: 'Sin asignar',
+      kpi_eligible: false,
+    }, adminCookie);
+    assert.strictEqual(disable.status, 200);
+    assert.strictEqual(disable.body.kpi_eligible, false);
+    const salesAfter = await request('GET', '/api/kpis/sales-employees', null, adminCookie);
+    assert.ok(!salesAfter.body.employees.some((e) => e.employee_id === employeeId));
   });
 
   it('excel export returns spreadsheet', async () => {
@@ -468,6 +512,7 @@ describe('KPIs frontend markup', () => {
 });
 
 const { formatCurrencyMXN, buildKpiExcelWorkbook } = require('../src/kpisExport');
+const { isDbTruthy } = require('../src/db/dialect');
 const {
   aggregateManualQuotesForPeriod,
   loadKpiSettings,
@@ -477,6 +522,15 @@ const {
 } = require('../src/kpis');
 
 describe('KPIs Fase 2', () => {
+  it('isDbTruthy coerces PostgreSQL string flags', () => {
+    assert.strictEqual(isDbTruthy(1), true);
+    assert.strictEqual(isDbTruthy('1'), true);
+    assert.strictEqual(isDbTruthy(0), false);
+    assert.strictEqual(isDbTruthy('0'), false);
+    assert.strictEqual(isDbTruthy(false), false);
+    assert.strictEqual(isDbTruthy(null), false);
+  });
+
   it('loadKpiSettings seeds defaults when row missing', () => {
     const Database = require('better-sqlite3');
     const db = new Database(':memory:');
@@ -609,6 +663,8 @@ describe('KPIs Fase 2', () => {
     assert.match(js, /ensureKpiReauth/);
     assert.match(js, /openKpiManualQuotesModal/);
     assert.match(js, /exportKpiExcel/);
+    assert.match(js, /setupKpiEmployeeConfigHandlersOnce/);
+    assert.match(js, /handleKpiEmployeeEligibleToggle/);
   });
 });
 

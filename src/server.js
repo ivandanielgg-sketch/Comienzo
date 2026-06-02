@@ -5,7 +5,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('node:path');
 const { getDb } = require('./db');
-const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate } = require('./db/dialect');
+const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate, isDbTruthy } = require('./db/dialect');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
@@ -1766,7 +1766,7 @@ function mapEmployee(row) {
   return {
     ...row,
     active: !!row.active,
-    kpi_eligible: row.kpi_eligible !== 0,
+    kpi_eligible: isDbTruthy(row.kpi_eligible),
     primary_department: row.primary_department || row.department || null,
     secondary_department: row.secondary_department || null,
     user_id: row.user_id || null,
