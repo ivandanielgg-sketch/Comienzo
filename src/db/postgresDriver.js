@@ -47,6 +47,19 @@ function ensurePostgresColumns(database) {
   }
 }
 
+
+function shouldBootstrapSchema(database) {
+  if (process.env.PG_SKIP_SCHEMA === 'true') {
+    return false;
+  }
+  const row = database.prepare(
+    `SELECT COUNT(*)::int AS table_count
+     FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
+  ).get();
+  return Number(row.table_count) === 0;
+}
+
 function createPostgresDb(connectionString) {
   if (!connectionString) {
     throw new Error('DATABASE_URL es requerida para PostgreSQL.');
@@ -55,10 +68,15 @@ function createPostgresDb(connectionString) {
     pool = new Pool({
       connectionString,
       ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+      max: Number(process.env.PGPOOL_MAX || 10),
+      idleTimeoutMillis: Number(process.env.PGPOOL_IDLE_MS || 30000),
+      connectionTimeoutMillis: Number(process.env.PGPOOL_CONNECT_MS || 10000),
     });
     waitPromise(pool.query('SELECT 1'));
     adapterInstance = createBetterSqlite3Adapter(pool);
-    runPostgresSchema(adapterInstance);
+    if (shouldBootstrapSchema(adapterInstance)) {
+      runPostgresSchema(adapterInstance);
+    }
     ensurePostgresColumns(adapterInstance);
     seedAdmin(adapterInstance);
     seedExchangeRates(adapterInstance);

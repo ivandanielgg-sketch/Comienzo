@@ -5,7 +5,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('node:path');
 const { getDb } = require('./db');
-const { isPostgres, yearFilter, monthFilter, distinctYearSelect } = require('./db/dialect');
+const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate } = require('./db/dialect');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
@@ -2975,7 +2975,7 @@ app.post('/api/ecovis/projects/:id/cancel', requireAuth, requirePermission('ecov
         `INSERT INTO ecovis_movements (
           movement_type, movement_date, amount, currency, direction,
           description, related_project_id, created_by, created_by_user_id, created_at, updated_at
-        ) VALUES ('cancelacion', date('now'), ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?, ?, ?)`,
+        ) VALUES ('cancelacion', ${sqlCurrentDate()}, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?, ?, ?)`,
       ).run(project.total_amount, project.currency, reason, req.params.id, req.session.username, audit.updated_by_user_id, audit.updated_at, audit.updated_at);
 
       const affectedPayments = db.prepare(

@@ -41,6 +41,11 @@ function appendReturningId(sql) {
   return `${trimmed} RETURNING id`;
 }
 
+/** Fecha actual en SQL (columnas TEXT tipo fecha). */
+function sqlCurrentDate() {
+  return isPostgres() ? 'CURRENT_DATE' : "date('now')";
+}
+
 module.exports = {
   isPostgres,
   toPositionalParams,
@@ -48,4 +53,5 @@ module.exports = {
   monthFilter,
   distinctYearSelect,
   appendReturningId,
+  sqlCurrentDate,
 };

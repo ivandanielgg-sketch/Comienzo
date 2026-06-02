@@ -2,23 +2,24 @@
 
 /**
  * Resolucion del motor de BD (sin cargar drivers).
- * Produccion: PG solo con USE_POSTGRES=true ademas de DATABASE_URL.
+ * - DATABASE_URL definida → PostgreSQL (pg Pool + adaptador API better-sqlite3).
+ * - Sin DATABASE_URL → SQLite solo en desarrollo.
+ * - Produccion sin DATABASE_URL → error (no fallback a disco).
  */
 function resolveDbMode() {
   const url = String(process.env.DATABASE_URL || '').trim();
-  if (!url) {
-    return 'sqlite';
+  if (url) {
+    return 'postgres';
   }
-  const isProduction = process.env.NODE_ENV === 'production';
-  const explicitPostgres = process.env.USE_POSTGRES === 'true';
-  if (isProduction && !explicitPostgres) {
-    console.warn(
-      '[db] DATABASE_URL definida en produccion pero USE_POSTGRES no es "true". '
-        + 'Se mantiene SQLite para proteger datos existentes en disco.',
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      '[db] En produccion se requiere DATABASE_URL (PostgreSQL). '
+        + 'SQLite en /var/data/app.db no se usa como base principal.',
     );
-    return 'sqlite';
   }
-  return 'postgres';
+
+  return 'sqlite';
 }
 
 function isPostgres() {

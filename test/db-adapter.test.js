@@ -15,15 +15,21 @@ describe('better-sqlite3 adapter', () => {
     assert.deepEqual(params, [1, 2]);
   });
 
-  it('production keeps sqlite without USE_POSTGRES', () => {
+  it('DATABASE_URL selects postgres in any environment', () => {
     const prev = { ...process.env };
     process.env.NODE_ENV = 'production';
     process.env.DATABASE_URL = 'postgresql://localhost/x';
-    delete process.env.USE_POSTGRES;
-    assert.equal(resolveDbMode(), 'sqlite');
+    assert.equal(resolveDbMode(), 'postgres');
     process.env.NODE_ENV = prev.NODE_ENV;
     process.env.DATABASE_URL = prev.DATABASE_URL;
-    if (prev.USE_POSTGRES) process.env.USE_POSTGRES = prev.USE_POSTGRES;
+  });
+
+  it('production without DATABASE_URL throws', () => {
+    const prev = { ...process.env };
+    process.env.NODE_ENV = 'production';
+    delete process.env.DATABASE_URL;
+    assert.throws(() => resolveDbMode(), /produccion se requiere DATABASE_URL/i);
+    process.env.NODE_ENV = prev.NODE_ENV;
+    if (prev.DATABASE_URL) process.env.DATABASE_URL = prev.DATABASE_URL;
   });
 });
-

@@ -9,7 +9,7 @@ let resolvedMode;
 
 function getDriverLabel() {
   const mode = resolvedMode || resolveDbMode();
-  return mode === 'postgres' ? 'postgresql (better-sqlite3 adapter)' : 'sqlite (better-sqlite3)';
+  return mode === 'postgres' ? 'postgresql (pg Pool)' : 'sqlite (better-sqlite3)';
 }
 
 /**
@@ -20,12 +20,10 @@ function getDb() {
     resolvedMode = resolveDbMode();
     if (resolvedMode === 'postgres') {
       db = createPostgresDb(process.env.DATABASE_URL);
-      console.info('[db] PostgreSQL activo via adaptador better-sqlite3 (DATABASE_URL).');
+      console.info('[db] PostgreSQL activo (pg/node-postgres, DATABASE_URL).');
     } else {
       db = createSqliteDb();
-      if (process.env.NODE_ENV === 'production') {
-        console.info('[db] SQLite activo (archivo en DB_PATH). Sin riesgo de switch accidental a PG.');
-      }
+      console.info(`[db] SQLite activo (archivo en ${process.env.DB_PATH || 'data/app.db'}).`);
     }
   }
   return db;
