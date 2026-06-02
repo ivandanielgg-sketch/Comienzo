@@ -111,10 +111,14 @@ async function countPgRows(pg, tableName) {
   return Number(result.rows[0].count);
 }
 
-async function resetSerialSequence(pg, tableName) {
+async function resetSerialSequence(pg, tableName, columns) {
+  if (!columns.includes('id')) {
+    return;
+  }
+
   const seqResult = await pg.query(
     'SELECT pg_get_serial_sequence($1, $2) AS seq',
-    [tableName, 'id']
+    ['public.' + tableName, 'id']
   );
   const sequenceName = seqResult.rows[0]?.seq;
   if (!sequenceName) {
@@ -154,7 +158,7 @@ async function migrateTable(sqlite, pg, tableName) {
       await pg.query(insertSql, values);
     }
 
-    await resetSerialSequence(pg, tableName);
+    await resetSerialSequence(pg, tableName, columns);
 
     const destCount = await countPgRows(pg, tableName);
     if (destCount !== sourceCount) {
