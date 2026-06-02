@@ -1,8 +1,18 @@
 # Render deploy
 
-Última actualización para migración PostgreSQL: commit con `SCHEMA_TABLE_ORDER` en `scripts/apply-postgres-schema.js`.
+## Si el deploy está viejo (grep SCHEMA_TABLE_ORDER vacío)
 
-En Shell de Render (después del deploy):
+Actualiza el script desde GitHub sin esperar redeploy:
+
+```bash
+cd /opt/render/project/src
+curl -sL "https://raw.githubusercontent.com/ivandanielgg-sketch/Comienzo/main/scripts/apply-postgres-schema.js" -o scripts/apply-postgres-schema.js
+grep SCHEMA_TABLE_ORDER scripts/apply-postgres-schema.js
+SCHEMA_RESET=true npm run db:apply-schema
+npm run migrate:data
+```
+
+## Con deploy actualizado (commit 8b9c5c7+)
 
 ```bash
 cd /opt/render/project/src
