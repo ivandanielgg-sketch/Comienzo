@@ -21,7 +21,8 @@ This is a Node.js/Express project management application ("Control de Proyectos"
 - The test suite uses Node's built-in test runner (`node --test`); there is no lint command configured in `package.json`.
 - The API field names use snake_case (e.g. `quote_number`, `client_name`, `purchase_order_not_applicable`).
 - To create a project without a purchase order, set `purchase_order_not_applicable: true`.
-- If changing the DB schema (`src/db.js`), delete `data/app.db` and restart the server to recreate it from scratch. There is no separate migration system.
+- If changing the DB schema (`src/db/sqliteDriver.js` or `src/db/postgresSchema.sql`), delete `data/app.db` (SQLite) or recreate the PG database, then restart. There is no separate migration system for SQLite; PostgreSQL uses `src/db/postgresSchema.sql` on first connect when `DATABASE_URL` is set.
+- **Database drivers (Fase 2):** default is SQLite (`better-sqlite3`) when `DATABASE_URL` is unset. With `DATABASE_URL`, the app uses `pg` via `src/db/postgresDriver.js`. Legacy SQLite code lives in `src/db/sqliteDriver.js` (not removed).
 - The Reports module (`project_reports` table) stores `safety_tests`, `emissions_low_fire`, and `emissions_high_fire` as JSON strings. Parse/stringify when reading/writing.
 - The print view for reports is at `/report-print.html?id=<reportId>` — it uses `@media print` CSS for letter-size output.
 - The ECOVIS module (`src/ecovis.js`) provides pure calculation functions; all ECOVIS endpoints in `src/server.js` require both `requireAuth` and `requireAdmin` middleware.

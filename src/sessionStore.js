@@ -1,15 +1,22 @@
+const { isPostgres } = require('./db/dialect');
+
 function createSqliteSessionStore(session, database, { ttlMs }) {
   const Store = session.Store;
+  const pg = isPostgres();
 
-  return new (class SqliteSessionStore extends Store {
+  const setSql = pg
+    ? `INSERT INTO sessions (sid, sess, expires)
+       VALUES ($1, $2, $3)
+       ON CONFLICT(sid) DO UPDATE SET sess = EXCLUDED.sess, expires = EXCLUDED.expires`
+    : `INSERT INTO sessions (sid, sess, expires)
+         VALUES (@sid, @sess, @expires)
+         ON CONFLICT(sid) DO UPDATE SET sess = excluded.sess, expires = excluded.expires`;
+
+  return new (class AppSessionStore extends Store {
     constructor() {
       super();
       this.getStmt = database.prepare('SELECT sess, expires FROM sessions WHERE sid = ?');
-      this.setStmt = database.prepare(
-        `INSERT INTO sessions (sid, sess, expires)
-         VALUES (@sid, @sess, @expires)
-         ON CONFLICT(sid) DO UPDATE SET sess = excluded.sess, expires = excluded.expires`,
-      );
+      this.setStmt = database.prepare(setSql);
       this.destroyStmt = database.prepare('DELETE FROM sessions WHERE sid = ?');
       this.touchStmt = database.prepare('UPDATE sessions SET expires = ? WHERE sid = ?');
       this.cleanupStmt = database.prepare('DELETE FROM sessions WHERE expires <= ?');
@@ -42,11 +49,13 @@ function createSqliteSessionStore(session, database, { ttlMs }) {
     set(sid, sessionData, callback = () => {}) {
       try {
         this.cleanupExpired();
-        this.setStmt.run({
-          sid,
-          sess: JSON.stringify(sessionData),
-          expires: this.getExpiration(sessionData),
-        });
+        const expires = this.getExpiration(sessionData);
+        const payload = JSON.stringify(sessionData);
+        if (pg) {
+          this.setStmt.run(sid, payload, expires);
+        } else {
+          this.setStmt.run({ sid, sess: payload, expires });
+        }
         return callback(null);
       } catch (error) {
         return callback(error);
@@ -86,6 +95,11 @@ function createSqliteSessionStore(session, database, { ttlMs }) {
   })();
 }
 
+function createSessionStore(session, database, options) {
+  return createSqliteSessionStore(session, database, options);
+}
+
 module.exports = {
   createSqliteSessionStore,
+  createSessionStore,
 };

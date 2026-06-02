@@ -5,6 +5,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('node:path');
 const { getDb } = require('./db');
+const { isPostgres, yearFilter, monthFilter, distinctYearSelect } = require('./db/dialect');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
@@ -3588,7 +3589,7 @@ app.post('/api/ecovis/apply-credit', requireAuth, requirePermission('ecovisAccou
 
 app.get('/api/ecovis/projects/history/years', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {
   const years = db.prepare(
-    `SELECT DISTINCT CAST(strftime('%Y', fully_paid_at) AS INTEGER) as year
+    `${distinctYearSelect('fully_paid_at')}
      FROM ecovis_projects
      WHERE status = 'pagado' AND fully_paid_at IS NOT NULL AND is_cancelled = 0
      ORDER BY year DESC`,
@@ -3609,10 +3610,10 @@ app.get('/api/ecovis/projects/history', requireAuth, requirePermission('ecovisAc
     });
   }
 
-  let dateFilter = "AND strftime('%Y', ep.fully_paid_at) = ?";
+  let dateFilter = yearFilter('ep.fully_paid_at');
   const dateParams = [String(year)];
   if (month && month >= 1 && month <= 12) {
-    dateFilter += " AND CAST(strftime('%m', ep.fully_paid_at) AS INTEGER) = ?";
+    dateFilter += monthFilter('ep.fully_paid_at');
     dateParams.push(month);
   }
 
@@ -4835,11 +4836,11 @@ app.get('/api/financial/accounts-payable', requireAuth, requireAdminOnly, (req, 
     params.push(status);
   }
   if (year) {
-    where += " AND CAST(strftime('%Y', invoice_date) AS INTEGER) = ?";
+    where += yearFilter('invoice_date');
     params.push(year);
   }
   if (month) {
-    where += " AND CAST(strftime('%m', invoice_date) AS INTEGER) = ?";
+    where += monthFilter('invoice_date');
     params.push(month);
   }
   if (search) {
