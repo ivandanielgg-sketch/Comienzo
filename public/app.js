@@ -5547,6 +5547,14 @@ function renderActivitySummaryUsers(users) {
 let kpiChartInstances = {};
 let kpiReauthPromise = null;
 
+function mountKpiModalToBody(modalId) {
+  const modal = document.getElementById(modalId);
+  if (modal && modal.parentElement !== document.body) {
+    document.body.appendChild(modal);
+  }
+  return modal;
+}
+
 function formatCurrencyMXN(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return '$0.00';
@@ -5653,8 +5661,8 @@ async function ensureKpiReauth() {
   }
   if (kpiReauthPromise) return kpiReauthPromise;
   kpiReauthPromise = new Promise(function(resolve) {
+    const modal = mountKpiModalToBody('kpi-reauth-modal');
     kpiReauthPromise._resolve = resolve;
-    const modal = document.getElementById('kpi-reauth-modal');
     if (!modal) {
       kpiReauthPromise = null;
       resolve(false);
@@ -5843,7 +5851,7 @@ function resetKpiManualQuoteForm() {
 
 async function openKpiManualQuotesModal() {
   populateKpiManualQuoteMonths();
-  const modal = document.getElementById('kpi-manual-quotes-modal');
+  const modal = mountKpiModalToBody('kpi-manual-quotes-modal');
   const msg = document.getElementById('kpi-mq-message');
   if (msg) { msg.textContent = ''; msg.classList.add('hidden'); }
   await loadKpiSalesEmployees();
@@ -5907,36 +5915,50 @@ function updateKpiManualQuoteMxnPreview() {
 }
 
 async function openKpiConfigModal() {
-  const ok = await ensureKpiReauth();
-  if (!ok) return;
-  const modal = document.getElementById('kpi-config-modal');
   const errEl = document.getElementById('kpi-config-load-error');
-  if (errEl) { errEl.textContent = ''; errEl.classList.add('hidden'); }
-  if (modal) modal.classList.remove('hidden');
-  const results = await Promise.allSettled([
-    api('/api/kpis/employee-config'),
-    api('/api/kpis/formulas'),
-    api('/api/kpis/settings'),
-  ]);
-  const errors = [];
-  if (results[0].status === 'fulfilled') {
-    renderKpiConfigEmployees(results[0].value);
-  } else {
-    errors.push('Empleados KPI: ' + (results[0].reason?.message || 'error'));
-  }
-  if (results[1].status === 'fulfilled') {
-    renderKpiConfigFormulas(results[1].value.formulas || []);
-  } else {
-    errors.push('Fórmulas: ' + (results[1].reason?.message || 'error'));
-  }
-  if (results[2].status === 'fulfilled') {
-    fillKpiSettingsForm(results[2].value);
-  } else {
-    errors.push('Parámetros: ' + (results[2].reason?.message || 'error'));
-  }
-  if (errors.length && errEl) {
-    errEl.textContent = errors.join(' · ');
-    errEl.classList.remove('hidden');
+  try {
+    const ok = await ensureKpiReauth();
+    if (!ok) return;
+    const modal = mountKpiModalToBody('kpi-config-modal');
+    if (!modal) {
+      throw new Error('No se encontro el modal de configuracion KPI.');
+    }
+    if (errEl) { errEl.textContent = ''; errEl.classList.add('hidden'); }
+    modal.classList.remove('hidden');
+    const results = await Promise.allSettled([
+      api('/api/kpis/employee-config'),
+      api('/api/kpis/formulas'),
+      api('/api/kpis/settings'),
+    ]);
+    const errors = [];
+    if (results[0].status === 'fulfilled') {
+      renderKpiConfigEmployees(results[0].value);
+    } else {
+      errors.push('Empleados KPI: ' + (results[0].reason?.message || 'error'));
+    }
+    if (results[1].status === 'fulfilled') {
+      renderKpiConfigFormulas(results[1].value.formulas || []);
+    } else {
+      errors.push('Fórmulas: ' + (results[1].reason?.message || 'error'));
+    }
+    if (results[2].status === 'fulfilled') {
+      fillKpiSettingsForm(results[2].value);
+    } else {
+      errors.push('Parámetros: ' + (results[2].reason?.message || 'error'));
+    }
+    if (errors.length && errEl) {
+      errEl.textContent = errors.join(' · ');
+      errEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    console.error('openKpiConfigModal failed:', err);
+    if (errEl) {
+      errEl.textContent = err.message || 'No se pudo abrir la configuracion KPI.';
+      errEl.classList.remove('hidden');
+      mountKpiModalToBody('kpi-config-modal')?.classList.remove('hidden');
+    } else {
+      alert(err.message || 'No se pudo abrir la configuracion KPI.');
+    }
   }
 }
 
@@ -6343,7 +6365,14 @@ function bindKpiModalBackdropClose(overlayId) {
   const btnMq = document.getElementById('kpi-btn-manual-quotes');
   if (btnMq) btnMq.addEventListener('click', openKpiManualQuotesModal);
   const btnCfg = document.getElementById('kpi-btn-config');
-  if (btnCfg) btnCfg.addEventListener('click', openKpiConfigModal);
+  if (btnCfg) {
+    btnCfg.addEventListener('click', function() {
+      openKpiConfigModal().catch(function(err) {
+        console.error('KPI config button error:', err);
+        alert(err.message || 'No se pudo abrir la configuracion KPI.');
+      });
+    });
+  }
   const btnPdf = document.getElementById('kpi-btn-export-pdf');
   if (btnPdf) btnPdf.addEventListener('click', exportKpiPdf);
   const btnXls = document.getElementById('kpi-btn-export-excel');

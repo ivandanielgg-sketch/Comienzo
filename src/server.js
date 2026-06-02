@@ -5484,7 +5484,13 @@ app.use((err, req, res, next) => {
 
   const statusCode = err.statusCode || 500;
   if (statusCode === 500) {
-    console.error('Unhandled error:', err.message, err.stack);
+    console.error('[API Error]', req.method, req.originalUrl, {
+      message: err.message,
+      code: err.code,
+      detail: err.detail,
+      constraint: err.constraint,
+      stack: err.stack,
+    });
   }
   const message = statusCode === 500 ? 'Ocurrio un error inesperado.' : err.message;
   return res.status(statusCode).json({ message });

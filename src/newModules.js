@@ -4,6 +4,25 @@ const { createdByFields, updatedByFields, logAuditEvent, nowUtc } = require('./a
 const { MODULES, isAdminOnlyModule } = require('./permissions');
 const { roundMoney } = require('./calculations');
 
+/** Agregado por usuario — compatible SQLite y PostgreSQL (PG exige agregados fuera de GROUP BY). */
+const SESSION_USER_AGGREGATE_SQL = `
+  SELECT user_id,
+         MAX(user_name) AS user_name,
+         MAX(role) AS role,
+         COUNT(*) AS total_sessions,
+         COALESCE(SUM(duration_seconds), 0) AS total_seconds,
+         MAX(last_activity_at) AS last_activity
+  FROM user_session_activities
+`;
+
+function logActivityMonitorError(route, error) {
+  console.error(`[activity-monitor] ${route}:`, error.message, {
+    code: error.code,
+    detail: error.detail,
+    stack: error.stack,
+  });
+}
+
 function registerNewModules(app, db, { requireAuth, requirePermission, badRequest, requiredText, optionalText, numberValue, enumValue, currencyValue, booleanValue, trim }) {
 
   // ===================== ROLE PERMISSIONS CONFIGURATION =====================
@@ -214,7 +233,7 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       cleanupInactiveSessions(db);
       const active = db.prepare('SELECT * FROM user_session_activities WHERE is_active = 1 ORDER BY last_activity_at DESC').all();
       res.json(active);
-    } catch (error) { next(error); }
+    } catch (error) { logActivityMonitorError('GET /sessions', error); next(error); }
   });
 
   app.get('/api/activity-monitor/weekly-report', requireAuth, requirePermission('activityMonitor', 'view'), (req, res, next) => {
@@ -225,10 +244,10 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       const startOfYear = new Date(year, 0, 1);
       const weekStart = new Date(startOfYear.getTime() + (week - 1) * 7 * 24 * 60 * 60 * 1000);
       const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
-      const sessions = db.prepare('SELECT user_id, user_name, role, COUNT(*) as total_sessions, SUM(duration_seconds) as total_seconds, MAX(last_activity_at) as last_activity FROM user_session_activities WHERE login_at >= ? AND login_at < ? GROUP BY user_id ORDER BY total_seconds DESC').all(weekStart.toISOString(), weekEnd.toISOString());
+      const sessions = db.prepare(`${SESSION_USER_AGGREGATE_SQL} WHERE login_at >= ? AND login_at < ? GROUP BY user_id ORDER BY total_seconds DESC`).all(weekStart.toISOString(), weekEnd.toISOString());
       const deniedAccess = db.prepare("SELECT user_name, COUNT(*) as count FROM audit_logs WHERE action = 'access_denied' AND timestamp_utc >= ? AND timestamp_utc < ? GROUP BY user_name").all(weekStart.toISOString(), weekEnd.toISOString());
       res.json({ year, week, week_start: weekStart.toISOString(), week_end: weekEnd.toISOString(), users: sessions.map(s => ({ ...s, avg_per_day: s.total_seconds ? Math.round(s.total_seconds / 7) : 0 })), denied_access: deniedAccess });
-    } catch (error) { next(error); }
+    } catch (error) { logActivityMonitorError('GET /weekly-report', error); next(error); }
   });
 
   app.get('/api/activity-monitor/recent-sessions', requireAuth, requirePermission('activityMonitor', 'view'), (req, res, next) => {
@@ -236,7 +255,7 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       if (req.session.role !== 'admin') return res.status(403).json({ message: 'Solo admin puede ver el monitor.' });
       const sessions = db.prepare('SELECT * FROM user_session_activities ORDER BY login_at DESC LIMIT 50').all();
       res.json({ data: sessions });
-    } catch (error) { next(error); }
+    } catch (error) { logActivityMonitorError('GET /recent-sessions', error); next(error); }
   });
 
   app.get('/api/activity-monitor/recent-events', requireAuth, requirePermission('activityMonitor', 'view'), (req, res, next) => {
@@ -244,7 +263,7 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       if (req.session.role !== 'admin') return res.status(403).json({ message: 'Solo admin puede ver el monitor.' });
       const events = db.prepare('SELECT id, user_id, user_name, action, module, entity_type, entity_id, entity_label, timestamp_utc, metadata_json FROM audit_logs ORDER BY id DESC LIMIT 50').all();
       res.json({ data: events });
-    } catch (error) { next(error); }
+    } catch (error) { logActivityMonitorError('GET /recent-events', error); next(error); }
   });
 
   // ===================== ACTIVITY MONITOR SUMMARY WITH PERIOD FILTERS =====================
@@ -341,7 +360,7 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       if (userId) { sessionFilter += ' AND user_id = ?'; sessionParams.push(Number(userId)); eventFilter += ' AND user_id = ?'; eventParams.push(Number(userId)); }
       if (role) { sessionFilter += ' AND role = ?'; sessionParams.push(role); eventFilter += ' AND module IS NOT NULL'; }
 
-      const users = db.prepare(`SELECT user_id, user_name, role, COUNT(*) as total_sessions, COALESCE(SUM(duration_seconds), 0) as total_seconds, MAX(last_activity_at) as last_activity FROM user_session_activities WHERE ${sessionFilter} GROUP BY user_id ORDER BY total_seconds DESC`).all(...sessionParams);
+      const users = db.prepare(`${SESSION_USER_AGGREGATE_SQL} WHERE ${sessionFilter} GROUP BY user_id ORDER BY total_seconds DESC`).all(...sessionParams);
 
       const totalSessions = users.reduce((sum, u) => sum + u.total_sessions, 0);
       const totalDuration = users.reduce((sum, u) => sum + u.total_seconds, 0);
@@ -365,7 +384,7 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
         users: userResults,
         events: events,
       });
-    } catch (error) { next(error); }
+    } catch (error) { logActivityMonitorError('GET /summary', error); next(error); }
   });
 
   // ===================== SKINS / USER PREFERENCES =====================
