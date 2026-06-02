@@ -5,7 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "migrate:data": "node migrate_data.js"
   },
   "repository": {
     "type": "git",
@@ -21,10 +22,8 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.10.0",
-    "deasync": "^0.1.31",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "express-session": "^1.19.0",
-    "pg": "^8.21.0"
+    "express-session": "^1.19.0"
   }
 }
