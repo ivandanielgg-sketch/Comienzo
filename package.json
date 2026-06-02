@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test",
-    "migrate:data": "node migrate_data.js"
+    "migrate:data": "node migrate_data.js",
+    "db:apply-schema": "node scripts/apply-postgres-schema.js"
   },
   "repository": {
     "type": "git",
@@ -24,6 +25,8 @@
     "better-sqlite3": "^12.10.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "express-session": "^1.19.0"
+    "express-session": "^1.19.0",
+    "pg": "^8.21.0"
   }
 }
+
