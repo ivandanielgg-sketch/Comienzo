@@ -5545,7 +5545,12 @@ function renderActivitySummaryUsers(users) {
 
 // --- Tablero KPIs Fase 2: moneda, captura, config, graficas, exportacion ---
 let kpiChartInstances = {};
-let kpiReauthPromise = null;
+/** @type {{ promise: Promise<boolean>, resolve: (value: boolean) => void } | null} */
+let kpiReauthDeferred = null;
+
+function clearKpiReauthDeferred() {
+  kpiReauthDeferred = null;
+}
 
 function mountKpiModalToBody(modalId) {
   const modal = document.getElementById(modalId);
@@ -5605,12 +5610,12 @@ function closeKpiReauthModal() {
   const modal = document.getElementById('kpi-reauth-modal');
   if (modal) modal.classList.add('hidden');
   resetKpiReauthModalUi();
-  if (kpiReauthPromise && kpiReauthPromise._resolve) {
-    const r = kpiReauthPromise._resolve;
-    kpiReauthPromise = null;
+  if (kpiReauthDeferred && kpiReauthDeferred.resolve) {
+    const r = kpiReauthDeferred.resolve;
+    clearKpiReauthDeferred();
     return r;
   }
-  kpiReauthPromise = null;
+  clearKpiReauthDeferred();
   return null;
 }
 
@@ -5628,7 +5633,7 @@ function setupKpiReauthFormOnce() {
     const input = document.getElementById('kpi-reauth-password');
     const msg = document.getElementById('kpi-reauth-message');
     const submitBtn = document.getElementById('kpi-reauth-submit');
-    if (!input || !kpiReauthPromise || !kpiReauthPromise._resolve) return;
+    if (!input || !kpiReauthDeferred || !kpiReauthDeferred.resolve) return;
     msg.textContent = '';
     if (submitBtn) submitBtn.disabled = true;
     try {
@@ -5639,7 +5644,7 @@ function setupKpiReauthFormOnce() {
       if (result && result.success === false) {
         throw new Error(result.message || 'Contraseña incorrecta o acceso no autorizado.');
       }
-      const resolve = kpiReauthPromise._resolve;
+      const resolve = kpiReauthDeferred.resolve;
       input.value = '';
       closeKpiReauthModal();
       resolve(true);
@@ -5659,12 +5664,13 @@ async function ensureKpiReauth() {
   } catch (err) {
     console.error('KPI reauth status error:', err.message);
   }
-  if (kpiReauthPromise) return kpiReauthPromise;
-  kpiReauthPromise = new Promise(function(resolve) {
+  if (kpiReauthDeferred) return kpiReauthDeferred.promise;
+  const deferred = {};
+  deferred.promise = new Promise(function(resolve) {
+    deferred.resolve = resolve;
     const modal = mountKpiModalToBody('kpi-reauth-modal');
-    kpiReauthPromise._resolve = resolve;
     if (!modal) {
-      kpiReauthPromise = null;
+      clearKpiReauthDeferred();
       resolve(false);
       return;
     }
@@ -5673,7 +5679,8 @@ async function ensureKpiReauth() {
     modal.classList.remove('hidden');
     document.getElementById('kpi-reauth-password')?.focus();
   });
-  return kpiReauthPromise;
+  kpiReauthDeferred = deferred;
+  return deferred.promise;
 }
 
 function destroyKpiCharts() {
@@ -5963,27 +5970,59 @@ async function openKpiConfigModal() {
 }
 
 function renderKpiConfigEmployees(config) {
-  const tbody = document.getElementById('kpi-config-employees-table');
+  renderKpiConfigEmployeeTable(
+    'kpi-config-vendedores-table',
+    config.vendedores || config.employees || [],
+    'Ventas',
+    true,
+  );
+  renderKpiConfigEmployeeTable(
+    'kpi-config-tecnicos-table',
+    config.tecnicos || [],
+    'Técnico',
+    false,
+  );
+}
+
+function renderKpiConfigEmployeeTable(tbodyId, employees, defaultArea, showVacations) {
+  const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
-  const areas = config.allowed_areas || ['Ventas', 'Técnico', 'Sin asignar'];
-  tbody.innerHTML = (config.employees || []).map(function(e) {
-    const opts = areas.map(function(a) {
-      return '<option value="' + escapeHtml(a) + '"' + (e.kpi_area === a ? ' selected' : '') + '>' + escapeHtml(a) + '</option>';
-    }).join('');
-    return '<tr data-id="' + e.employee_id + '"><td>' + escapeHtml(e.full_name) + '</td><td>' + escapeHtml(e.position || '') + '</td>' +
-      '<td><select class="kpi-emp-area">' + opts + '</select></td>' +
-      '<td><input type="checkbox" class="kpi-emp-eligible"' + (e.kpi_eligible ? ' checked' : '') + ' /></td>' +
-      '<td>' + (e.user_id ? 'Vinculado' : '—') + '</td>' +
-      '<td><button type="button" class="secondary kpi-emp-save">Guardar</button></td></tr>';
+  if (!employees.length) {
+    const cols = showVacations ? 4 : 3;
+    tbody.innerHTML = '<tr><td colspan="' + cols + '" class="muted">No hay empleados para mostrar.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = employees.map(function(e) {
+    const vacCell = showVacations
+      ? '<td>' + (e.has_vacation_requests ? 'Sí' : 'No') + '</td>'
+      : '';
+    return '<tr data-id="' + e.employee_id + '" data-area="' + escapeHtml(defaultArea) + '">' +
+      '<td>' + escapeHtml(e.full_name) + '</td>' +
+      '<td>' + escapeHtml(e.position || '') + '</td>' +
+      vacCell +
+      '<td><label style="display:flex;align-items:center;gap:6px;margin:0;">' +
+      '<input type="checkbox" class="kpi-emp-eligible"' + (e.kpi_eligible ? ' checked' : '') + ' />' +
+      '<span class="muted">Activo</span></label></td></tr>';
   }).join('');
-  tbody.querySelectorAll('.kpi-emp-save').forEach(function(btn) {
-    btn.addEventListener('click', async function() {
-      const tr = btn.closest('tr');
+  tbody.querySelectorAll('.kpi-emp-eligible').forEach(function(chk) {
+    chk.addEventListener('change', async function() {
+      const tr = chk.closest('tr');
       const id = tr.dataset.id;
-      const area = tr.querySelector('.kpi-emp-area').value;
-      const eligible = tr.querySelector('.kpi-emp-eligible').checked;
-      await api('/api/kpis/employee-config/' + id, { method: 'PUT', body: { kpi_area: area, kpi_eligible: eligible } });
-      await loadKpiDashboard();
+      const area = tr.dataset.area;
+      const eligible = chk.checked;
+      chk.disabled = true;
+      try {
+        await api('/api/kpis/employee-config/' + id, {
+          method: 'PUT',
+          body: { kpi_area: eligible ? area : 'Sin asignar', kpi_eligible: eligible },
+        });
+        await loadKpiDashboard();
+      } catch (err) {
+        chk.checked = !eligible;
+        alert(err.message || 'No se pudo guardar la asignacion.');
+      } finally {
+        chk.disabled = false;
+      }
     });
   });
 }
@@ -6005,7 +6044,10 @@ function renderKpiConfigFormulas(formulas) {
 
 function fillKpiSettingsForm(s) {
   if (!s) return;
-  const set = function(id, v) { const el = document.getElementById(id); if (el) el.value = v; };
+  const set = function(id, v) {
+    const el = document.getElementById(id);
+    if (el && v != null && v !== '') el.value = v;
+  };
   set('kpi-set-margin-green', s.margin_green_percent);
   set('kpi-set-margin-yellow', s.margin_yellow_percent);
   set('kpi-set-margin-red', s.margin_red_percent);

@@ -369,7 +369,22 @@ function applyFilters(projects, filters) {
 }
 
 
+function ensureKpiSettingsRow(db) {
+  const row = db.prepare('SELECT id FROM kpi_settings WHERE id = 1').get();
+  if (row) return;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO kpi_settings (
+      id, margin_green_threshold, margin_yellow_threshold, margin_red_threshold,
+      receivable_bucket1_days, receivable_bucket2_days, receivable_bucket3_days,
+      receivable_critical_days, report_missing_critical_days, require_manual_quote_capture,
+      created_at, updated_at
+    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(MARGIN_TARGET, MARGIN_MIN, 0.20, 30, 60, 90, 120, 7, 1, now, now);
+}
+
 function loadKpiSettings(db) {
+  ensureKpiSettingsRow(db);
   const row = db.prepare('SELECT * FROM kpi_settings WHERE id = 1').get();
   if (!row) {
     return {
@@ -388,19 +403,22 @@ function loadKpiSettings(db) {
 }
 
 function settingsToApi(settings) {
+  const marginGreen = Number(settings.margin_green_threshold);
+  const marginYellow = Number(settings.margin_yellow_threshold);
+  const marginRed = Number(settings.margin_red_threshold);
   return {
-    margin_green_percent: roundMoney((settings.margin_green_threshold || MARGIN_TARGET) * 100),
-    margin_yellow_percent: roundMoney((settings.margin_yellow_threshold || MARGIN_MIN) * 100),
-    margin_red_percent: roundMoney((settings.margin_red_threshold || 0.20) * 100),
-    receivable_bucket1_days: settings.receivable_bucket1_days,
-    receivable_bucket2_days: settings.receivable_bucket2_days,
-    receivable_bucket3_days: settings.receivable_bucket3_days,
-    receivable_critical_days: settings.receivable_critical_days,
-    report_missing_critical_days: settings.report_missing_critical_days,
-    require_manual_quote_capture: !!settings.require_manual_quote_capture,
-    margin_green_threshold: settings.margin_green_threshold,
-    margin_yellow_threshold: settings.margin_yellow_threshold,
-    margin_red_threshold: settings.margin_red_threshold,
+    margin_green_percent: roundMoney((Number.isFinite(marginGreen) ? marginGreen : MARGIN_TARGET) * 100),
+    margin_yellow_percent: roundMoney((Number.isFinite(marginYellow) ? marginYellow : MARGIN_MIN) * 100),
+    margin_red_percent: roundMoney((Number.isFinite(marginRed) ? marginRed : 0.20) * 100),
+    receivable_bucket1_days: Number(settings.receivable_bucket1_days) || 30,
+    receivable_bucket2_days: Number(settings.receivable_bucket2_days) || 60,
+    receivable_bucket3_days: Number(settings.receivable_bucket3_days) || 90,
+    receivable_critical_days: Number(settings.receivable_critical_days) || 120,
+    report_missing_critical_days: Number(settings.report_missing_critical_days) || 7,
+    require_manual_quote_capture: Number(settings.require_manual_quote_capture) !== 0,
+    margin_green_threshold: Number.isFinite(marginGreen) ? marginGreen : MARGIN_TARGET,
+    margin_yellow_threshold: Number.isFinite(marginYellow) ? marginYellow : MARGIN_MIN,
+    margin_red_threshold: Number.isFinite(marginRed) ? marginRed : 0.20,
   };
 }
 
