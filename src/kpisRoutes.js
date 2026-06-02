@@ -20,6 +20,47 @@ const {
 const KPI_REAUTH_MS = 15 * 60 * 1000;
 const KPI_AREAS_PHASE1 = ['Ventas', 'Técnico', 'Sin asignar'];
 
+const KPI_EMPLOYEE_SELECT = `
+  SELECT e.id, e.full_name, e.position, e.active, e.department, e.kpi_area, e.kpi_eligible, e.user_id,
+         e.kpi_configured_at, e.kpi_configured_by_name,
+         EXISTS (SELECT 1 FROM vacation_requests vr WHERE vr.employee_id = e.id) AS has_vacation_requests
+  FROM employees e
+`;
+
+const KPI_VENDEDOR_WHERE = `
+  e.active = 1 AND (
+    EXISTS (SELECT 1 FROM vacation_requests vr WHERE vr.employee_id = e.id)
+    OR LOWER(COALESCE(e.position, '')) LIKE '%vended%'
+    OR LOWER(COALESCE(e.position, '')) LIKE '%ventas%'
+    OR e.kpi_area = 'Ventas'
+    OR e.primary_department = 'Ventas'
+  )
+`;
+
+const KPI_TECNICO_WHERE = `
+  e.active = 1 AND (
+    LOWER(COALESCE(e.position, '')) LIKE '%técnico%'
+    OR LOWER(COALESCE(e.position, '')) LIKE '%tecnico%'
+    OR e.kpi_area = 'Técnico'
+    OR e.primary_department = 'Técnico'
+  )
+`;
+
+function mapKpiEmployeeConfigRow(r) {
+  return {
+    employee_id: r.id,
+    full_name: r.full_name,
+    position: r.position,
+    active: !!r.active,
+    kpi_area: r.kpi_area || 'Sin asignar',
+    kpi_eligible: r.kpi_eligible !== 0,
+    user_id: r.user_id,
+    has_vacation_requests: !!r.has_vacation_requests,
+    kpi_configured_at: r.kpi_configured_at,
+    kpi_configured_by_name: r.kpi_configured_by_name,
+  };
+}
+
 function requireAdminOnly(db, moduleName, deniedMessage) {
   return (req, res, next) => {
     if (req.session.role !== 'admin') {
@@ -393,24 +434,13 @@ function registerKpiRoutes(app, db, { requireAuth }) {
   });
 
   app.get('/api/kpis/employee-config', requireAuth, requireKpiAdmin, requireKpiReauth(db), (req, res) => {
-    const rows = db.prepare(`
-      SELECT id, full_name, position, active, department, kpi_area, kpi_eligible, user_id,
-             kpi_configured_at, kpi_configured_by_name
-      FROM employees WHERE active = 1 ORDER BY full_name
-    `).all();
+    const vendedores = db.prepare(`${KPI_EMPLOYEE_SELECT} WHERE ${KPI_VENDEDOR_WHERE} ORDER BY e.full_name`).all();
+    const tecnicos = db.prepare(`${KPI_EMPLOYEE_SELECT} WHERE ${KPI_TECNICO_WHERE} ORDER BY e.full_name`).all();
     logAuditEvent(db, { req, action: 'view', module: 'kpis', entityType: 'kpi_employee_config', entityLabel: 'Config empleados KPI' });
     res.json({
-      employees: rows.map((r) => ({
-        employee_id: r.id,
-        full_name: r.full_name,
-        position: r.position,
-        active: !!r.active,
-        kpi_area: r.kpi_area || 'Sin asignar',
-        kpi_eligible: r.kpi_eligible !== 0,
-        user_id: r.user_id,
-        kpi_configured_at: r.kpi_configured_at,
-        kpi_configured_by_name: r.kpi_configured_by_name,
-      })),
+      vendedores: vendedores.map(mapKpiEmployeeConfigRow),
+      tecnicos: tecnicos.map(mapKpiEmployeeConfigRow),
+      employees: [...vendedores, ...tecnicos].map(mapKpiEmployeeConfigRow),
       allowed_areas: KPI_AREAS_PHASE1,
     });
   });

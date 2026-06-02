@@ -471,11 +471,56 @@ const { formatCurrencyMXN, buildKpiExcelWorkbook } = require('../src/kpisExport'
 const {
   aggregateManualQuotesForPeriod,
   loadKpiSettings,
+  settingsToApi,
   getFormulaDefinitions,
   NOT_CAPTURED,
 } = require('../src/kpis');
 
 describe('KPIs Fase 2', () => {
+  it('loadKpiSettings seeds defaults when row missing', () => {
+    const Database = require('better-sqlite3');
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE kpi_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        margin_green_threshold REAL NOT NULL DEFAULT 0.40,
+        margin_yellow_threshold REAL NOT NULL DEFAULT 0.30,
+        margin_red_threshold REAL NOT NULL DEFAULT 0.20,
+        receivable_bucket1_days INTEGER NOT NULL DEFAULT 30,
+        receivable_bucket2_days INTEGER NOT NULL DEFAULT 60,
+        receivable_bucket3_days INTEGER NOT NULL DEFAULT 90,
+        receivable_critical_days INTEGER NOT NULL DEFAULT 120,
+        report_missing_critical_days INTEGER NOT NULL DEFAULT 7,
+        require_manual_quote_capture INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by_user_id INTEGER,
+        updated_by_name TEXT
+      );
+    `);
+    const settings = loadKpiSettings({ prepare: (sql) => db.prepare(sql) });
+    const api = settingsToApi(settings);
+    assert.equal(api.margin_green_percent, 40);
+    assert.equal(api.receivable_bucket1_days, 30);
+    assert.equal(api.require_manual_quote_capture, true);
+  });
+
+  it('settingsToApi coerces PostgreSQL string numerics', () => {
+    const api = settingsToApi({
+      margin_green_threshold: '0.40',
+      margin_yellow_threshold: '0.30',
+      margin_red_threshold: '0.20',
+      receivable_bucket1_days: '30',
+      receivable_bucket2_days: '60',
+      receivable_bucket3_days: '90',
+      receivable_critical_days: '120',
+      report_missing_critical_days: '7',
+      require_manual_quote_capture: 1,
+    });
+    assert.equal(api.margin_green_percent, 40);
+    assert.equal(api.receivable_bucket3_days, 90);
+  });
+
   it('formatCurrencyMXN formats 1425 as $1,425.00', () => {
     assert.equal(formatCurrencyMXN(1425), '$1,425.00');
   });
