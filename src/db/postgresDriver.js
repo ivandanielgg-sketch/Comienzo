@@ -77,6 +77,25 @@ function runPostgresSeeds(database) {
   seedRolePermissions(database);
 }
 
+function resolvePoolSsl(connectionString) {
+  if (process.env.DATABASE_SSL === 'false') {
+    return undefined;
+  }
+  if (process.env.DATABASE_SSL === 'true') {
+    return { rejectUnauthorized: false };
+  }
+  const lower = String(connectionString || '').toLowerCase();
+  if (
+    lower.includes('sslmode=require')
+    || lower.includes('ssl=true')
+    || lower.includes('.render.com')
+    || lower.includes('render.com')
+  ) {
+    return { rejectUnauthorized: false };
+  }
+  return undefined;
+}
+
 function createPostgresDb(connectionString) {
   if (!connectionString) {
     throw new Error('DATABASE_URL es requerida para PostgreSQL.');
@@ -84,7 +103,7 @@ function createPostgresDb(connectionString) {
   if (!adapterInstance) {
     pool = new Pool({
       connectionString,
-      ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+      ssl: resolvePoolSsl(connectionString),
       max: Number(process.env.PGPOOL_MAX || 10),
       idleTimeoutMillis: Number(process.env.PGPOOL_IDLE_MS || 30000),
       connectionTimeoutMillis: Number(process.env.PGPOOL_CONNECT_MS || 10000),
