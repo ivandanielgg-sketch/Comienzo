@@ -1,12 +1,7 @@
 'use strict';
 
-function isPostgres() {
-  return Boolean(process.env.DATABASE_URL && String(process.env.DATABASE_URL).trim());
-}
+const { isPostgres } = require('./mode');
 
-/**
- * Convierte placeholders estilo SQLite (?) a PostgreSQL ($1, $2, ...).
- */
 function toPositionalParams(sql) {
   if (!isPostgres()) return sql;
   let index = 0;
@@ -16,9 +11,6 @@ function toPositionalParams(sql) {
   });
 }
 
-/**
- * Filtro por año/mes sobre columna fecha TEXT (ISO).
- */
 function yearFilter(column, yearParamPlaceholder = '?') {
   if (isPostgres()) {
     return `AND EXTRACT(YEAR FROM ${column}::timestamp) = ${yearParamPlaceholder}`;
@@ -40,9 +32,6 @@ function distinctYearSelect(column, alias = 'year') {
   return `SELECT DISTINCT CAST(strftime('%Y', ${column}) AS INTEGER) AS ${alias}`;
 }
 
-/**
- * INSERT con id autogenerado (PostgreSQL requiere RETURNING para lastInsertRowid).
- */
 function appendReturningId(sql) {
   if (!isPostgres()) return sql;
   const trimmed = sql.trim();

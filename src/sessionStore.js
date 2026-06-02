@@ -1,13 +1,16 @@
-const { isPostgres } = require('./db/dialect');
+const { isPostgres } = require('./db/mode');
+const { toPositionalParams } = require('./db/dialect');
 
 function createSqliteSessionStore(session, database, { ttlMs }) {
   const Store = session.Store;
   const pg = isPostgres();
 
   const setSql = pg
-    ? `INSERT INTO sessions (sid, sess, expires)
-       VALUES ($1, $2, $3)
-       ON CONFLICT(sid) DO UPDATE SET sess = EXCLUDED.sess, expires = EXCLUDED.expires`
+    ? toPositionalParams(
+        `INSERT INTO sessions (sid, sess, expires)
+         VALUES (?, ?, ?)
+         ON CONFLICT(sid) DO UPDATE SET sess = EXCLUDED.sess, expires = EXCLUDED.expires`,
+      )
     : `INSERT INTO sessions (sid, sess, expires)
          VALUES (@sid, @sess, @expires)
          ON CONFLICT(sid) DO UPDATE SET sess = excluded.sess, expires = excluded.expires`;

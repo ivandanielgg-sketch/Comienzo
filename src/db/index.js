@@ -1,21 +1,31 @@
 'use strict';
 
-const dialect = require('./dialect');
+const { resolveDbMode, isPostgres } = require('./mode');
 const { createSqliteDb } = require('./sqliteDriver');
 const { createPostgresDb } = require('./postgresDriver');
 
 let db;
+let resolvedMode;
+
+function getDriverLabel() {
+  const mode = resolvedMode || resolveDbMode();
+  return mode === 'postgres' ? 'postgresql (better-sqlite3 adapter)' : 'sqlite (better-sqlite3)';
+}
 
 /**
- * Conexión principal. Sin DATABASE_URL usa SQLite (comportamiento actual).
- * Con DATABASE_URL usa PostgreSQL (Fase 2).
+ * Conexion principal — API compatible con better-sqlite3.
  */
 function getDb() {
   if (!db) {
-    if (dialect.isPostgres()) {
+    resolvedMode = resolveDbMode();
+    if (resolvedMode === 'postgres') {
       db = createPostgresDb(process.env.DATABASE_URL);
+      console.info('[db] PostgreSQL activo via adaptador better-sqlite3 (DATABASE_URL).');
     } else {
       db = createSqliteDb();
+      if (process.env.NODE_ENV === 'production') {
+        console.info('[db] SQLite activo (archivo en DB_PATH). Sin riesgo de switch accidental a PG.');
+      }
     }
   }
   return db;
@@ -23,5 +33,7 @@ function getDb() {
 
 module.exports = {
   getDb,
-  isPostgres: dialect.isPostgres,
+  isPostgres,
+  resolveDbMode,
+  getDriverLabel,
 };
