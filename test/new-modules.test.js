@@ -98,11 +98,30 @@ describe('New modules integration', () => {
   });
 
   describe('Commissions - Agents', () => {
+    it('GET /api/commissions/active-employees lists vacation actives', async () => {
+      const res = await request('GET', '/api/commissions/active-employees');
+      assert.strictEqual(res.status, 200);
+      assert.ok(Array.isArray(res.body));
+      assert.ok(res.body.some((e) => e.active === 1));
+    });
+
     it('POST /api/commissions/agents creates agent', async () => {
       const res = await request('POST', '/api/commissions/agents', { name: 'Ana Garcia', start_date: '2025-06-01' });
       assert.strictEqual(res.status, 201);
       assert.strictEqual(res.body.name, 'Ana Garcia');
       assert.strictEqual(res.body.active, 1);
+    });
+
+    it('POST /api/commissions/agents links active employee', async () => {
+      const emps = await request('GET', '/api/commissions/active-employees');
+      const agents = await request('GET', '/api/commissions/agents');
+      const used = new Set((agents.body || []).map((a) => a.employee_id).filter(Boolean));
+      const employee = emps.body.find((e) => !used.has(e.id));
+      assert.ok(employee, 'Se requiere un empleado activo sin vendedora registrada.');
+      const res = await request('POST', '/api/commissions/agents', { employee_id: employee.id, start_date: '2025-06-01' });
+      assert.strictEqual(res.status, 201);
+      assert.strictEqual(res.body.employee_id, employee.id);
+      assert.ok(res.body.name.length > 0);
     });
 
     it('GET /api/commissions/agents lists agents', async () => {
@@ -140,12 +159,25 @@ describe('New modules integration', () => {
       await request('DELETE', `/api/projects/${projectId}`, { password: 'admin123' });
     });
 
-    it('available projects lists closed project', async () => {
+    it('available projects lists project without requiring closed_at', async () => {
       const res = await request('GET', '/api/commissions/available-projects');
       assert.strictEqual(res.status, 200);
       const p = res.body.find(x => x.quote_number === `COMM-${suffix}-001`);
       assert.ok(p, 'Project should be available');
       assert.strictEqual(p.total_sale_mxn, 200000);
+      assert.ok('final_margin' in p);
+    });
+
+    it('open project appears in available list', async () => {
+      const openRes = await request('POST', '/api/projects', {
+        quote_number: `COMM-${suffix}-OPEN`, order_number: `ORD-${suffix}-OPEN`, purchase_order_not_applicable: true,
+        tecnico_id: 1, vendedor_id: 2, client_name: 'Cliente Abierto', project_description: 'Test',
+        fecha_vencimiento: '2026-12-01', expected_margin: 0.3, total_invoiced: 10000, progress_percent: 50,
+        promised_delivery_date: '2026-12-01', status: 'En Proceso', risk: 'Bajo',
+      });
+      const res = await request('GET', '/api/commissions/available-projects');
+      assert.ok(res.body.find((x) => x.quote_number === `COMM-${suffix}-OPEN`));
+      await request('DELETE', `/api/projects/${openRes.body.id}`, { password: 'admin123' });
     });
 
     it('assign commission on gross profit', async () => {
@@ -230,6 +262,30 @@ describe('New modules integration', () => {
       assert.strictEqual(res.status, 200);
       assert.ok(res.body.total_paid_mxn >= 5000);
       assert.ok(res.body.active_agents >= 1);
+    });
+
+    it('active commissions list hides pagada', async () => {
+      const res = await request('GET', '/api/commissions');
+      assert.strictEqual(res.status, 200);
+      assert.ok(!res.body.some((c) => c.status === 'pagada'));
+    });
+
+    it('archived search requires filter', async () => {
+      const res = await request('GET', '/api/commissions?paid=1');
+      assert.strictEqual(res.status, 400);
+    });
+
+    it('balance adjustment affects summary', async () => {
+      const res = await request('POST', '/api/commissions/balance-adjustments', {
+        sales_agent_id: 1,
+        adjustment_type: 'saldo_inicial',
+        amount_mxn: 1500,
+        description: 'Saldo arrastre',
+        reference: 'REF-001',
+      });
+      assert.strictEqual(res.status, 201);
+      const summary = await request('GET', '/api/commissions/summary');
+      assert.ok(summary.body.total_adjustments_mxn >= 1500);
     });
   });
 

@@ -933,6 +933,7 @@ function migrate(database) {
     CREATE TABLE IF NOT EXISTS sales_commission_agents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      employee_id INTEGER,
       related_user_id INTEGER,
       active INTEGER NOT NULL DEFAULT 1,
       start_date TEXT NOT NULL,
@@ -959,6 +960,7 @@ function migrate(database) {
       total_sale_mxn_snapshot REAL,
       gross_profit_mxn_snapshot REAL,
       net_profit_mxn_snapshot REAL,
+      final_margin_snapshot REAL,
       commission_percentage REAL NOT NULL DEFAULT 0,
       commission_amount_mxn REAL NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'parcial', 'pagada', 'no_aplica', 'cancelada')),
@@ -1000,6 +1002,25 @@ function migrate(database) {
       delete_reason TEXT,
       FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
     );
+    CREATE TABLE IF NOT EXISTS sales_commission_balance_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sales_agent_id INTEGER NOT NULL,
+      adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('saldo_inicial', 'extraordinario')),
+      amount_mxn REAL NOT NULL,
+      description TEXT NOT NULL,
+      reference TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT,
+      FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_commission_agents_employee_active
+      ON sales_commission_agents (employee_id) WHERE deleted_at IS NULL AND employee_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS user_session_activities (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -1033,6 +1054,29 @@ function migrate(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+  `);
+  ensureColumn(database, 'sales_commission_agents', 'employee_id', 'INTEGER REFERENCES employees(id)');
+  ensureColumn(database, 'sales_commissions', 'final_margin_snapshot', 'REAL');
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS sales_commission_balance_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sales_agent_id INTEGER NOT NULL,
+      adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('saldo_inicial', 'extraordinario')),
+      amount_mxn REAL NOT NULL,
+      description TEXT NOT NULL,
+      reference TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT,
+      FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_commission_agents_employee_active
+      ON sales_commission_agents (employee_id) WHERE deleted_at IS NULL AND employee_id IS NOT NULL;
   `);
   seedRolePermissions(database);
   seedDefaultEmployees(database);

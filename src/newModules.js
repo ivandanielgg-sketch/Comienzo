@@ -2,7 +2,36 @@
 
 const { createdByFields, updatedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { MODULES, isAdminOnlyModule } = require('./permissions');
-const { roundMoney } = require('./calculations');
+const { roundMoney, buildProjectTotals } = require('./calculations');
+const { getEmpleadosActivos } = require('./vacations');
+const { loadExchangeRates, mapProjectForCommission } = require('./commissions');
+
+function commissionProjectMetrics(db, project) {
+  const rates = loadExchangeRates(db);
+  const payments = db.prepare('SELECT amount, currency FROM project_payments WHERE project_id = ?').all(project.id);
+  const costs = db.prepare('SELECT amount, currency FROM project_costs WHERE project_id = ?').all(project.id);
+  const totals = buildProjectTotals(project, payments, costs, rates);
+  const totalSaleMxn = totals.total_invoiced_mxn;
+  const totalCostsMxn = totals.spent;
+  const grossProfitMxn = roundMoney(totalSaleMxn - totalCostsMxn);
+  return {
+    rates,
+    totalSaleMxn,
+    totalCostsMxn,
+    grossProfitMxn,
+    netProfitMxn: grossProfitMxn,
+    finalMargin: totals.final_margin,
+  };
+}
+
+function mapCommissionRow(row) {
+  const finalMargin = row.final_margin_snapshot;
+  const marginPercent =
+    finalMargin != null ? roundMoney(Number(finalMargin) * 100) : row.total_sale_mxn_snapshot > 0
+      ? roundMoney((row.gross_profit_mxn_snapshot / row.total_sale_mxn_snapshot) * 100)
+      : null;
+  return { ...row, final_margin: finalMargin, final_margin_percent: marginPercent };
+}
 
 /** Agregado por usuario — compatible SQLite y PostgreSQL (PG exige agregados fuera de GROUP BY). */
 const SESSION_USER_AGGREGATE_SQL = `
@@ -24,6 +53,13 @@ function logActivityMonitorError(route, error) {
 }
 
 function registerNewModules(app, db, { requireAuth, requirePermission, badRequest, requiredText, optionalText, numberValue, enumValue, currencyValue, booleanValue, trim }) {
+  function getActiveEmployeeOrFail(employeeId) {
+    const employee = db
+      .prepare('SELECT id, full_name, hire_date, active FROM employees WHERE id = ? AND active = 1')
+      .get(employeeId);
+    if (!employee) throw badRequest('Empleado activo no encontrado en Vacaciones.');
+    return employee;
+  }
 
   // ===================== ROLE PERMISSIONS CONFIGURATION =====================
 
@@ -63,32 +99,71 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
 
   // ===================== COMMISSIONS MODULE =====================
 
+  app.get('/api/commissions/active-employees', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
+    try {
+      res.json(getEmpleadosActivos(db));
+    } catch (error) { next(error); }
+  });
+
   app.get('/api/commissions/summary', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
     try {
       const totalEarned = db.prepare("SELECT COALESCE(SUM(commission_amount_mxn), 0) as total FROM sales_commissions WHERE deleted_at IS NULL AND status NOT IN ('no_aplica', 'cancelada')").get().total;
+      const totalAdjustments = db.prepare('SELECT COALESCE(SUM(amount_mxn), 0) as total FROM sales_commission_balance_adjustments WHERE deleted_at IS NULL').get().total;
       const totalPaid = db.prepare("SELECT COALESCE(SUM(amount_mxn), 0) as total FROM sales_commission_payments WHERE deleted_at IS NULL").get().total;
       const activeAgents = db.prepare("SELECT COUNT(*) as cnt FROM sales_commission_agents WHERE active = 1 AND deleted_at IS NULL").get().cnt;
-      const pendingProjects = db.prepare("SELECT COUNT(*) as cnt FROM projects WHERE closed_at IS NOT NULL AND deleted_at IS NULL AND id NOT IN (SELECT project_id FROM sales_commissions WHERE deleted_at IS NULL AND status != 'cancelada')").get().cnt;
-      const agentSummaries = db.prepare("SELECT sca.id, sca.name, sca.active, COALESCE((SELECT SUM(sc.commission_amount_mxn) FROM sales_commissions sc WHERE sc.sales_agent_id = sca.id AND sc.deleted_at IS NULL AND sc.status NOT IN ('no_aplica', 'cancelada')), 0) as earned_mxn, COALESCE((SELECT SUM(scp.amount_mxn) FROM sales_commission_payments scp WHERE scp.sales_agent_id = sca.id AND scp.deleted_at IS NULL), 0) as paid_mxn, (SELECT COUNT(*) FROM sales_commissions sc2 WHERE sc2.sales_agent_id = sca.id AND sc2.deleted_at IS NULL AND sc2.status NOT IN ('no_aplica', 'cancelada')) as projects_count FROM sales_commission_agents sca WHERE sca.deleted_at IS NULL ORDER BY sca.name").all();
-      res.json({ total_earned_mxn: roundMoney(totalEarned), total_paid_mxn: roundMoney(totalPaid), pending_balance_mxn: roundMoney(totalEarned - totalPaid), active_agents: activeAgents, pending_projects: pendingProjects, agents: agentSummaries.map(a => ({ ...a, pending_mxn: roundMoney(a.earned_mxn - a.paid_mxn) })) });
+      const pendingProjects = db.prepare("SELECT COUNT(*) as cnt FROM projects WHERE deleted_at IS NULL AND id NOT IN (SELECT project_id FROM sales_commissions WHERE deleted_at IS NULL AND status != 'cancelada')").get().cnt;
+      const agentSummaries = db.prepare(`SELECT sca.id, sca.name, sca.employee_id, sca.active,
+        COALESCE((SELECT SUM(sc.commission_amount_mxn) FROM sales_commissions sc WHERE sc.sales_agent_id = sca.id AND sc.deleted_at IS NULL AND sc.status NOT IN ('no_aplica', 'cancelada')), 0) as earned_mxn,
+        COALESCE((SELECT SUM(scp.amount_mxn) FROM sales_commission_payments scp WHERE scp.sales_agent_id = sca.id AND scp.deleted_at IS NULL), 0) as paid_mxn,
+        COALESCE((SELECT SUM(scba.amount_mxn) FROM sales_commission_balance_adjustments scba WHERE scba.sales_agent_id = sca.id AND scba.deleted_at IS NULL), 0) as adjustments_mxn,
+        (SELECT COUNT(*) FROM sales_commissions sc2 WHERE sc2.sales_agent_id = sca.id AND sc2.deleted_at IS NULL AND sc2.status NOT IN ('no_aplica', 'cancelada')) as projects_count
+        FROM sales_commission_agents sca WHERE sca.deleted_at IS NULL ORDER BY sca.name`).all();
+      const totalBalance = roundMoney(totalEarned + totalAdjustments - totalPaid);
+      res.json({
+        total_earned_mxn: roundMoney(totalEarned),
+        total_adjustments_mxn: roundMoney(totalAdjustments),
+        total_paid_mxn: roundMoney(totalPaid),
+        pending_balance_mxn: totalBalance,
+        active_agents: activeAgents,
+        pending_projects: pendingProjects,
+        agents: agentSummaries.map((a) => ({
+          ...a,
+          pending_mxn: roundMoney(a.earned_mxn + a.adjustments_mxn - a.paid_mxn),
+        })),
+      });
     } catch (error) { next(error); }
   });
 
   app.get('/api/commissions/agents', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
     try {
-      const agents = db.prepare('SELECT * FROM sales_commission_agents WHERE deleted_at IS NULL ORDER BY name').all();
+      const agents = db.prepare(`SELECT sca.*, e.full_name as employee_name, e.employee_number
+        FROM sales_commission_agents sca
+        LEFT JOIN employees e ON e.id = sca.employee_id
+        WHERE sca.deleted_at IS NULL
+        ORDER BY sca.name`).all();
       res.json(agents);
     } catch (error) { next(error); }
   });
 
   app.post('/api/commissions/agents', requireAuth, requirePermission('commissions', 'create'), (req, res, next) => {
     try {
-      const name = requiredText(req.body, 'name', 'Nombre de vendedora');
       const startDate = requiredText(req.body, 'start_date', 'Fecha de inicio');
       const relatedUserId = req.body.related_user_id || null;
       const notes = optionalText(req.body, 'notes');
+      let name;
+      let employeeId = null;
+      if (req.body.employee_id != null && req.body.employee_id !== '') {
+        employeeId = numberValue(req.body, 'employee_id', 'Empleado', { min: 1 });
+        const employee = getActiveEmployeeOrFail(employeeId);
+        const duplicate = db.prepare('SELECT id FROM sales_commission_agents WHERE employee_id = ? AND deleted_at IS NULL').get(employeeId);
+        if (duplicate) throw badRequest('Este empleado ya esta registrado como vendedora.');
+        name = employee.full_name;
+      } else {
+        name = requiredText(req.body, 'name', 'Nombre de vendedora');
+      }
       const audit = createdByFields(req);
-      const result = db.prepare('INSERT INTO sales_commission_agents (name, related_user_id, active, start_date, notes, created_by_user_id, created_by_name, created_at, updated_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)').run(name, relatedUserId, startDate, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+      const result = db.prepare(`INSERT INTO sales_commission_agents (name, employee_id, related_user_id, active, start_date, notes, created_by_user_id, created_by_name, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`).run(name, employeeId, relatedUserId, startDate, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
       const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ?').get(result.lastInsertRowid);
       logAuditEvent(db, { req, action: 'create', module: 'commissions', entityType: 'sales_commission_agent', entityId: agent.id, entityLabel: name, after: agent });
       res.status(201).json(agent);
@@ -99,14 +174,24 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
     try {
       const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
       if (!agent) throw badRequest('Vendedora no encontrada.');
-      const name = requiredText(req.body, 'name', 'Nombre de vendedora');
       const active = booleanValue(req.body, 'active');
       const startDate = req.body.start_date || agent.start_date;
       const endDate = optionalText(req.body, 'end_date');
       const notes = optionalText(req.body, 'notes');
+      let name = agent.name;
+      let employeeId = agent.employee_id;
+      if (req.body.employee_id != null && req.body.employee_id !== '') {
+        employeeId = numberValue(req.body, 'employee_id', 'Empleado', { min: 1 });
+        const employee = getActiveEmployeeOrFail(employeeId);
+        const duplicate = db.prepare('SELECT id FROM sales_commission_agents WHERE employee_id = ? AND deleted_at IS NULL AND id != ?').get(employeeId, req.params.id);
+        if (duplicate) throw badRequest('Este empleado ya esta registrado como vendedora.');
+        name = employee.full_name;
+      } else if (req.body.name) {
+        name = requiredText(req.body, 'name', 'Nombre de vendedora');
+      }
       const audit = updatedByFields(req);
-      db.prepare('UPDATE sales_commission_agents SET name=?, related_user_id=?, active=?, start_date=?, end_date=?, notes=?, updated_by_user_id=?, updated_by_name=?, updated_at=? WHERE id=?')
-        .run(name, req.body.related_user_id || null, active, startDate, endDate, notes, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
+      db.prepare(`UPDATE sales_commission_agents SET name=?, employee_id=?, related_user_id=?, active=?, start_date=?, end_date=?, notes=?, updated_by_user_id=?, updated_by_name=?, updated_at=? WHERE id=?`)
+        .run(name, employeeId, req.body.related_user_id || null, active, startDate, endDate, notes, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id);
       const updated = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ?').get(req.params.id);
       logAuditEvent(db, { req, action: active ? 'update' : 'deactivate', module: 'commissions', entityType: 'sales_commission_agent', entityId: updated.id, entityLabel: name, before: agent, after: updated });
       res.json(updated);
@@ -115,24 +200,49 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
 
   app.get('/api/commissions/available-projects', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
     try {
-      const rates = {};
-      db.prepare('SELECT currency, rate_to_mxn FROM exchange_rates').all().forEach(r => { rates[r.currency] = r.rate_to_mxn; });
-      rates.MXN = 1;
-      const projects = db.prepare("SELECT p.* FROM projects p WHERE p.closed_at IS NOT NULL AND p.deleted_at IS NULL AND p.id NOT IN (SELECT sc.project_id FROM sales_commissions sc WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada') ORDER BY p.closed_at DESC").all();
-      const result = projects.map(p => {
-        const totalInvoicedMxn = roundMoney((p.total_invoiced || 0) * (rates[p.total_invoiced_currency] || 1));
-        const totalCostsMxn = roundMoney(db.prepare("SELECT COALESCE(SUM(amount * CASE currency WHEN 'USD' THEN ? WHEN 'EUR' THEN ? ELSE 1 END), 0) as t FROM project_costs WHERE project_id = ?").get(rates.USD || 17, rates.EUR || 19, p.id).t);
-        const grossProfitMxn = roundMoney(totalInvoicedMxn - totalCostsMxn);
-        return { id: p.id, quote_number: p.quote_number, order_number: p.order_number, client_name: p.client_name, project_description: p.project_description, closed_at: p.closed_at, seller: p.seller, total_sale_mxn: totalInvoicedMxn, total_costs_mxn: totalCostsMxn, gross_profit_mxn: grossProfitMxn, net_profit_mxn: grossProfitMxn, margin: totalInvoicedMxn > 0 ? roundMoney((grossProfitMxn / totalInvoicedMxn) * 100) : 0 };
-      });
-      res.json(result);
+      const rates = loadExchangeRates(db);
+      const projects = db.prepare(`SELECT p.* FROM projects p
+        WHERE p.deleted_at IS NULL
+          AND p.id NOT IN (SELECT sc.project_id FROM sales_commissions sc WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada')
+        ORDER BY p.id DESC`).all();
+      res.json(projects.map((p) => mapProjectForCommission(db, p, rates)));
     } catch (error) { next(error); }
   });
 
   app.get('/api/commissions', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
     try {
-      const commissions = db.prepare("SELECT sc.*, sca.name as agent_name, p.quote_number, p.client_name, p.order_number FROM sales_commissions sc JOIN sales_commission_agents sca ON sca.id = sc.sales_agent_id JOIN projects p ON p.id = sc.project_id WHERE sc.deleted_at IS NULL ORDER BY sc.assigned_at DESC").all();
-      res.json(commissions);
+      const paidSearch = req.query.paid === '1' || req.query.archived === '1';
+      if (paidSearch) {
+        const clientName = trim(req.query.client_name);
+        const quoteNumber = trim(req.query.quote_number);
+        const orderNumber = trim(req.query.order_number);
+        const dateFrom = trim(req.query.date_from);
+        const dateTo = trim(req.query.date_to);
+        if (!clientName && !quoteNumber && !orderNumber && !dateFrom && !dateTo) {
+          throw badRequest('Indique al menos un filtro (cliente, cotizacion, pedido o rango de fechas) para consultar comisiones pagadas.');
+        }
+        const conditions = ["sc.deleted_at IS NULL", "sc.status = 'pagada'"];
+        const params = [];
+        if (clientName) { conditions.push('p.client_name LIKE ?'); params.push(`%${clientName}%`); }
+        if (quoteNumber) { conditions.push('p.quote_number LIKE ?'); params.push(`%${quoteNumber}%`); }
+        if (orderNumber) { conditions.push('p.order_number LIKE ?'); params.push(`%${orderNumber}%`); }
+        if (dateFrom) { conditions.push('date(sc.updated_at) >= date(?)'); params.push(dateFrom); }
+        if (dateTo) { conditions.push('date(sc.updated_at) <= date(?)'); params.push(dateTo); }
+        const rows = db.prepare(`SELECT sc.*, sca.name as agent_name, p.quote_number, p.client_name, p.order_number
+          FROM sales_commissions sc
+          JOIN sales_commission_agents sca ON sca.id = sc.sales_agent_id
+          JOIN projects p ON p.id = sc.project_id
+          WHERE ${conditions.join(' AND ')}
+          ORDER BY sc.updated_at DESC`).all(...params);
+        return res.json(rows.map(mapCommissionRow));
+      }
+      const rows = db.prepare(`SELECT sc.*, sca.name as agent_name, p.quote_number, p.client_name, p.order_number
+        FROM sales_commissions sc
+        JOIN sales_commission_agents sca ON sca.id = sc.sales_agent_id
+        JOIN projects p ON p.id = sc.project_id
+        WHERE sc.deleted_at IS NULL AND sc.status IN ('pendiente', 'parcial', 'no_aplica')
+        ORDER BY sc.assigned_at DESC`).all();
+      res.json(rows.map(mapCommissionRow));
     } catch (error) { next(error); }
   });
 
@@ -143,18 +253,20 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       const baseType = enumValue(req.body, 'commission_calculation_base_type', 'Base de calculo', ['total_sale_mxn', 'gross_profit_mxn', 'net_profit_mxn', 'no_aplica']);
       const existing = db.prepare("SELECT id FROM sales_commissions WHERE project_id = ? AND deleted_at IS NULL AND status != 'cancelada'").get(projectId);
       if (existing) throw badRequest('Este proyecto ya tiene una comision activa asignada.');
-      const project = db.prepare('SELECT * FROM projects WHERE id = ? AND closed_at IS NOT NULL').get(projectId);
-      if (!project) throw badRequest('Proyecto no encontrado o no esta cerrado.');
-      const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ? AND deleted_at IS NULL').get(salesAgentId);
-      if (!agent) throw badRequest('Vendedora no encontrada.');
-      const rates = {};
-      db.prepare('SELECT currency, rate_to_mxn FROM exchange_rates').all().forEach(r => { rates[r.currency] = r.rate_to_mxn; });
-      rates.MXN = 1;
-      const totalSaleMxn = roundMoney((project.total_invoiced || 0) * (rates[project.total_invoiced_currency] || 1));
-      const totalCostsMxn = roundMoney(db.prepare("SELECT COALESCE(SUM(amount * CASE currency WHEN 'USD' THEN ? WHEN 'EUR' THEN ? ELSE 1 END), 0) as t FROM project_costs WHERE project_id = ?").get(rates.USD || 17, rates.EUR || 19, projectId).t);
-      const grossProfitMxn = roundMoney(totalSaleMxn - totalCostsMxn);
-      const netProfitMxn = grossProfitMxn;
-      let commissionBaseMxn = 0, commissionPercentage = 0, commissionAmountMxn = 0, status = 'pendiente', noApplyReason = null;
+      const project = db.prepare('SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL').get(projectId);
+      if (!project) throw badRequest('Proyecto no encontrado.');
+      const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ? AND deleted_at IS NULL AND active = 1').get(salesAgentId);
+      if (!agent) throw badRequest('Vendedora no encontrada o inactiva.');
+      if (agent.employee_id) {
+        const linkedEmployee = db.prepare('SELECT active FROM employees WHERE id = ?').get(agent.employee_id);
+        if (!linkedEmployee || !linkedEmployee.active) throw badRequest('La vendedora debe ser un empleado activo de Vacaciones.');
+      }
+      const { totalSaleMxn, grossProfitMxn, netProfitMxn, finalMargin } = commissionProjectMetrics(db, project);
+      let commissionBaseMxn = 0;
+      let commissionPercentage = 0;
+      let commissionAmountMxn = 0;
+      let status = 'pendiente';
+      let noApplyReason = null;
       if (baseType === 'no_aplica') {
         noApplyReason = requiredText(req.body, 'no_apply_reason', 'Motivo de No Aplica');
         status = 'no_aplica';
@@ -167,10 +279,46 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
         commissionAmountMxn = roundMoney(commissionBaseMxn * (commissionPercentage / 100));
       }
       const audit = createdByFields(req);
-      const result = db.prepare('INSERT INTO sales_commissions (project_id, sales_agent_id, commission_calculation_base_type, commission_base_mxn, total_sale_mxn_snapshot, gross_profit_mxn_snapshot, net_profit_mxn_snapshot, commission_percentage, commission_amount_mxn, status, no_apply_reason, notes, assigned_by_user_id, assigned_by_name, assigned_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(projectId, salesAgentId, baseType, commissionBaseMxn, totalSaleMxn, grossProfitMxn, netProfitMxn, commissionPercentage, commissionAmountMxn, status, noApplyReason, optionalText(req.body, 'notes'), audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at, audit.created_at);
+      const result = db.prepare(`INSERT INTO sales_commissions (project_id, sales_agent_id, commission_calculation_base_type, commission_base_mxn, total_sale_mxn_snapshot, gross_profit_mxn_snapshot, net_profit_mxn_snapshot, final_margin_snapshot, commission_percentage, commission_amount_mxn, status, no_apply_reason, notes, assigned_by_user_id, assigned_by_name, assigned_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(projectId, salesAgentId, baseType, commissionBaseMxn, totalSaleMxn, grossProfitMxn, netProfitMxn, finalMargin, commissionPercentage, commissionAmountMxn, status, noApplyReason, optionalText(req.body, 'notes'), audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at, audit.created_at);
       const commission = db.prepare('SELECT * FROM sales_commissions WHERE id = ?').get(result.lastInsertRowid);
       logAuditEvent(db, { req, action: 'create', module: 'commissions', entityType: 'sales_commission', entityId: commission.id, entityLabel: `${project.quote_number} - ${agent.name}`, after: commission, metadata: { base_type: baseType } });
-      res.status(201).json(commission);
+      res.status(201).json(mapCommissionRow(commission));
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/commissions/balance-adjustments', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
+    try {
+      const agentId = req.query.sales_agent_id;
+      let rows;
+      if (agentId) {
+        rows = db.prepare(`SELECT scba.*, sca.name as agent_name FROM sales_commission_balance_adjustments scba
+          JOIN sales_commission_agents sca ON sca.id = scba.sales_agent_id
+          WHERE scba.sales_agent_id = ? AND scba.deleted_at IS NULL ORDER BY scba.created_at DESC`).all(agentId);
+      } else {
+        rows = db.prepare(`SELECT scba.*, sca.name as agent_name FROM sales_commission_balance_adjustments scba
+          JOIN sales_commission_agents sca ON sca.id = scba.sales_agent_id
+          WHERE scba.deleted_at IS NULL ORDER BY scba.created_at DESC`).all();
+      }
+      res.json(rows);
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/commissions/balance-adjustments', requireAuth, requirePermission('commissions', 'configure'), (req, res, next) => {
+    try {
+      const salesAgentId = numberValue(req.body, 'sales_agent_id', 'Vendedora', { min: 1 });
+      const adjustmentType = enumValue(req.body, 'adjustment_type', 'Tipo de ajuste', ['saldo_inicial', 'extraordinario']);
+      const amountMxn = numberValue(req.body, 'amount_mxn', 'Monto', { min: 0.01 });
+      const description = requiredText(req.body, 'description', 'Descripcion');
+      const reference = optionalText(req.body, 'reference');
+      const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ? AND deleted_at IS NULL').get(salesAgentId);
+      if (!agent) throw badRequest('Vendedora no encontrada.');
+      const audit = createdByFields(req);
+      const result = db.prepare(`INSERT INTO sales_commission_balance_adjustments (sales_agent_id, adjustment_type, amount_mxn, description, reference, created_by_user_id, created_by_name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(salesAgentId, adjustmentType, roundMoney(amountMxn), description, reference, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+      const row = db.prepare('SELECT * FROM sales_commission_balance_adjustments WHERE id = ?').get(result.lastInsertRowid);
+      logAuditEvent(db, { req, action: 'create', module: 'commissions', entityType: 'sales_commission_balance_adjustment', entityId: row.id, entityLabel: `${agent.name} - ${adjustmentType}`, after: row });
+      res.status(201).json(row);
     } catch (error) { next(error); }
   });
 

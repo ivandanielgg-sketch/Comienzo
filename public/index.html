@@ -1859,24 +1859,47 @@
             <h3>Vendedoras</h3>
             <form id="agent-form" class="stack inline-form">
               <input type="hidden" name="id" />
-              <input name="name" placeholder="Nombre vendedora" required />
+              <select name="employee_id" id="agent-employee-select" required><option value="">Empleado (Vacaciones activos)...</option></select>
               <input name="start_date" type="date" required />
               <button type="submit">Guardar vendedora</button>
             </form>
+            <form id="commission-balance-adjustment-form" class="stack inline-form" style="margin-top:8px;">
+              <select name="sales_agent_id" required><option value="">Vendedora...</option></select>
+              <select name="adjustment_type" required>
+                <option value="saldo_inicial">Saldo inicial</option>
+                <option value="extraordinario">Extraordinario</option>
+              </select>
+              <input name="amount_mxn" type="number" step="0.01" min="0.01" placeholder="Monto MXN" required />
+              <input name="description" placeholder="Descripcion" required />
+              <input name="reference" placeholder="Referencia" />
+              <button type="submit">Registrar ajuste</button>
+            </form>
             <div class="table-wrapper">
-              <table><thead><tr><th>Nombre</th><th>Activa</th><th>Inicio</th><th>Comisiones Devengadas</th><th>Pagado</th><th>Saldo</th><th></th></tr></thead><tbody id="agents-table"></tbody></table>
+              <table><thead><tr><th>Nombre</th><th>Empleado</th><th>Activa</th><th>Inicio</th><th>Devengadas</th><th>Ajustes</th><th>Pagado</th><th>Saldo</th><th></th></tr></thead><tbody id="agents-table"></tbody></table>
             </div>
             <h3>Proyectos Disponibles para Comision</h3>
             <div class="table-wrapper">
-              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Venta MXN</th><th>Costo MXN</th><th>Utilidad Bruta</th><th>Margen</th><th></th></tr></thead><tbody id="available-projects-table"></tbody></table>
+              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Venta MXN</th><th>Costo MXN</th><th>Utilidad Bruta</th><th>Margen final</th><th></th></tr></thead><tbody id="available-projects-table"></tbody></table>
             </div>
-            <h3>Comisiones Asignadas</h3>
+            <h3>Comisiones Asignadas (en espera de pago)</h3>
             <div class="table-wrapper">
-              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Vendedora</th><th>Base</th><th>%</th><th>Monto MXN</th><th>Status</th><th></th></tr></thead><tbody id="commissions-table"></tbody></table>
+              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Vendedora</th><th>Base</th><th>%</th><th>Monto MXN</th><th>Margen final</th><th>Status</th><th></th></tr></thead><tbody id="commissions-table"></tbody></table>
+            </div>
+            <h3>Comisiones pagadas (busqueda)</h3>
+            <form id="commission-archived-search-form" class="stack inline-form">
+              <input name="client_name" placeholder="Cliente" />
+              <input name="quote_number" placeholder="No. cotizacion" />
+              <input name="order_number" placeholder="No. pedido" />
+              <input name="date_from" type="date" title="Desde" />
+              <input name="date_to" type="date" title="Hasta" />
+              <button type="submit">Buscar pagadas</button>
+            </form>
+            <div class="table-wrapper">
+              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Vendedora</th><th>Monto MXN</th><th>Margen final</th><th>Pagada</th></tr></thead><tbody id="commissions-archived-table"></tbody></table>
             </div>
             <h3>Pagos de Comisiones</h3>
             <form id="commission-payment-form" class="stack inline-form">
-              <select name="sales_agent_id" required><option value="">Vendedora...</option></select>
+              <select name="sales_agent_id" required><option value="">Vendedora (empleado activo)...</option></select>
               <input name="payment_date" type="date" required />
               <input name="amount_original" type="text" inputmode="decimal" placeholder="Monto" required />
               <select name="currency"><option value="MXN">MXN</option><option value="USD">USD</option><option value="EUR">EUR</option></select>

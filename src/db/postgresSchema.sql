@@ -149,6 +149,7 @@ CREATE TABLE employees (
 CREATE TABLE sales_commission_agents (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
+      employee_id INTEGER,
       related_user_id INTEGER,
       active INTEGER NOT NULL DEFAULT 1,
       start_date TEXT NOT NULL,
@@ -163,8 +164,11 @@ CREATE TABLE sales_commission_agents (
       deleted_at TEXT,
       deleted_by_user_id INTEGER,
       deleted_by_name TEXT,
-      delete_reason TEXT
+      delete_reason TEXT,
+      FOREIGN KEY (employee_id) REFERENCES employees(id)
     );
+
+CREATE UNIQUE INDEX idx_sales_commission_agents_employee_active ON sales_commission_agents (employee_id) WHERE deleted_at IS NULL AND employee_id IS NOT NULL;
 
 CREATE TABLE ecovis_payments (
       id SERIAL PRIMARY KEY,
@@ -629,6 +633,7 @@ CREATE TABLE sales_commissions (
       total_sale_mxn_snapshot DOUBLE PRECISION,
       gross_profit_mxn_snapshot DOUBLE PRECISION,
       net_profit_mxn_snapshot DOUBLE PRECISION,
+      final_margin_snapshot DOUBLE PRECISION,
       commission_percentage DOUBLE PRECISION NOT NULL DEFAULT 0,
       commission_amount_mxn DOUBLE PRECISION NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'parcial', 'pagada', 'no_aplica', 'cancelada')),
@@ -644,6 +649,24 @@ CREATE TABLE sales_commissions (
       deleted_by_name TEXT,
       delete_reason TEXT,
       FOREIGN KEY (project_id) REFERENCES projects(id),
+      FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
+    );
+
+CREATE TABLE sales_commission_balance_adjustments (
+      id SERIAL PRIMARY KEY,
+      sales_agent_id INTEGER NOT NULL,
+      adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('saldo_inicial', 'extraordinario')),
+      amount_mxn DOUBLE PRECISION NOT NULL,
+      description TEXT NOT NULL,
+      reference TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT,
       FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
     );
 
