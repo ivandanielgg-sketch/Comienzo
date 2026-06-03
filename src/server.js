@@ -16,6 +16,12 @@ const {
   addSqlFilters,
   buildListResponse,
 } = require('./pagination');
+const {
+  buildSearchCondition,
+  remapSearchColumns,
+  matchesSearchText,
+  matchesAnySearchField,
+} = require('./search');
 const { calculateEcovisAccountSummary, calculateProjectPaidAmountMXN, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance, convertToMXN, roundMoney: roundMoneyEcovis, calculateEcovisProjectPaymentStatus, normalizePurchaseOrderNumber, amountsDiffer, calculateEcovisProjectBalance, calculateEcovisPurchaseOrderBalance, calculateEcovisPaymentUnallocatedAmount } = require('./ecovis');
 const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { formatDateTimeCDMX } = require('./dateHelper');
@@ -486,10 +492,12 @@ function verifyActiveUserPassword(req) {
 function buildWhere({ query, filters, baseWhere = [], search, params = [] }) {
   const whereParts = [...baseWhere];
   const searchParams = [...params];
-  if (search && search.columns.length) {
-    const pattern = `%${search.value}%`;
-    whereParts.push(`(${search.columns.map((column) => `${column} LIKE ?`).join(' OR ')})`);
-    searchParams.push(...search.columns.map(() => pattern));
+  if (search?.columns?.length && search.value) {
+    const built = buildSearchCondition(search.columns, search.value);
+    if (built) {
+      whereParts.push(built.clause);
+      searchParams.push(...built.params);
+    }
   }
   const filterResult = addSqlFilters(query, filters, whereParts, searchParams);
   return {
@@ -518,7 +526,7 @@ function applyInMemoryFilters(rows, query, filterDefinitions = {}) {
     const rowValue = row[key];
 
     if (definition.type === 'text') {
-      return !value || String(rowValue ?? '').toLowerCase().includes(String(value).trim().toLowerCase());
+      return !value || matchesSearchText(rowValue, value);
     }
     if (definition.type === 'select') {
       return !value || String(rowValue ?? '') === String(value);
@@ -633,6 +641,117 @@ const PROJECT_FILTERS = {
   pending_collection: { type: 'currency', column: PROJECT_PENDING_SQL },
   final_margin: { type: 'number', column: PROJECT_MARGIN_SQL },
 };
+
+function buildProjectListSearchColumns() {
+  return [
+    'CAST(p.id AS TEXT)',
+    'p.quote_number',
+    'p.order_number',
+    'p.purchase_order_number',
+    'p.client_name',
+    'p.project_description',
+    'p.status',
+    'p.risk',
+    'p.seller',
+    'p.technician_name',
+    'CAST(p.promised_delivery_date AS TEXT)',
+    'CAST(p.closed_at AS TEXT)',
+    `CAST(${PROJECT_CHARGED_SQL} AS TEXT)`,
+    `CAST(${PROJECT_SPENT_SQL} AS TEXT)`,
+    `CAST(${PROJECT_PENDING_SQL} AS TEXT)`,
+    `CAST(${PROJECT_MARGIN_SQL} AS TEXT)`,
+    `CAST(${PROJECT_INVOICED_SQL} AS TEXT)`,
+  ];
+}
+
+const PROJECT_REPORT_SEARCH_COLUMNS = [
+  'CAST(r.id AS TEXT)',
+  'r.report_folio',
+  'r.report_type',
+  'r.report_date',
+  'r.service_name',
+  'r.client_name',
+  'r.technician_name',
+  'r.assigned_technicians',
+  'r.notes',
+  'p.quote_number',
+  'p.order_number',
+  'p.client_name',
+  'p.project_description',
+  'p.status',
+  'p.seller',
+  'p.technician_name',
+];
+
+const PROJECT_REPORT_SEARCH_COLUMNS_PROJECT_SCOPED = [
+  'CAST(id AS TEXT)',
+  'report_folio',
+  'report_type',
+  'CAST(report_date AS TEXT)',
+  'service_name',
+  'client_name',
+  'technician_name',
+  'assigned_technicians',
+  'notes',
+];
+
+const ARCHIVE_CLIENT_SEARCH_COLUMNS = [
+  'p.client_name',
+  'p.quote_number',
+  'p.order_number',
+  'p.project_description',
+  'r.report_folio',
+  'r.report_type',
+  'r.service_name',
+  'r.client_name',
+  'r.assigned_technicians',
+  'CAST(r.report_date AS TEXT)',
+];
+
+function buildGroupedClientSearchSql(search, projectColumns, clientColumn = 'p.client_name') {
+  if (!search) return { clause: '', params: [] };
+  const clauses = [];
+  const params = [];
+  const clientBuilt = buildSearchCondition([clientColumn], search);
+  if (clientBuilt) {
+    clauses.push(clientBuilt.clause);
+    params.push(...clientBuilt.params);
+  }
+  const subBuilt = buildSearchCondition(remapSearchColumns(projectColumns, 'p', 'px'), search);
+  if (subBuilt) {
+    clauses.push(`${clientColumn} IN (
+      SELECT DISTINCT px.client_name FROM projects px
+      WHERE px.closed_at IS NOT NULL AND ${subBuilt.clause}
+    )`);
+    params.push(...subBuilt.params);
+  }
+  if (!clauses.length) return { clause: '', params: [] };
+  return { clause: ` AND (${clauses.join(' OR ')})`, params };
+}
+
+function employeeMatchesSearch(employee, search) {
+  if (!search) return true;
+  return matchesAnySearchField([
+    employee.id,
+    employee.employee_number,
+    employee.full_name,
+    employee.hire_date,
+    employee.termination_date,
+    employee.department,
+    employee.primary_department,
+    employee.secondary_department,
+    employee.position,
+    employee.immediate_boss,
+    employee.inactive_reason,
+    employee.active ? 'activo' : 'inactivo',
+    employee.seniority_years,
+    employee.accrued_days,
+    employee.days_taken,
+    employee.days_scheduled,
+    employee.days_pending,
+    employee.kpi_eligible ? 'kpi elegible' : 'sin kpi',
+  ], search);
+}
 
 app.get('/api/session', (req, res) => {
   if (!req.session.userId) {
@@ -911,15 +1030,7 @@ app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (re
     baseWhere: ['p.closed_at IS NULL'],
     search: {
       value: search,
-      columns: [
-        'p.quote_number',
-        'p.client_name',
-        'p.order_number',
-        'p.purchase_order_number',
-        'p.seller',
-        'p.technician_name',
-        'p.project_description',
-      ],
+      columns: buildProjectListSearchColumns(),
     },
   });
 
@@ -979,15 +1090,7 @@ app.get('/api/closed-projects', requireAuth, requirePermission('closedProjects',
     baseWhere: ['p.closed_at IS NOT NULL'],
     search: {
       value: search,
-      columns: [
-        'p.quote_number',
-        'p.client_name',
-        'p.order_number',
-        'p.purchase_order_number',
-        'p.seller',
-        'p.technician_name',
-        'p.project_description',
-      ],
+      columns: buildProjectListSearchColumns(),
     },
   });
   const result = paginateSqlList({
@@ -1235,7 +1338,7 @@ app.get('/api/reports/projects', requireAuth, requirePermission('reports', 'view
     baseWhere: ['p.closed_at IS NULL'],
     search: {
       value: search,
-      columns: ['p.client_name', 'p.project_description', 'p.quote_number', 'p.order_number', 'p.purchase_order_number'],
+      columns: buildProjectListSearchColumns(),
     },
   });
 
@@ -1301,7 +1404,7 @@ app.get('/api/projects/:id/reports', requireAuth, requirePermission('reports', '
       params: [req.params.id],
       search: {
         value: search,
-        columns: ['report_folio', 'service_name', 'technician_name', 'client_name'],
+        columns: PROJECT_REPORT_SEARCH_COLUMNS_PROJECT_SCOPED,
       },
     });
     const result = paginateSqlList({
@@ -1556,7 +1659,7 @@ app.get('/api/reports/active', requireAuth, requirePermission('reports', 'view')
     baseWhere: ['p.closed_at IS NULL', 'r.deleted_at IS NULL'],
     search: {
       value: search,
-      columns: ['r.report_folio', 'r.client_name', 'r.service_name', 'r.assigned_technicians', 'p.project_description'],
+      columns: PROJECT_REPORT_SEARCH_COLUMNS,
     },
   });
 
@@ -1580,8 +1683,11 @@ app.get('/api/reports/archive/clients', requireAuth, requirePermission('reportsA
   `;
   const params = [];
   if (search) {
-    sql += ' AND p.client_name LIKE ?';
-    params.push(`%${search}%`);
+    const built = buildSearchCondition(ARCHIVE_CLIENT_SEARCH_COLUMNS, search);
+    if (built) {
+      sql += ` AND ${built.clause}`;
+      params.push(...built.params);
+    }
   }
   sql += ' GROUP BY p.client_name ORDER BY last_report_date DESC';
   const clients = db.prepare(sql).all(...params);
@@ -1611,7 +1717,7 @@ app.get('/api/reports/archive/client/:clientName', requireAuth, requirePermissio
     params: [clientName],
     search: {
       value: search,
-      columns: ['r.report_folio', 'r.service_name', 'r.assigned_technicians', 'p.project_description'],
+      columns: PROJECT_REPORT_SEARCH_COLUMNS,
     },
   });
 
@@ -1659,10 +1765,9 @@ app.get('/api/closed-projects/by-client', requireAuth, requirePermission('closed
     WHERE p.closed_at IS NOT NULL
   `;
   const params = [];
-  if (search) {
-    sql += ' AND p.client_name LIKE ?';
-    params.push(`%${search}%`);
-  }
+  const groupedSearch = buildGroupedClientSearchSql(search, buildProjectListSearchColumns());
+  sql += groupedSearch.clause;
+  params.push(...groupedSearch.params);
   sql += ' GROUP BY p.client_name ORDER BY last_closed_at DESC';
   const clients = db.prepare(sql).all(...params);
   res.json({ data: clients });
@@ -1680,7 +1785,7 @@ app.get('/api/closed-projects/client/:clientName', requireAuth, requirePermissio
     params: [clientName],
     search: {
       value: search,
-      columns: ['p.quote_number', 'p.order_number', 'p.project_description', 'p.technician_name'],
+      columns: buildProjectListSearchColumns(),
     },
   });
   const result = paginateSqlList({
@@ -1712,7 +1817,7 @@ app.get('/api/closed-projects/date-range', requireAuth, requirePermission('close
     baseWhere: ['p.closed_at IS NOT NULL'],
     search: {
       value: search,
-      columns: ['p.quote_number', 'p.client_name', 'p.order_number', 'p.project_description', 'p.technician_name'],
+      columns: buildProjectListSearchColumns(),
     },
   });
   const result = paginateSqlList({
@@ -1829,9 +1934,11 @@ app.get('/api/employees', requireAuth, requirePermission('vacations', 'view'), (
     query: req.query,
     filters: dbFilters,
     baseWhere,
-    search: { value: search, columns: ['employee_number', 'full_name'] },
   });
   const allEmployees = db.prepare(`SELECT * FROM employees WHERE ${whereClause}`).all(...params).map(mapEmployee);
+  const searchedEmployees = search
+    ? allEmployees.filter((employee) => employeeMatchesSearch(employee, search))
+    : allEmployees;
   const employeeFilters = {
     ...dbFilters,
     seniority_years: { type: 'number' },
@@ -1840,7 +1947,7 @@ app.get('/api/employees', requireAuth, requirePermission('vacations', 'view'), (
     days_scheduled: { type: 'number' },
     days_pending: { type: 'number' },
   };
-  const filteredEmployees = applyInMemoryFilters(allEmployees, req.query, employeeFilters);
+  const filteredEmployees = applyInMemoryFilters(searchedEmployees, req.query, employeeFilters);
   const selectors = sorting.sortBy
     ? [
         ...(safeActiveFilter === 'inactive' ? [] : [{ key: 'active', direction: -1 }]),
@@ -1974,7 +2081,18 @@ app.get('/api/employees/:id/vacation-requests', requireAuth, requirePermission('
       },
       baseWhere: ['employee_id = ?'],
       params: [req.params.id],
-      search: { value: search, columns: ['notes', 'status'] },
+      search: {
+        value: search,
+        columns: [
+          'CAST(id AS TEXT)',
+          'status',
+          'notes',
+          'CAST(start_date AS TEXT)',
+          'CAST(end_date AS TEXT)',
+          'CAST(requested_days AS TEXT)',
+          'CAST(vacation_exercise_year AS TEXT)',
+        ],
+      },
     });
     const result = paginateSqlList({
       tableSql: 'SELECT * FROM vacation_requests',
@@ -2801,7 +2919,20 @@ app.get('/api/ecovis/projects', requireAuth, requirePermission('ecovisAccount', 
     },
     search: {
       value: search,
-      columns: ['ep.project_name', 'ep.quote_number', 'ep.purchase_order_number', 'ep.invoice_number', 'ep.description'],
+      columns: [
+        'CAST(ep.id AS TEXT)',
+        'ep.project_name',
+        'ep.client_name',
+        'ep.quote_number',
+        'ep.purchase_order_number',
+        'ep.invoice_number',
+        'ep.description',
+        'ep.status',
+        'ep.currency',
+        'CAST(ep.project_date AS TEXT)',
+        'CAST(ep.total_amount AS TEXT)',
+        'CAST(ep.amount_mxn AS TEXT)',
+      ],
     },
   });
 
@@ -3026,7 +3157,19 @@ app.get('/api/ecovis/payments', requireAuth, requirePermission('ecovisAccount', 
     },
     search: {
       value: search,
-      columns: ['ep.bank_reference', 'ep.source_description', 'ep.payment_method', 'ep.notes'],
+      columns: [
+        'CAST(ep.id AS TEXT)',
+        'ep.bank_reference',
+        'ep.source_description',
+        'ep.payment_method',
+        'ep.notes',
+        'ep.currency',
+        'CAST(ep.payment_date AS TEXT)',
+        'CAST(ep.amount AS TEXT)',
+        'CAST(ep.amount_mxn AS TEXT)',
+        'CAST(ep.unallocated_amount AS TEXT)',
+        statusSql,
+      ],
     },
   });
 
@@ -3367,7 +3510,21 @@ app.get('/api/ecovis/loans', requireAuth, requirePermission('ecovisAccount', 'vi
       status: { type: 'select', column: statusSql, options: VALID_LOAN_STATUSES },
     },
     baseWhere: ["em.movement_type = 'prestamo_ecovis_a_revram'"],
-    search: { value: search, columns: ['em.description', 'em.reference', 'em.notes'] },
+    search: {
+      value: search,
+      columns: [
+        'CAST(em.id AS TEXT)',
+        'em.description',
+        'em.reference',
+        'em.notes',
+        'em.currency',
+        'em.movement_type',
+        'CAST(em.movement_date AS TEXT)',
+        'CAST(em.amount AS TEXT)',
+        'em.created_by',
+        statusSql,
+      ],
+    },
   });
 
   const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM ecovis_movements em WHERE ${whereClause}`).get(...params).count;
@@ -3490,7 +3647,24 @@ app.get('/api/ecovis/movements', requireAuth, requirePermission('ecovisAccount',
       related_project_name: { type: 'text', column: 'ep.project_name' },
       created_by: { type: 'text', column: 'em.created_by' },
     },
-    search: { value: search, columns: ['em.description', 'em.reference', 'em.notes', 'ep.project_name'] },
+    search: {
+      value: search,
+      columns: [
+        'CAST(em.id AS TEXT)',
+        'em.description',
+        'em.reference',
+        'em.notes',
+        'em.currency',
+        'em.movement_type',
+        'em.direction',
+        'CAST(em.movement_date AS TEXT)',
+        'CAST(em.amount AS TEXT)',
+        'em.created_by',
+        'ep.project_name',
+        'ep.client_name',
+        'ep.quote_number',
+      ],
+    },
   });
 
   const totalRecords = db.prepare(
@@ -3687,7 +3861,19 @@ app.get('/api/ecovis/purchase-orders', requireAuth, requirePermission('ecovisAcc
       status: { type: 'select', column: 'po.status', options: ['pendiente', 'parcialmente_pagada', 'pagada', 'cancelada'] },
       purchase_order_number: { type: 'text', column: 'po.purchase_order_number' },
     },
-    search: { value: search, columns: ['po.purchase_order_number', 'po.project_name', 'po.notes'] },
+    search: {
+      value: search,
+      columns: [
+        'CAST(po.id AS TEXT)',
+        'po.purchase_order_number',
+        'po.project_name',
+        'po.notes',
+        'po.status',
+        'po.currency',
+        'CAST(po.total_amount AS TEXT)',
+        'CAST(po.paid_amount AS TEXT)',
+      ],
+    },
   });
 
   let poExtraWhere = whereClause === '1=1' ? '' : '';
