@@ -1890,7 +1890,7 @@
               </form>
               <h3 style="margin-top:16px;">Comision extraordinaria (sin proyecto)</h3>
               <form id="commission-extraordinary-form" class="stack inline-form">
-                <select name="sales_agent_id" required><option value="">Vendedora...</option></select>
+                <select name="employee_id" required><option value="">Empleado activo (Vacaciones)...</option></select>
                 <input name="commission_amount_mxn" type="number" step="0.01" min="0.01" placeholder="Monto MXN" required />
                 <input name="description" placeholder="Descripcion (ej. premio proveedor)" required />
                 <input name="reference" placeholder="Referencia" />
@@ -1945,9 +1945,10 @@
               <form id="commission-assign-form" class="grid-form">
                 <input type="hidden" name="project_id" />
                 <p class="full muted" id="commission-assign-project-summary"></p>
-                <label class="full">Vendedora (empleado activo) *
-                  <select name="sales_agent_id" required><option value="">Seleccione...</option></select>
+                <label class="full">Empleado (Vacaciones, activos) *
+                  <select name="employee_id" required><option value="">Seleccione empleado...</option></select>
                 </label>
+                <p class="full muted" style="margin:0;">Solo empleados activos del modulo Vacaciones. Debe estar registrado como vendedora en la pestana 1.</p>
                 <label class="full">Tipo de comision *
                   <select name="commission_calculation_base_type" required>
                     <option value="facturado_1pct">1% sobre cantidad facturada</option>
@@ -2264,7 +2265,7 @@
       </div>
     </div>
 
-    <script src="/app.js?v=commissions-dashboard-20260603b"></script>
+    <script src="/app.js?v=commissions-vacaciones-employees-20260603c"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>

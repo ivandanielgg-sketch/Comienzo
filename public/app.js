@@ -5880,7 +5880,7 @@ async function loadCommissions() {
     renderCommissionPayments(payments);
     populateCommissionEmployeeSelect(agents);
     populateAgentSelects(agents, commissionActiveEmployees);
-    populateAssignModalAgents();
+    populateAssignModalEmployees();
   } catch (e) { console.error('Error loading commissions:', e); }
 }
 
@@ -6009,22 +6009,26 @@ function populateCommissionEmployeeSelect(agents) {
 
 function populateAgentSelects(agents, activeEmployees) {
   var active = agents.filter(function(a) { return a.active; });
-  var opts = '<option value="">Vendedora...</option>' + active.map(function(a) {
-    return '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>';
-  }).join('');
-  var extraSel = document.querySelector('#commission-extraordinary-form select[name="sales_agent_id"]');
-  if (extraSel) extraSel.innerHTML = opts;
   window._commissionActiveAgents = active;
   window._commissionActiveEmployees = activeEmployees || commissionActiveEmployees || [];
+  populateAssignModalEmployees();
+  var extraSel = document.querySelector('#commission-extraordinary-form select[name="employee_id"]');
+  if (extraSel) {
+    extraSel.innerHTML = buildVacationEmployeeOptions(window._commissionActiveEmployees);
+  }
 }
 
-function populateAssignModalAgents() {
-  var sel = document.querySelector('#commission-assign-form select[name="sales_agent_id"]');
-  if (!sel) return;
-  var active = window._commissionActiveAgents || [];
-  sel.innerHTML = '<option value="">Seleccione...</option>' + active.map(function(a) {
-    return '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>';
+function buildVacationEmployeeOptions(employees) {
+  return '<option value="">Empleado activo (Vacaciones)...</option>' + (employees || []).map(function(e) {
+    return '<option value="' + e.id + '">' + escapeHtml(e.full_name) +
+      (e.employee_number ? ' (' + escapeHtml(e.employee_number) + ')' : '') + '</option>';
   }).join('');
+}
+
+function populateAssignModalEmployees() {
+  var sel = document.querySelector('#commission-assign-form select[name="employee_id"]');
+  if (!sel) return;
+  sel.innerHTML = buildVacationEmployeeOptions(commissionActiveEmployees);
 }
 
 function updateCommissionAssignPreview() {
@@ -6045,10 +6049,9 @@ function updateCommissionAssignPreview() {
 function openAssignCommissionModal(projectId) {
   var p = commissionProjectsById[projectId];
   if (!p) return;
-  var agents = window._commissionActiveAgents || [];
-  if (!agents.length) {
-    window.alert('Registre primero una vendedora vinculada a un empleado activo de Vacaciones.');
-    switchCommissionsSubtab('agents');
+  var employees = commissionActiveEmployees || [];
+  if (!employees.length) {
+    window.alert('No hay empleados activos en Vacaciones para asignar comisiones.');
     return;
   }
   var modal = document.getElementById('commission-assign-modal');
@@ -6059,7 +6062,7 @@ function openAssignCommissionModal(projectId) {
   form.elements.project_id.value = projectId;
   document.getElementById('commission-assign-project-summary').textContent =
     'Cotizacion ' + p.quote_number + ' · Cliente ' + p.client_name + ' · Facturado ' + money.format(p.total_sale_mxn) + ' · Utilidad real ' + formatCommissionMargin(p);
-  populateAssignModalAgents();
+  populateAssignModalEmployees();
   form.elements.commission_calculation_base_type.value = 'facturado_1pct';
   updateCommissionAssignPreview();
   document.getElementById('commission-assign-message').textContent = '';
@@ -6111,7 +6114,7 @@ if (commissionExtraordinaryForm) {
   commissionExtraordinaryForm.addEventListener('submit', async function(e) {
     e.preventDefault();
     var payload = Object.fromEntries(new FormData(commissionExtraordinaryForm).entries());
-    payload.sales_agent_id = Number(payload.sales_agent_id);
+    payload.employee_id = Number(payload.employee_id);
     payload.commission_amount_mxn = Number(payload.commission_amount_mxn);
     try {
       await api('/api/commissions/extraordinary', { method: 'POST', body: JSON.stringify(payload) });
@@ -6150,7 +6153,7 @@ if (commissionAssignForm) {
     var fd = new FormData(commissionAssignForm);
     var payload = {
       project_id: Number(fd.get('project_id')),
-      sales_agent_id: Number(fd.get('sales_agent_id')),
+      employee_id: Number(fd.get('employee_id')),
       commission_calculation_base_type: fd.get('commission_calculation_base_type'),
       reference: fd.get('reference') || undefined,
     };

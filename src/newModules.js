@@ -70,6 +70,22 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
     return agent;
   }
 
+  /** Asignacion: solo empleados activos de Vacaciones vinculados a vendedora registrada. */
+  function resolveSalesAgentFromRequest(req) {
+    if (req.body.employee_id != null && req.body.employee_id !== '') {
+      const employeeId = numberValue(req.body, 'employee_id', 'Empleado', { min: 1 });
+      getActiveEmployeeOrFail(employeeId);
+      const agent = db
+        .prepare('SELECT * FROM sales_commission_agents WHERE employee_id = ? AND deleted_at IS NULL AND active = 1')
+        .get(employeeId);
+      if (!agent) {
+        throw badRequest('Registre al empleado como vendedora en la pestana 1 (Vendedoras) antes de asignar comisiones.');
+      }
+      return agent;
+    }
+    return resolveCommissionAgentOrFail(numberValue(req.body, 'sales_agent_id', 'Vendedora', { min: 1 }));
+  }
+
   // ===================== ROLE PERMISSIONS CONFIGURATION =====================
 
   app.get('/api/admin/role-permissions', requireAuth, requirePermission('users', 'managePermissions'), (req, res, next) => {
@@ -263,13 +279,13 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
   app.post('/api/commissions', requireAuth, requirePermission('commissions', 'create'), (req, res, next) => {
     try {
       const projectId = numberValue(req.body, 'project_id', 'Proyecto', { min: 1 });
-      const salesAgentId = numberValue(req.body, 'sales_agent_id', 'Vendedora', { min: 1 });
+      const agent = resolveSalesAgentFromRequest(req);
+      const salesAgentId = agent.id;
       const baseType = enumValue(req.body, 'commission_calculation_base_type', 'Tipo de comision', PROJECT_COMMISSION_BASE_TYPES);
       const existing = db.prepare("SELECT id FROM sales_commissions WHERE project_id = ? AND deleted_at IS NULL AND status != 'cancelada'").get(projectId);
       if (existing) throw badRequest('Este proyecto ya tiene una comision asignada y no puede reasignarse.');
       const project = db.prepare('SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL').get(projectId);
       if (!project) throw badRequest('Proyecto no encontrado.');
-      const agent = resolveCommissionAgentOrFail(salesAgentId);
       const { totalSaleMxn, grossProfitMxn, netProfitMxn, finalMargin } = commissionProjectMetrics(db, project);
       const manualAmount = baseType === 'monto_manual'
         ? numberValue(req.body, 'commission_amount_mxn', 'Monto de comision', { min: 0.01 })
@@ -295,11 +311,11 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
 
   app.post('/api/commissions/extraordinary', requireAuth, requirePermission('commissions', 'create'), (req, res, next) => {
     try {
-      const salesAgentId = numberValue(req.body, 'sales_agent_id', 'Vendedora', { min: 1 });
+      const agent = resolveSalesAgentFromRequest(req);
+      const salesAgentId = agent.id;
       const amountMxn = numberValue(req.body, 'commission_amount_mxn', 'Monto', { min: 0.01 });
       const description = requiredText(req.body, 'description', 'Descripcion');
       const reference = optionalText(req.body, 'reference');
-      const agent = resolveCommissionAgentOrFail(salesAgentId);
       const audit = createdByFields(req);
       const rounded = roundMoney(amountMxn);
       const result = db.prepare(`INSERT INTO sales_commissions (
