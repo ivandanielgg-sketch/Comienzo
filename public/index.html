@@ -1867,10 +1867,20 @@
 
             <div id="commissions-agents-section">
               <h3>Resumen de ventas y comisiones</h3>
-              <form id="commissions-period-form" class="stack inline-form" style="margin-bottom:12px;">
-                <label style="display:flex;flex-direction:column;font-size:0.9rem;">Periodo (mes)
-                  <input type="month" id="commissions-period-filter" name="period" />
+              <form id="commissions-period-form" class="stack inline-form" style="margin-bottom:12px;align-items:flex-end;">
+                <label style="display:flex;flex-direction:column;font-size:0.9rem;">Ano
+                  <select id="commissions-filter-year" name="year"><option value="">Todos</option></select>
                 </label>
+                <label style="display:flex;flex-direction:column;font-size:0.9rem;">Mes
+                  <select id="commissions-filter-month" name="month">
+                    <option value="">Todos</option>
+                    <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option>
+                    <option value="4">Abril</option><option value="5">Mayo</option><option value="6">Junio</option>
+                    <option value="7">Julio</option><option value="8">Agosto</option><option value="9">Septiembre</option>
+                    <option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
+                  </select>
+                </label>
+                <button type="submit">Buscar periodo</button>
                 <button type="button" class="secondary" id="commissions-period-clear">Ver acumulado total</button>
               </form>
               <div id="commissions-period-totals" class="cards-row"></div>
@@ -1904,6 +1914,9 @@
 
             <div id="commissions-projects-section" class="hidden">
               <p class="muted">Proyectos abiertos o cerrados sin comision asignada. Al asignar, el proyecto desaparece de esta lista.</p>
+              <p id="commissions-available-status" class="muted" style="margin:8px 0;"></p>
+              <p id="commissions-available-error" class="message error hidden"></p>
+              <button type="button" class="secondary" id="commissions-refresh-projects" style="margin-bottom:8px;">Actualizar lista</button>
               <div class="table-wrapper">
                 <table class="data-table"><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Pedido</th><th>Facturado MXN</th><th>Utilidad real</th><th></th></tr></thead><tbody id="available-projects-table"></tbody></table>
               </div>
@@ -2265,7 +2278,7 @@
       </div>
     </div>
 
-    <script src="/app.js?v=commissions-vacaciones-employees-20260603c"></script>
+    <script src="/app.js?v=commissions-fix-projects-20260603d"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>
