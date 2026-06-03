@@ -1,6 +1,7 @@
 'use strict';
 
 const { buildProjectTotals, roundMoney } = require('./calculations');
+const { sqlYearExpr, sqlMonthExpr, sqlDateCompareGte, sqlDateCompareLte } = require('./db/dialect');
 
 const PROJECT_COMMISSION_BASE_TYPES = ['facturado_1pct', 'facturado_3pct', 'monto_manual'];
 
@@ -138,9 +139,9 @@ function buildCommissionsDashboard(db, period) {
   let paidParams = [];
 
   if (period.filtered) {
-    assignedWhere += ' AND date(sc.assigned_at) >= date(?) AND date(sc.assigned_at) <= date(?)';
+    assignedWhere += ` AND ${sqlDateCompareGte('sc.assigned_at')} AND ${sqlDateCompareLte('sc.assigned_at')}`;
     assignedParams = [period.date_start, period.date_end];
-    paidWhere += ' AND date(scp.payment_date) >= date(?) AND date(scp.payment_date) <= date(?)';
+    paidWhere += ` AND ${sqlDateCompareGte('scp.payment_date')} AND ${sqlDateCompareLte('scp.payment_date')}`;
     paidParams = [period.date_start, period.date_end];
   }
 
@@ -164,25 +165,25 @@ function buildCommissionsDashboard(db, period) {
   );
 
   const assignedByMonth = db.prepare(
-    `SELECT CAST(strftime('%Y', sc.assigned_at) AS INTEGER) as year,
-            CAST(strftime('%m', sc.assigned_at) AS INTEGER) as month,
+    `SELECT ${sqlYearExpr('sc.assigned_at')} as year,
+            ${sqlMonthExpr('sc.assigned_at')} as month,
             COALESCE(SUM(CASE WHEN sc.project_id IS NOT NULL THEN sc.total_sale_mxn_snapshot ELSE 0 END), 0) as sold_mxn,
             COALESCE(SUM(sc.commission_amount_mxn), 0) as commissions_generated_mxn
      FROM sales_commissions sc
      WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada'
-     GROUP BY year, month
-     ORDER BY year DESC, month DESC
+     GROUP BY 1, 2
+     ORDER BY 1 DESC, 2 DESC
      LIMIT 24`,
   ).all();
 
   const paidByMonth = db.prepare(
-    `SELECT CAST(strftime('%Y', scp.payment_date) AS INTEGER) as year,
-            CAST(strftime('%m', scp.payment_date) AS INTEGER) as month,
+    `SELECT ${sqlYearExpr('scp.payment_date')} as year,
+            ${sqlMonthExpr('scp.payment_date')} as month,
             COALESCE(SUM(scp.amount_mxn), 0) as commissions_paid_mxn
      FROM sales_commission_payments scp
      WHERE scp.deleted_at IS NULL
-     GROUP BY year, month
-     ORDER BY year DESC, month DESC
+     GROUP BY 1, 2
+     ORDER BY 1 DESC, 2 DESC
      LIMIT 24`,
   ).all();
 

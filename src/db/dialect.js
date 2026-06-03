@@ -32,6 +32,36 @@ function distinctYearSelect(column, alias = 'year') {
   return `SELECT DISTINCT CAST(strftime('%Y', ${column}) AS INTEGER) AS ${alias}`;
 }
 
+/** Expresión año (SELECT/GROUP BY) para columnas TEXT fecha/hora. */
+function sqlYearExpr(column) {
+  if (isPostgres()) {
+    return `CAST(EXTRACT(YEAR FROM ${column}::timestamp) AS INTEGER)`;
+  }
+  return `CAST(strftime('%Y', ${column}) AS INTEGER)`;
+}
+
+/** Expresión mes 1–12 (SELECT/GROUP BY) para columnas TEXT fecha/hora. */
+function sqlMonthExpr(column) {
+  if (isPostgres()) {
+    return `CAST(EXTRACT(MONTH FROM ${column}::timestamp) AS INTEGER)`;
+  }
+  return `CAST(strftime('%m', ${column}) AS INTEGER)`;
+}
+
+function sqlDateCompareGte(column, paramPlaceholder = '?') {
+  if (isPostgres()) {
+    return `(${column})::date >= (${paramPlaceholder})::date`;
+  }
+  return `date(${column}) >= date(${paramPlaceholder})`;
+}
+
+function sqlDateCompareLte(column, paramPlaceholder = '?') {
+  if (isPostgres()) {
+    return `(${column})::date <= (${paramPlaceholder})::date`;
+  }
+  return `date(${column}) <= date(${paramPlaceholder})`;
+}
+
 const INSERT_TABLES_WITHOUT_ID = new Set([
   'exchange_rates',
   'service_quote_settings',
@@ -73,6 +103,10 @@ module.exports = {
   yearFilter,
   monthFilter,
   distinctYearSelect,
+  sqlYearExpr,
+  sqlMonthExpr,
+  sqlDateCompareGte,
+  sqlDateCompareLte,
   appendReturningId,
   sqlCurrentDate,
   isDbTruthy,
