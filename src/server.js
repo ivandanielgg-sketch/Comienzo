@@ -66,6 +66,15 @@ const REPORT_TYPE_LABELS = {
 };
 const ACTIVE_PROJECT_REPORT_WHERE = 'deleted_at IS NULL AND archived_at IS NULL';
 const ARCHIVED_PROJECT_REPORT_WHERE = 'archived_at IS NOT NULL AND deleted_at IS NULL';
+
+function activeProjectReportCountSql(projectTableAlias = 'p') {
+  return `(
+    (SELECT COUNT(*) FROM project_reports
+      WHERE project_id = ${projectTableAlias}.id AND ${ACTIVE_PROJECT_REPORT_WHERE})
+    + (SELECT COUNT(*) FROM project_failure_reports fr
+      WHERE fr.project_id = ${projectTableAlias}.id AND fr.archived_at IS NULL)
+  )`;
+}
 const SESSION_TTL_MS = 1000 * 60 * 60;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -1574,7 +1583,7 @@ function generateReportFolio(projectId) {
 app.get('/api/reports/projects', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
-  const reportCountSql = `(SELECT COUNT(*) FROM project_reports WHERE project_id = p.id AND ${ACTIVE_PROJECT_REPORT_WHERE})`;
+  const reportCountSql = activeProjectReportCountSql('p');
   const sorting = normalizeSort(req.query, {
     ...PROJECT_SORTS,
     report_count: reportCountSql,
@@ -2417,7 +2426,12 @@ app.get('/api/closed-projects/client/:clientName', requireAuth, requirePermissio
     orderBy: sorting.orderBy,
     map: (project) => ({
       ...mapProject(project, exchangeRates),
-      report_count: db.prepare(`SELECT COUNT(*) as count FROM project_reports WHERE project_id = ? AND ${ACTIVE_PROJECT_REPORT_WHERE}`).get(project.id).count,
+      report_count: db.prepare(
+        `SELECT
+          (SELECT COUNT(*) FROM project_reports WHERE project_id = ? AND ${ACTIVE_PROJECT_REPORT_WHERE})
+          + (SELECT COUNT(*) FROM project_failure_reports WHERE project_id = ? AND archived_at IS NULL)
+          AS count`,
+      ).get(project.id, project.id).count,
     }),
   });
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));

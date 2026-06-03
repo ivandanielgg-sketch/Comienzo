@@ -2311,6 +2311,7 @@ function showReportsMainList() {
   reportListPanel.classList.add('hidden');
   if (reportsFailurePanel) reportsFailurePanel.classList.add('hidden');
   reportsProjectsTable.closest('.panel').classList.remove('hidden');
+  loadReportsProjects();
 }
 
 function openReportForm(projectId, reportData) {
