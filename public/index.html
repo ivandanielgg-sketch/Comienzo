@@ -1764,27 +1764,42 @@
           </div>
         </section>
         <section id="report-archive-view" class="hidden">
-          <div class="panel">
+          <div id="archive-projects-panel" class="panel">
             <div class="panel-header">
               <div>
                 <p class="eyebrow">Archivo</p>
                 <h2>ARCHIVO DE REPORTES</h2>
-                <p class="muted">Reportes tecnicos y de falla archivados desde el modulo Reportes, agrupados por cliente.</p>
+                <p class="muted">Registros archivados desde el modulo Reportes con todos sus reportes tecnicos y de falla.</p>
               </div>
             </div>
             <div style="margin-bottom:12px;">
-              <input id="archive-client-search" type="text" placeholder="Buscar cliente..." style="max-width:300px;" />
+              <input id="archive-project-search" type="text" placeholder="Buscar cliente, folio, proyecto..." style="max-width:360px;" />
             </div>
-            <div id="archive-clients-list"></div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Folio</th>
+                    <th>Cliente</th>
+                    <th>Proyecto</th>
+                    <th>Reportes</th>
+                    <th>Archivado</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="archive-projects-table"></tbody>
+              </table>
+            </div>
+            <div id="archive-projects-pagination"></div>
           </div>
-          <div id="archive-client-reports-panel" class="panel hidden">
+          <div id="archive-report-list-panel" class="panel hidden">
             <div class="panel-header">
               <div>
-                <h2 id="archive-client-title">Reportes del cliente</h2>
-                <p id="archive-client-subtitle" class="muted"></p>
+                <h2 id="archive-report-list-title">Reportes archivados</h2>
+                <p id="archive-report-list-subtitle" class="muted"></p>
               </div>
               <div class="row-actions">
-                <button id="archive-back-to-clients" class="secondary" type="button">Volver a clientes</button>
+                <button id="archive-report-list-back" class="secondary" type="button">Volver al archivo</button>
               </div>
             </div>
             <div class="table-wrapper">
@@ -1793,17 +1808,17 @@
                   <tr>
                     <th>Folio</th>
                     <th>Tipo</th>
-                    <th>Origen</th>
-                    <th>Fecha reporte</th>
+                    <th>Fecha</th>
+                    <th>Servicio</th>
                     <th>Archivado</th>
                     <th>Ejecuto / Solucion</th>
                     <th></th>
                   </tr>
                 </thead>
-                <tbody id="archive-reports-table"></tbody>
+                <tbody id="archive-report-list-table"></tbody>
               </table>
             </div>
-            <div id="archive-reports-pagination"></div>
+            <div id="archive-project-reports-pagination"></div>
           </div>
         </section>
 

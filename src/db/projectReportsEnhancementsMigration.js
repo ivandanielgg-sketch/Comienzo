@@ -35,6 +35,18 @@ function migrateProjectReportsEnhancements(database, { postgres = false } = {}) 
         /* idempotent */
       }
     }
+    const projectArchiveColumns = [
+      ['reports_archived_at', 'TEXT'],
+      ['reports_archived_by_user_id', 'INTEGER'],
+      ['reports_archived_by_name', 'TEXT'],
+    ];
+    for (const [name, type] of projectArchiveColumns) {
+      try {
+        database.exec(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS ${name} ${type}`);
+      } catch (_) {
+        /* idempotent */
+      }
+    }
     return;
   }
 
@@ -43,6 +55,15 @@ function migrateProjectReportsEnhancements(database, { postgres = false } = {}) 
   }
   for (const [name, type] of failureColumns) {
     ensureColumnSqlite(database, 'project_failure_reports', name, type);
+  }
+
+  const projectArchiveColumns = [
+    ['reports_archived_at', 'TEXT'],
+    ['reports_archived_by_user_id', 'INTEGER'],
+    ['reports_archived_by_name', 'TEXT'],
+  ];
+  for (const [name, type] of projectArchiveColumns) {
+    ensureColumnSqlite(database, 'projects', name, type);
   }
 }
 

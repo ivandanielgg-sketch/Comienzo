@@ -2299,6 +2299,9 @@ function renderReportsProjectsTable() {
       <div class="row-actions">
         <button class="secondary" data-action="report-new" data-id="${p.id}" type="button">Generar reporte</button>
         <button class="secondary" data-action="report-list" data-id="${p.id}" type="button">Ver reportes</button>
+        ${canAccess('reports', 'edit')
+    ? `<button class="secondary" data-action="project-report-archive" data-id="${p.id}" type="button">Archivar</button>`
+    : ''}
       </div>`,
   });
 }
@@ -2574,7 +2577,7 @@ if (reportStatusFilter) {
 }
 
 if (reportsProjectsTable) {
-  reportsProjectsTable.addEventListener('click', (event) => {
+  reportsProjectsTable.addEventListener('click', async (event) => {
     const newBtn = event.target.closest('[data-action="report-new"]');
     if (newBtn) {
       showReportTypeSelector(newBtn.dataset.id);
@@ -2583,6 +2586,17 @@ if (reportsProjectsTable) {
     const listBtn = event.target.closest('[data-action="report-list"]');
     if (listBtn) {
       openReportListForProject(listBtn.dataset.id);
+      return;
+    }
+    const projectArchiveBtn = event.target.closest('[data-action="project-report-archive"]');
+    if (projectArchiveBtn) {
+      if (!window.confirm('Archivar este registro y todos sus reportes (tecnicos y de falla) en el Archivo de Reportes?')) return;
+      try {
+        await api(`/api/reports/projects/${projectArchiveBtn.dataset.id}/archive`, { method: 'POST', body: '{}' });
+        await loadReportsProjects();
+      } catch (error) {
+        window.alert(error.message);
+      }
     }
   });
 }
@@ -4165,123 +4179,203 @@ openReportForm = function(projectId, reportData) {
 
 // ===================== REPORT ARCHIVE MODULE =====================
 
+const archiveProjectsTable = document.getElementById('archive-projects-table');
+const archiveProjectsPanel = document.getElementById('archive-projects-panel');
+const archiveReportListPanel = document.getElementById('archive-report-list-panel');
+const archiveReportListTable = document.getElementById('archive-report-list-table');
+const archiveReportListTitle = document.getElementById('archive-report-list-title');
+const archiveReportListSubtitle = document.getElementById('archive-report-list-subtitle');
+const archiveReportListBack = document.getElementById('archive-report-list-back');
+const archiveProjectSearch = document.getElementById('archive-project-search');
+
+state.archiveAllProjects = [];
+state.archiveProjPag = { page: 1, limit: 15 };
+state.archiveProjSearch = '';
+state.archiveProjReportsPag = { page: 1, limit: 15 };
+state.currentArchiveProjectId = null;
+
+const archiveProjectColumns = [
+  { key: 'quote_number', label: 'Folio', type: 'text', sortable: true },
+  { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
+  { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true },
+  { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, render: (p) => p.report_count || 0 },
+  {
+    key: 'reports_archived_at',
+    label: 'Archivado',
+    type: 'text',
+    sortable: true,
+    render: (p) => escapeHtml(p.reports_archived_at_cdmx || p.reports_archived_at || ''),
+  },
+];
+
+const archiveReportListColumns = [
+  { key: 'report_folio', label: 'Folio', type: 'text', sortable: true },
+  {
+    key: 'report_type',
+    label: 'Tipo',
+    type: 'text',
+    sortable: true,
+    render: (r) => escapeHtml(r.report_type_label || (r._kind === 'failure' ? 'Reporte de falla' : r.report_type || '')),
+  },
+  { key: 'report_date', label: 'Fecha', type: 'date', sortable: true },
+  { key: 'service_name', label: 'Servicio', type: 'text', sortable: true },
+  {
+    key: 'archived_at',
+    label: 'Archivado',
+    type: 'text',
+    sortable: true,
+    render: (r) => escapeHtml(r.archived_at_cdmx || r.archived_at || ''),
+  },
+  {
+    key: 'executed_by_name',
+    label: 'Ejecuto / Solucion',
+    type: 'text',
+    sortable: true,
+    render: (r) => escapeHtml(r.executed_by_name || r.solution_responsible_name || ''),
+  },
+];
+
 const archiveTab = document.getElementById('report-archive-tab');
 if (archiveTab) {
   archiveTab.addEventListener('click', async () => {
-    if (canAccess('reportsArchive', 'view')) {
-      switchView('report-archive');
-    } else {
-      switchView('report-archive');
-    }
-    await loadArchiveClients();
+    switchView('report-archive');
+    showArchiveProjectsList();
+    await loadArchiveProjects();
   });
 }
 
-async function loadArchiveClients() {
-  const panel = document.getElementById('archive-client-reports-panel');
-  if (panel) panel.classList.add('hidden');
-  const list = document.getElementById('archive-clients-list');
-  if (!list) return;
-  const search = (document.getElementById('archive-client-search') || {}).value || '';
+function showArchiveProjectsList() {
+  if (archiveProjectsPanel) archiveProjectsPanel.classList.remove('hidden');
+  if (archiveReportListPanel) archiveReportListPanel.classList.add('hidden');
+}
+
+async function loadArchiveProjects() {
+  if (!archiveProjectsTable) return;
+  const params = new URLSearchParams({
+    page: state.archiveProjPag.page,
+    limit: state.archiveProjPag.limit,
+    search: state.archiveProjSearch,
+    ...buildTableParams('archiveProjects'),
+  });
   try {
-    const result = await api('/api/reports/archive/clients?search=' + encodeURIComponent(search));
-    const clients = result.data || [];
-    if (!clients.length) {
-      list.innerHTML = '<p class="muted">No hay reportes archivados.</p>';
-      return;
-    }
-    list.innerHTML = clients.map((c) => `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:#f8fbff;">
-        <div>
-          <strong>${escapeHtml(c.client_name)}</strong>
-          <small class="muted" style="display:block;">Reportes archivados: ${c.reports_count} | Ultimo archivado: ${escapeHtml(c.last_archived_at_cdmx || c.last_archived_at || 'N/A')}</small>
-        </div>
-        <button class="secondary" data-action="archive-view-client" data-client="${escapeHtml(c.client_name)}" type="button">Ver reportes</button>
-      </div>
-    `).join('');
-  } catch (e) {
-    list.innerHTML = '<p class="muted">Error al cargar archivo.</p>';
+    const result = await api(`/api/reports/archive/projects?${params}`);
+    state.archiveAllProjects = result.data || [];
+    renderDataTable({
+      tableBody: archiveProjectsTable,
+      tableKey: 'archiveProjects',
+      columns: archiveProjectColumns,
+      data: state.archiveAllProjects,
+      pagination: result.pagination || defaultPagination,
+      paginationContainerId: 'archive-projects-pagination',
+      emptyMessage: 'No hay registros archivados.',
+      filteredEmptyMessage: 'No se encontraron registros archivados con la busqueda actual.',
+      isFiltered: Boolean(state.archiveProjSearch),
+      onRefresh: loadArchiveProjects,
+      pageState: state.archiveProjPag,
+      renderActions: (p) => `
+        <button class="secondary" data-action="archive-view-project" data-id="${p.id}" type="button">Ver reportes</button>`,
+    });
+  } catch (_e) {
+    archiveProjectsTable.innerHTML = '<tr><td colspan="6" class="muted">Error al cargar archivo.</td></tr>';
   }
 }
 
-const archiveSearchInput = document.getElementById('archive-client-search');
-if (archiveSearchInput) {
-  archiveSearchInput.addEventListener('input', debounce(() => loadArchiveClients()));
+async function openArchiveReportListForProject(projectId) {
+  const project = state.archiveAllProjects.find((p) => p.id === Number(projectId));
+  if (!project) return;
+  state.currentArchiveProjectId = Number(projectId);
+  state.archiveProjReportsPag = { page: 1, limit: 15 };
+  resetTableControls('archiveProjectReports');
+  if (archiveProjectsPanel) archiveProjectsPanel.classList.add('hidden');
+  if (archiveReportListPanel) archiveReportListPanel.classList.remove('hidden');
+  if (archiveReportListTitle) {
+    archiveReportListTitle.textContent = `Reportes archivados - Proyecto #${project.id}`;
+  }
+  if (archiveReportListSubtitle) {
+    archiveReportListSubtitle.textContent = `${project.client_name} | ${project.project_description || ''} | Archivado: ${project.reports_archived_at_cdmx || project.reports_archived_at || ''}`;
+  }
+  await loadArchiveProjectReports(projectId);
 }
 
-document.addEventListener('click', async (event) => {
-  const viewBtn = event.target.closest('[data-action="archive-view-client"]');
-  if (viewBtn) {
-    await loadArchiveClientReports(viewBtn.dataset.client);
-  }
-  const archivePrintBtn = event.target.closest('[data-action="archive-print"]');
-  if (archivePrintBtn) {
-    openReportPrintView(archivePrintBtn.dataset.id, archivePrintBtn.dataset.type);
-  }
-  const archiveDeleteBtn = event.target.closest('[data-action="archive-delete"]');
-  if (archiveDeleteBtn) {
-    const reason = window.prompt('Motivo de eliminacion (obligatorio):');
-    if (!reason || !reason.trim()) return;
-    try {
-      await api('/api/reports/' + archiveDeleteBtn.dataset.id, {
-        method: 'DELETE',
-        body: JSON.stringify({ delete_reason: reason }),
-      });
-      window.alert('Reporte eliminado logicamente.');
-      loadArchiveClientReports(archiveDeleteBtn.dataset.client);
-    } catch (err) {
-      window.alert(err.message);
-    }
-  }
-});
-
-state.archiveReportsPag = { page: 1, limit: 15 };
-
-async function loadArchiveClientReports(clientName) {
-  const panel = document.getElementById('archive-client-reports-panel');
-  const title = document.getElementById('archive-client-title');
-  if (!panel) return;
-  panel.classList.remove('hidden');
-  if (title) title.textContent = clientName;
-  const tbody = document.getElementById('archive-reports-table');
+async function loadArchiveProjectReports(projectId) {
+  if (!archiveReportListTable) return;
   try {
-    const params = new URLSearchParams({ page: state.archiveReportsPag.page, limit: state.archiveReportsPag.limit });
-    const result = await api(`/api/reports/archive/client/${encodeURIComponent(clientName)}?${params}`);
-    const reports = result.data || [];
-    if (!reports.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="muted">Sin reportes archivados para este cliente.</td></tr>';
-      return;
-    }
-    tbody.innerHTML = reports.map((r) => `
-      <tr>
-        <td>${escapeHtml(r.folio || r.report_folio)}</td>
-        <td>${escapeHtml(r.report_type_label || r.report_type || '')}</td>
-        <td>${escapeHtml(r.origin_label || `Proyecto #${r.project_id}`)}</td>
-        <td>${escapeHtml(r.report_date || '')}</td>
-        <td>${escapeHtml(r.archived_at_cdmx || r.archived_at || '')}</td>
-        <td>${escapeHtml(r.executed_by_name || '')}</td>
-        <td>
+    const params = new URLSearchParams({
+      page: state.archiveProjReportsPag.page,
+      limit: state.archiveProjReportsPag.limit,
+      ...buildTableParams('archiveProjectReports'),
+    });
+    const [result, failures] = await Promise.all([
+      api(`/api/reports/archive/projects/${projectId}/reports?${params}`),
+      api(`/api/reports/archive/projects/${projectId}/failure-reports`),
+    ]);
+    const failureRows = (failures.data || []).map((fr) => ({
+      ...fr,
+      _kind: 'failure',
+      report_folio: `FALLA-${fr.id}`,
+      report_date: String(fr.registered_at || '').slice(0, 10),
+      service_name: fr.problem_description,
+      report_type: 'failure_report',
+      report_type_label: 'Reporte de falla',
+      executed_by_name: fr.solution_responsible_name,
+    }));
+    const merged = [...(result.data || []), ...failureRows];
+    renderDataTable({
+      tableBody: archiveReportListTable,
+      tableKey: 'archiveProjectReports',
+      columns: archiveReportListColumns,
+      data: merged,
+      pagination: result.pagination || defaultPagination,
+      paginationContainerId: 'archive-project-reports-pagination',
+      emptyMessage: 'No hay reportes archivados para este registro.',
+      filteredEmptyMessage: 'No se encontraron reportes archivados con la busqueda actual.',
+      onRefresh: () => loadArchiveProjectReports(projectId),
+      pageState: state.archiveProjReportsPag,
+      renderActions: (r) => {
+        if (r._kind === 'failure') {
+          return '<span class="muted">—</span>';
+        }
+        return `
           <div class="row-actions">
-            ${r.record_kind === 'technical'
-    ? `<button class="secondary" data-action="archive-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>`
-    : ''}
-            ${canAccess('reportsArchive', 'delete') && r.record_kind === 'technical'
-    ? `<button class="danger" data-action="archive-delete" data-id="${r.id}" data-client="${escapeHtml(clientName)}" type="button">Eliminar</button>`
-    : ''}
-          </div>
-        </td>
-      </tr>
-    `).join('');
-  } catch (e) {
-    tbody.innerHTML = '<tr><td colspan="7" class="muted">Error al cargar reportes.</td></tr>';
+            <button class="secondary" data-action="archive-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>
+          </div>`;
+      },
+    });
+  } catch (_e) {
+    archiveReportListTable.innerHTML = '<tr><td colspan="6" class="muted">Error al cargar reportes archivados.</td></tr>';
   }
 }
 
-const archiveBackBtn = document.getElementById('archive-back-to-clients');
-if (archiveBackBtn) {
-  archiveBackBtn.addEventListener('click', () => {
-    const panel = document.getElementById('archive-client-reports-panel');
-    if (panel) panel.classList.add('hidden');
+if (archiveProjectSearch) {
+  archiveProjectSearch.addEventListener('input', debounce(() => {
+    state.archiveProjSearch = archiveProjectSearch.value;
+    state.archiveProjPag.page = 1;
+    loadArchiveProjects();
+  }));
+}
+
+if (archiveProjectsTable) {
+  archiveProjectsTable.addEventListener('click', (event) => {
+    const viewBtn = event.target.closest('[data-action="archive-view-project"]');
+    if (viewBtn) {
+      openArchiveReportListForProject(viewBtn.dataset.id);
+    }
+  });
+}
+
+if (archiveReportListTable) {
+  archiveReportListTable.addEventListener('click', (event) => {
+    const archivePrintBtn = event.target.closest('[data-action="archive-print"]');
+    if (archivePrintBtn) {
+      openReportPrintView(archivePrintBtn.dataset.id, archivePrintBtn.dataset.type);
+    }
+  });
+}
+
+if (archiveReportListBack) {
+  archiveReportListBack.addEventListener('click', () => {
+    showArchiveProjectsList();
+    loadArchiveProjects();
   });
 }
 
