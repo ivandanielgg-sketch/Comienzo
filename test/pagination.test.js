@@ -8,6 +8,7 @@ const {
   normalizeSort,
   addSqlFilters,
 } = require('../src/pagination');
+const { sqlSearchExpr } = require('../src/search');
 
 test('parsePaginationParams defaults', () => {
   const result = parsePaginationParams({});
@@ -153,7 +154,7 @@ test('addSqlFilters builds text, number range, date range, select and boolean fi
   );
 
   assert.deepEqual(result.whereParts, [
-    'order_number LIKE ?',
+    `${sqlSearchExpr('order_number')} LIKE ?`,
     'total >= ?',
     'total <= ?',
     'created_at >= ?',

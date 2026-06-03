@@ -1,3 +1,5 @@
+const { sqlSearchExpr, normalizeSearchTerm } = require('./search');
+
 const ALLOWED_LIMITS = [15, 30, 50];
 const MAX_EXPORT_LIMIT = 9999;
 const DEFAULT_LIMIT = 15;
@@ -77,9 +79,12 @@ function addSqlFilters(query, filterDefinitions = {}, whereParts = [], params = 
     if (definition.type === 'text') {
       const value = String(readQueryValue(query, key) ?? '').trim();
       if (value) {
-        whereParts.push(`${column} LIKE ?`);
-        params.push(`%${value}%`);
-        activeFilters[key] = value;
+        const term = normalizeSearchTerm(value);
+        if (term) {
+          whereParts.push(`${sqlSearchExpr(column)} LIKE ?`);
+          params.push(`%${term}%`);
+          activeFilters[key] = value;
+        }
       }
       return;
     }
