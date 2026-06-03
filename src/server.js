@@ -69,11 +69,26 @@ const ARCHIVED_PROJECT_REPORT_WHERE = 'archived_at IS NOT NULL AND deleted_at IS
 
 function activeProjectReportCountSql(projectTableAlias = 'p') {
   return `(
-    (SELECT COUNT(*) FROM project_reports
-      WHERE project_id = ${projectTableAlias}.id AND ${ACTIVE_PROJECT_REPORT_WHERE})
+    (SELECT COUNT(*) FROM project_reports r
+      WHERE r.project_id = ${projectTableAlias}.id
+        AND r.deleted_at IS NULL AND r.archived_at IS NULL)
     + (SELECT COUNT(*) FROM project_failure_reports fr
       WHERE fr.project_id = ${projectTableAlias}.id AND fr.archived_at IS NULL)
   )`;
+}
+
+function archivedProjectReportCountSql(projectTableAlias = 'p') {
+  return `(
+    (SELECT COUNT(*) FROM project_reports r
+      WHERE r.project_id = ${projectTableAlias}.id AND r.archived_at IS NOT NULL AND r.deleted_at IS NULL)
+    + (SELECT COUNT(*) FROM project_failure_reports fr
+      WHERE fr.project_id = ${projectTableAlias}.id AND fr.archived_at IS NOT NULL)
+  )`;
+}
+
+function normalizeReportCount(value) {
+  const count = Number(value);
+  return Number.isFinite(count) ? count : 0;
 }
 const SESSION_TTL_MS = 1000 * 60 * 60;
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -1620,7 +1635,7 @@ app.get('/api/reports/projects', requireAuth, requirePermission('reports', 'view
     project_description: row.project_description,
     status: row.status,
     closed_at: row.closed_at,
-    report_count: row.report_count,
+    report_count: normalizeReportCount(row.report_count),
   }));
 
   res.json(buildListResponse(data, pag, sorting, filters));
@@ -2140,9 +2155,7 @@ app.post('/api/failure-reports/:id/archive', requireAuth, requirePermission('rep
 
 app.get('/api/reports/archive/projects', requireAuth, requirePermission('reportsArchive', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
-  const techCountSql = '(SELECT COUNT(*) FROM project_reports r WHERE r.project_id = p.id AND r.archived_at IS NOT NULL AND r.deleted_at IS NULL)';
-  const failureCountSql = `(SELECT COUNT(*) FROM project_failure_reports fr WHERE fr.project_id = p.id AND fr.archived_at IS NOT NULL)`;
-  const reportCountSql = `(${techCountSql} + ${failureCountSql})`;
+  const reportCountSql = archivedProjectReportCountSql('p');
   const sorting = normalizeSort(req.query, {
     ...PROJECT_SORTS,
     reports_archived_at: 'p.reports_archived_at',
@@ -2163,8 +2176,7 @@ app.get('/api/reports/archive/projects', requireAuth, requirePermission('reports
   const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM projects p WHERE ${whereClause}`).get(...params).count;
   const pag = buildPaginationMeta(page, limit, totalRecords);
   const rows = db.prepare(
-    `SELECT p.*, ${techCountSql} as technical_report_count, ${failureCountSql} as failure_report_count,
-      ${reportCountSql} as report_count
+    `SELECT p.*, ${reportCountSql} as report_count
      FROM projects p
      WHERE ${whereClause}
      ORDER BY ${sorting.orderBy}
@@ -2177,7 +2189,7 @@ app.get('/api/reports/archive/projects', requireAuth, requirePermission('reports
     client_name: row.client_name,
     project_description: row.project_description,
     status: row.status,
-    report_count: row.report_count,
+    report_count: normalizeReportCount(row.report_count),
     reports_archived_at: row.reports_archived_at,
     reports_archived_at_cdmx: formatDateTimeCDMX(row.reports_archived_at),
     reports_archived_by_name: row.reports_archived_by_name,
@@ -2426,12 +2438,10 @@ app.get('/api/closed-projects/client/:clientName', requireAuth, requirePermissio
     orderBy: sorting.orderBy,
     map: (project) => ({
       ...mapProject(project, exchangeRates),
-      report_count: db.prepare(
-        `SELECT
-          (SELECT COUNT(*) FROM project_reports WHERE project_id = ? AND ${ACTIVE_PROJECT_REPORT_WHERE})
-          + (SELECT COUNT(*) FROM project_failure_reports WHERE project_id = ? AND archived_at IS NULL)
-          AS count`,
-      ).get(project.id, project.id).count,
+      report_count: normalizeReportCount(
+        db.prepare(`SELECT ${activeProjectReportCountSql('p')} AS count FROM projects p WHERE p.id = ?`)
+          .get(project.id).count,
+      ),
     }),
   });
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));

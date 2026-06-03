@@ -491,7 +491,7 @@ const reportsProjectColumns = [
   { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
   { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
   { key: 'status', label: 'Estatus', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status ${statusBadgeClass(p.status)}">${escapeHtml(p.status)}</span>` },
-  { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, render: (p) => p.report_count || 0 },
+  { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, render: (p) => Number(p.report_count) || 0 },
 ];
 
 const reportListColumns = [
@@ -2461,6 +2461,7 @@ async function openReportListForProject(projectId) {
   reportListSubtitle.textContent = `${project.client_name} | ${project.project_description || ''}`;
 
   await loadProjectReports(projectId);
+  loadReportsProjects();
 }
 
 async function loadProjectReports(projectId) {
@@ -2645,7 +2646,7 @@ if (reportListTable) {
       try {
         await api(`/api/reports/${archiveBtn.dataset.id}/archive`, { method: 'POST', body: '{}' });
         await loadProjectReports(state.currentReportProjectId);
-        await loadReportsProjects();
+        loadReportsProjects();
       } catch (error) {
         window.alert(error.message);
       }
@@ -2657,6 +2658,7 @@ if (reportListTable) {
       try {
         await api(`/api/failure-reports/${failureArchiveBtn.dataset.id}/archive`, { method: 'POST', body: '{}' });
         await loadProjectReports(state.currentReportProjectId);
+        loadReportsProjects();
       } catch (error) {
         window.alert(error.message);
       }
@@ -2678,7 +2680,8 @@ if (reportForm) {
       });
 
       setMessage(reportMessage, 'Reporte guardado correctamente.', true);
-      setTimeout(() => {
+      setTimeout(async () => {
+        await loadReportsProjects();
         openReportListForProject(result.project_id);
       }, 800);
     } catch (error) {
@@ -3885,7 +3888,10 @@ if (reportsFailureForm) {
         body: JSON.stringify(payload),
       });
       setMessage(reportsFailureMessage, 'Reporte de falla registrado.', true);
-      setTimeout(() => openReportListForProject(projectId), 600);
+      setTimeout(async () => {
+        await loadReportsProjects();
+        openReportListForProject(projectId);
+      }, 600);
     } catch (error) {
       setMessage(reportsFailureMessage, error.message);
     }
@@ -4199,7 +4205,7 @@ const archiveProjectColumns = [
   { key: 'quote_number', label: 'Folio', type: 'text', sortable: true },
   { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
   { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true },
-  { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, render: (p) => p.report_count || 0 },
+  { key: 'report_count', label: 'Reportes', type: 'number', sortable: true, render: (p) => Number(p.report_count) || 0 },
   {
     key: 'reports_archived_at',
     label: 'Archivado',
