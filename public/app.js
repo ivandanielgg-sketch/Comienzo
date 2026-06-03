@@ -5850,24 +5850,56 @@ if (commissionsTab) {
 
 ['agents', 'projects', 'pending', 'history'].forEach(function(tab) {
   var btn = document.getElementById('commissions-subtab-' + tab);
-  if (btn) btn.addEventListener('click', function() { switchCommissionsSubtab(tab); });
+  if (btn) btn.addEventListener('click', function() {
+    switchCommissionsSubtab(tab);
+    if (tab === 'projects') loadAvailableProjectsOnly();
+  });
 });
 
+function populateCommissionsYearFilter() {
+  var sel = document.getElementById('commissions-filter-year');
+  if (!sel || sel.dataset.populated) return;
+  var y = new Date().getFullYear();
+  var html = '<option value="">Todos</option>';
+  for (var i = y; i >= y - 5; i--) html += '<option value="' + i + '">' + i + '</option>';
+  sel.innerHTML = html;
+  sel.dataset.populated = '1';
+}
+
 function getCommissionsPeriodQuery() {
-  var input = document.getElementById('commissions-period-filter');
-  if (!input || !input.value) return '';
-  var parts = input.value.split('-');
-  if (parts.length < 2) return '';
-  return '?year=' + encodeURIComponent(parts[0]) + '&month=' + encodeURIComponent(Number(parts[1]));
+  var yearSel = document.getElementById('commissions-filter-year');
+  var monthSel = document.getElementById('commissions-filter-month');
+  if (!yearSel || !monthSel) return '';
+  var year = yearSel.value;
+  var month = monthSel.value;
+  if (!year || !month) return '';
+  return '?year=' + encodeURIComponent(year) + '&month=' + encodeURIComponent(month);
+}
+
+async function loadAvailableProjectsOnly() {
+  var statusEl = document.getElementById('commissions-available-status');
+  var errEl = document.getElementById('commissions-available-error');
+  if (errEl) { errEl.classList.add('hidden'); errEl.textContent = ''; }
+  if (statusEl) statusEl.textContent = 'Cargando proyectos...';
+  try {
+    var available = await api('/api/commissions/available-projects');
+    renderAvailableProjects(available);
+    if (statusEl) statusEl.textContent = available.length + ' proyecto(s) disponibles para asignar comision.';
+  } catch (e) {
+    console.error('Error loading available projects:', e);
+    if (errEl) { errEl.textContent = e.message || 'No se pudieron cargar los proyectos.'; errEl.classList.remove('hidden'); }
+    if (statusEl) statusEl.textContent = '';
+    renderAvailableProjects([]);
+  }
 }
 
 async function loadCommissions() {
   if (!commissionsView) return;
+  populateCommissionsYearFilter();
   try {
     var summary = await api('/api/commissions/summary' + getCommissionsPeriodQuery());
     var agents = await api('/api/commissions/agents');
     commissionActiveEmployees = await api('/api/commissions/active-employees');
-    var available = await api('/api/commissions/available-projects');
     var commissions = await api('/api/commissions');
     var payments = await api('/api/commissions/payments');
     renderCommissionsSummary(summary);
@@ -5875,13 +5907,16 @@ async function loadCommissions() {
     renderCommissionsMonthlySeries(summary.monthly_series, summary.period);
     renderAgentsWithProjects(summary.agents_with_projects);
     renderAgentsTable(agents, summary);
-    renderAvailableProjects(available);
     renderCommissionsTable(commissions);
     renderCommissionPayments(payments);
     populateCommissionEmployeeSelect(agents);
     populateAgentSelects(agents, commissionActiveEmployees);
     populateAssignModalEmployees();
-  } catch (e) { console.error('Error loading commissions:', e); }
+    await loadAvailableProjectsOnly();
+  } catch (e) {
+    console.error('Error loading commissions:', e);
+    window.alert(e.message || 'Error al cargar comisiones.');
+  }
 }
 
 function renderCommissionsSummary(summary) {
@@ -6120,6 +6155,7 @@ if (commissionExtraordinaryForm) {
       await api('/api/commissions/extraordinary', { method: 'POST', body: JSON.stringify(payload) });
       commissionExtraordinaryForm.reset();
       await loadCommissions();
+      await loadAvailableProjectsOnly();
       switchCommissionsSubtab('pending');
     } catch (err) { window.alert(err.message); }
   });
@@ -6164,6 +6200,7 @@ if (commissionAssignForm) {
       await api('/api/commissions', { method: 'POST', body: JSON.stringify(payload) });
       document.getElementById('commission-assign-modal').classList.add('hidden');
       await loadCommissions();
+      await loadAvailableProjectsOnly();
       switchCommissionsSubtab('pending');
       if (msg) msg.textContent = '';
     } catch (err) {
@@ -6207,16 +6244,36 @@ if (commissionPayForm) {
 attachCommissionModalClose(document.getElementById('commission-assign-modal'));
 attachCommissionModalClose(document.getElementById('commission-pay-modal'));
 
-var commissionsPeriodFilter = document.getElementById('commissions-period-filter');
-if (commissionsPeriodFilter) {
-  commissionsPeriodFilter.addEventListener('change', function() { loadCommissions(); });
+var commissionsPeriodForm = document.getElementById('commissions-period-form');
+if (commissionsPeriodForm) {
+  commissionsPeriodForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var yearSel = document.getElementById('commissions-filter-year');
+    var monthSel = document.getElementById('commissions-filter-month');
+    if (yearSel && monthSel && yearSel.value && !monthSel.value) {
+      window.alert('Seleccione tambien el mes, o use Ver acumulado total.');
+      return;
+    }
+    if (yearSel && monthSel && monthSel.value && !yearSel.value) {
+      window.alert('Seleccione el ano del periodo.');
+      return;
+    }
+    loadCommissions();
+  });
 }
 var commissionsPeriodClear = document.getElementById('commissions-period-clear');
 if (commissionsPeriodClear) {
   commissionsPeriodClear.addEventListener('click', function() {
-    if (commissionsPeriodFilter) commissionsPeriodFilter.value = '';
+    var yearSel = document.getElementById('commissions-filter-year');
+    var monthSel = document.getElementById('commissions-filter-month');
+    if (yearSel) yearSel.value = '';
+    if (monthSel) monthSel.value = '';
     loadCommissions();
   });
+}
+var commissionsRefreshProjects = document.getElementById('commissions-refresh-projects');
+if (commissionsRefreshProjects) {
+  commissionsRefreshProjects.addEventListener('click', function() { loadAvailableProjectsOnly(); });
 }
 
 // ===================== ACTIVITY MONITOR =====================

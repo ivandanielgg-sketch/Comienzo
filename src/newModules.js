@@ -135,8 +135,12 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       const period = parseCommissionsPeriod(req.query);
       const dashboard = buildCommissionsDashboard(db, period);
       const activeAgents = db.prepare("SELECT COUNT(*) as cnt FROM sales_commission_agents WHERE active = 1 AND deleted_at IS NULL").get().cnt;
-      const pendingProjects = db.prepare(`SELECT COUNT(*) as cnt FROM projects WHERE deleted_at IS NULL
-        AND id NOT IN (SELECT sc.project_id FROM sales_commissions sc WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada' AND sc.project_id IS NOT NULL)`).get().cnt;
+      const pendingProjects = db.prepare(`SELECT COUNT(*) as cnt FROM projects p
+        WHERE p.deleted_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM sales_commissions sc
+            WHERE sc.project_id = p.id AND sc.deleted_at IS NULL AND sc.status != 'cancelada'
+          )`).get().cnt;
       const agentSummaries = db.prepare(`SELECT sca.id, sca.name, sca.employee_id, sca.active,
         COALESCE((SELECT SUM(sc.commission_amount_mxn) FROM sales_commissions sc WHERE sc.sales_agent_id = sca.id AND sc.deleted_at IS NULL AND sc.status NOT IN ('no_aplica', 'cancelada')), 0) as earned_mxn,
         COALESCE((SELECT SUM(sc.commission_amount_mxn) FROM sales_commissions sc WHERE sc.sales_agent_id = sca.id AND sc.deleted_at IS NULL AND sc.status = 'pendiente'), 0) as pending_commissions_mxn,
@@ -227,12 +231,20 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       const rates = loadExchangeRates(db);
       const projects = db.prepare(`SELECT p.* FROM projects p
         WHERE p.deleted_at IS NULL
-          AND p.id NOT IN (
-            SELECT sc.project_id FROM sales_commissions sc
-            WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada' AND sc.project_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM sales_commissions sc
+            WHERE sc.project_id = p.id AND sc.deleted_at IS NULL AND sc.status != 'cancelada'
           )
-        ORDER BY p.id DESC`).all();
-      res.json(projects.map((p) => mapProjectForCommission(db, p, rates)));
+        ORDER BY COALESCE(p.closed_at, p.created_at) DESC, p.id DESC`).all();
+      const result = [];
+      for (const project of projects) {
+        try {
+          result.push(mapProjectForCommission(db, project, rates));
+        } catch (mapError) {
+          console.error('[commissions] available-projects map error project', project.id, mapError.message);
+        }
+      }
+      res.json(result);
     } catch (error) { next(error); }
   });
 
