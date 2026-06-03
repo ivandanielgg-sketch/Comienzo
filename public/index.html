@@ -141,7 +141,9 @@
                 </label>
                 <label>
                   Vendedor que cerro la venta
-                  <input name="seller" required />
+                  <select name="vendedor_id" required>
+                    <option value="">Seleccione vendedor...</option>
+                  </select>
                 </label>
                 <label>
                   Nombre del cliente
@@ -172,7 +174,13 @@
                 </label>
                 <label>
                   Tecnico responsable
-                  <input name="technician_name" required />
+                  <select name="tecnico_id" required>
+                    <option value="">Seleccione tecnico...</option>
+                  </select>
+                </label>
+                <label>
+                  Fecha de vencimiento
+                  <input name="fecha_vencimiento" type="date" required />
                 </label>
                 <label>
                   Fecha prometida de entrega

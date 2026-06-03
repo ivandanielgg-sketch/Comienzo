@@ -115,10 +115,10 @@ test('permissions enforcement', async (t) => {
   await t.test('regular user can create projects', async () => {
     const res = await request('POST', '/api/projects', {
       quote_number: 'PERM-001', order_number: 'PED-P1',
-      purchase_order_not_applicable: true, seller: 'User', client_name: 'Client',
-      project_description: 'Test perm', technician_name: 'Tech',
-      promised_delivery_date: '2026-08-01', expected_margin: 10,
-      total_invoiced: 1000, total_invoiced_currency: 'MXN',
+      purchase_order_not_applicable: true, tecnico_id: 1, vendedor_id: 2,
+      client_name: 'Client', project_description: 'Test perm',
+      fecha_vencimiento: '2026-09-01', promised_delivery_date: '2026-08-01',
+      expected_margin: 10, total_invoiced: 1000, total_invoiced_currency: 'MXN',
       progress_percent: 0, status: 'Pendiente', risk: 'Bajo',
     }, userCookie);
     assert.equal(res.status, 201);

@@ -106,6 +106,7 @@ const state = {
 
 state.projectsPag = { page: 1, limit: 15 };
 state.projectsSearch = '';
+state.projectAssignableEmployees = [];
 state.closedPag = { page: 1, limit: 15 };
 state.closedSearch = '';
 state.employeesPag = { page: 1, limit: 15 };
@@ -637,6 +638,7 @@ async function showApp() {
   if (canAccess('projects', 'view')) {
     switchView('projects');
     await loadExchangeRates();
+    await loadProjectAssignableEmployees();
     await loadProjects();
   } else if (canAccess('reports', 'view')) {
     switchView('reports');
@@ -1050,8 +1052,46 @@ function selectProject(projectId) {
   renderDetail(project);
 }
 
+function addDaysToDateInput(baseDate, days) {
+  const iso = baseDate || new Date().toISOString().slice(0, 10);
+  const date = new Date(`${iso}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function populateProjectStaffSelects(selectedTecnicoId, selectedVendedorId) {
+  if (!projectForm) return;
+  const tecnicoSelect = projectForm.elements.tecnico_id;
+  const vendedorSelect = projectForm.elements.vendedor_id;
+  if (!tecnicoSelect || !vendedorSelect) return;
+
+  const options = (state.projectAssignableEmployees || []).map((emp) => (
+    `<option value="${emp.id}">${escapeHtml(emp.full_name)} (${escapeHtml(emp.employee_number)})</option>`
+  )).join('');
+
+  tecnicoSelect.innerHTML = `<option value="">Seleccione tecnico...</option>${options}`;
+  vendedorSelect.innerHTML = `<option value="">Seleccione vendedor...</option>${options}`;
+
+  if (selectedTecnicoId) tecnicoSelect.value = String(selectedTecnicoId);
+  if (selectedVendedorId) vendedorSelect.value = String(selectedVendedorId);
+}
+
+async function loadProjectAssignableEmployees() {
+  try {
+    const result = await api('/api/projects/assignable-employees');
+    state.projectAssignableEmployees = result.data || [];
+    populateProjectStaffSelects(
+      projectForm?.elements?.id?.value ? projectForm.elements.tecnico_id?.value : null,
+      projectForm?.elements?.id?.value ? projectForm.elements.vendedor_id?.value : null,
+    );
+  } catch (_error) {
+    state.projectAssignableEmployees = [];
+  }
+}
+
 function fillProjectForm(project) {
   projectFormTitle.textContent = `Editar proyecto #${project.id}`;
+  populateProjectStaffSelects(project.tecnico_id, project.vendedor_id);
   projectForm.elements.id.value = project.id;
   projectForm.elements.quote_number.value = project.quote_number;
   projectForm.elements.order_number.value = project.order_number;
@@ -1059,14 +1099,19 @@ function fillProjectForm(project) {
   projectForm.elements.purchase_order_not_applicable.checked = Boolean(
     project.purchase_order_not_applicable,
   );
-  projectForm.elements.seller.value = project.seller;
   projectForm.elements.client_name.value = project.client_name;
   projectForm.elements.project_description.value = project.project_description || '';
   projectForm.elements.expected_margin.value = project.expected_margin;
   if (projectForm.elements.total_invoiced.setCurrencyValue) { projectForm.elements.total_invoiced.setCurrencyValue(project.total_invoiced); } else { projectForm.elements.total_invoiced.value = project.total_invoiced; }
   projectForm.elements.total_invoiced_currency.value = project.total_invoiced_currency || 'MXN';
   projectForm.elements.progress_percent.value = project.progress_percent;
-  projectForm.elements.technician_name.value = project.technician_name;
+  if (projectForm.elements.tecnico_id) {
+    projectForm.elements.tecnico_id.value = project.tecnico_id ? String(project.tecnico_id) : '';
+  }
+  if (projectForm.elements.vendedor_id) {
+    projectForm.elements.vendedor_id.value = project.vendedor_id ? String(project.vendedor_id) : '';
+  }
+  projectForm.elements.fecha_vencimiento.value = project.fecha_vencimiento || addDaysToDateInput(project.created_at, 30);
   projectForm.elements.promised_delivery_date.value = project.promised_delivery_date;
   projectForm.elements.status.value = project.status;
   projectForm.elements.risk.value = project.risk;
@@ -1083,6 +1128,8 @@ function resetProjectForm() {
   if (projectForm.elements.total_invoiced.setCurrencyValue) { projectForm.elements.total_invoiced.setCurrencyValue(0); } else { projectForm.elements.total_invoiced.value = 0; }
   projectForm.elements.total_invoiced_currency.value = 'MXN';
   projectForm.elements.progress_percent.value = 0;
+  projectForm.elements.fecha_vencimiento.value = addDaysToDateInput(null, 30);
+  populateProjectStaffSelects();
   togglePurchaseOrder();
   setMessage(projectMessage, '');
 }

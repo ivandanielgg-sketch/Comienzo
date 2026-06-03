@@ -132,9 +132,9 @@ describe('New modules integration', () => {
     before(async () => {
       const projRes = await request('POST', '/api/projects', {
         quote_number: `COMM-${suffix}-001`, order_number: `ORD-${suffix}-001`, purchase_order_not_applicable: true,
-        seller: 'Vendedor', client_name: 'Cliente Comision', project_description: 'Test',
-        expected_margin: 0.3, total_invoiced: 200000, progress_percent: 100,
-        technician_name: 'Tech', promised_delivery_date: '2026-12-01', status: 'Terminado', risk: 'Bajo'
+        tecnico_id: 1, vendedor_id: 2, client_name: 'Cliente Comision', project_description: 'Test',
+        fecha_vencimiento: '2026-12-01', expected_margin: 0.3, total_invoiced: 200000, progress_percent: 100,
+        promised_delivery_date: '2026-12-01', status: 'Terminado', risk: 'Bajo',
       });
       projectId = projRes.body.id;
       await request('DELETE', `/api/projects/${projectId}`, { password: 'admin123' });
@@ -171,9 +171,9 @@ describe('New modules integration', () => {
     it('commission percentage must be 1-20', async () => {
       const projRes = await request('POST', '/api/projects', {
         quote_number: `COMM-${suffix}-002`, order_number: `ORD-${suffix}-002`, purchase_order_not_applicable: true,
-        seller: 'V2', client_name: 'C2', project_description: 'T',
-        expected_margin: 0.2, total_invoiced: 50000, progress_percent: 100,
-        technician_name: 'T', promised_delivery_date: '2026-12-01', status: 'Terminado', risk: 'Bajo'
+        tecnico_id: 1, vendedor_id: 2, client_name: 'C2', project_description: 'T',
+        fecha_vencimiento: '2026-12-01', expected_margin: 0.2, total_invoiced: 50000, progress_percent: 100,
+        promised_delivery_date: '2026-12-01', status: 'Terminado', risk: 'Bajo',
       });
       await request('DELETE', `/api/projects/${projRes.body.id}`, { password: 'admin123' });
       const res = await request('POST', '/api/commissions', {
@@ -186,9 +186,9 @@ describe('New modules integration', () => {
     it('no_aplica requires reason', async () => {
       const projRes = await request('POST', '/api/projects', {
         quote_number: `COMM-${suffix}-003`, order_number: `ORD-${suffix}-003`, purchase_order_not_applicable: true,
-        seller: 'V3', client_name: 'C3', project_description: 'T',
-        expected_margin: 0.1, total_invoiced: 30000, progress_percent: 100,
-        technician_name: 'T', promised_delivery_date: '2026-12-01', status: 'Terminado', risk: 'Bajo'
+        tecnico_id: 1, vendedor_id: 2, client_name: 'C3', project_description: 'T',
+        fecha_vencimiento: '2026-12-01', expected_margin: 0.1, total_invoiced: 30000, progress_percent: 100,
+        promised_delivery_date: '2026-12-01', status: 'Terminado', risk: 'Bajo',
       });
       await request('DELETE', `/api/projects/${projRes.body.id}`, { password: 'admin123' });
       const res = await request('POST', '/api/commissions', {
