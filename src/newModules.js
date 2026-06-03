@@ -10,6 +10,8 @@ const {
   mapProjectForCommission,
   calculateProjectCommission,
   mapCommissionListRow,
+  parseCommissionsPeriod,
+  buildCommissionsDashboard,
 } = require('./commissions');
 
 function commissionProjectMetrics(db, project) {
@@ -114,25 +116,27 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
 
   app.get('/api/commissions/summary', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
     try {
-      const totalEarned = db.prepare("SELECT COALESCE(SUM(commission_amount_mxn), 0) as total FROM sales_commissions WHERE deleted_at IS NULL AND status NOT IN ('no_aplica', 'cancelada')").get().total;
-      const totalPaid = db.prepare("SELECT COALESCE(SUM(amount_mxn), 0) as total FROM sales_commission_payments WHERE deleted_at IS NULL").get().total;
+      const period = parseCommissionsPeriod(req.query);
+      const dashboard = buildCommissionsDashboard(db, period);
       const activeAgents = db.prepare("SELECT COUNT(*) as cnt FROM sales_commission_agents WHERE active = 1 AND deleted_at IS NULL").get().cnt;
       const pendingProjects = db.prepare(`SELECT COUNT(*) as cnt FROM projects WHERE deleted_at IS NULL
         AND id NOT IN (SELECT sc.project_id FROM sales_commissions sc WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada' AND sc.project_id IS NOT NULL)`).get().cnt;
       const agentSummaries = db.prepare(`SELECT sca.id, sca.name, sca.employee_id, sca.active,
         COALESCE((SELECT SUM(sc.commission_amount_mxn) FROM sales_commissions sc WHERE sc.sales_agent_id = sca.id AND sc.deleted_at IS NULL AND sc.status NOT IN ('no_aplica', 'cancelada')), 0) as earned_mxn,
+        COALESCE((SELECT SUM(sc.commission_amount_mxn) FROM sales_commissions sc WHERE sc.sales_agent_id = sca.id AND sc.deleted_at IS NULL AND sc.status = 'pendiente'), 0) as pending_commissions_mxn,
         COALESCE((SELECT SUM(scp.amount_mxn) FROM sales_commission_payments scp WHERE scp.sales_agent_id = sca.id AND scp.deleted_at IS NULL), 0) as paid_mxn,
-        (SELECT COUNT(*) FROM sales_commissions sc2 WHERE sc2.sales_agent_id = sca.id AND sc2.deleted_at IS NULL AND sc2.status NOT IN ('no_aplica', 'cancelada')) as projects_count
+        (SELECT COUNT(*) FROM sales_commissions sc2 WHERE sc2.sales_agent_id = sca.id AND sc2.deleted_at IS NULL AND sc2.status = 'pendiente') as pending_count
         FROM sales_commission_agents sca WHERE sca.deleted_at IS NULL ORDER BY sca.name`).all();
       res.json({
-        total_earned_mxn: roundMoney(totalEarned),
-        total_paid_mxn: roundMoney(totalPaid),
-        pending_balance_mxn: roundMoney(totalEarned - totalPaid),
+        ...dashboard,
+        total_earned_mxn: dashboard.totals.commissions_generated_mxn,
+        total_paid_mxn: dashboard.totals.commissions_paid_mxn,
+        pending_balance_mxn: dashboard.totals.commissions_pending_mxn,
         active_agents: activeAgents,
         pending_projects: pendingProjects,
         agents: agentSummaries.map((a) => ({
           ...a,
-          pending_mxn: roundMoney(a.earned_mxn - a.paid_mxn),
+          pending_mxn: roundMoney(a.pending_commissions_mxn),
         })),
       });
     } catch (error) { next(error); }

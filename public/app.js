@@ -5853,16 +5853,27 @@ if (commissionsTab) {
   if (btn) btn.addEventListener('click', function() { switchCommissionsSubtab(tab); });
 });
 
+function getCommissionsPeriodQuery() {
+  var input = document.getElementById('commissions-period-filter');
+  if (!input || !input.value) return '';
+  var parts = input.value.split('-');
+  if (parts.length < 2) return '';
+  return '?year=' + encodeURIComponent(parts[0]) + '&month=' + encodeURIComponent(Number(parts[1]));
+}
+
 async function loadCommissions() {
   if (!commissionsView) return;
   try {
-    var summary = await api('/api/commissions/summary');
+    var summary = await api('/api/commissions/summary' + getCommissionsPeriodQuery());
     var agents = await api('/api/commissions/agents');
     commissionActiveEmployees = await api('/api/commissions/active-employees');
     var available = await api('/api/commissions/available-projects');
     var commissions = await api('/api/commissions');
     var payments = await api('/api/commissions/payments');
     renderCommissionsSummary(summary);
+    renderCommissionsPeriodTotals(summary);
+    renderCommissionsMonthlySeries(summary.monthly_series, summary.period);
+    renderAgentsWithProjects(summary.agents_with_projects);
     renderAgentsTable(agents, summary);
     renderAvailableProjects(available);
     renderCommissionsTable(commissions);
@@ -5875,12 +5886,64 @@ async function loadCommissions() {
 
 function renderCommissionsSummary(summary) {
   var el = document.getElementById('commissions-summary-cards');
+  var hint = document.getElementById('commissions-summary-hint');
   if (!el) return;
-  el.innerHTML = '<div class="stat-card"><strong>' + money.format(summary.total_earned_mxn) + '</strong><small>Devengadas</small></div>' +
-    '<div class="stat-card"><strong>' + money.format(summary.total_paid_mxn) + '</strong><small>Pagadas</small></div>' +
-    '<div class="stat-card"><strong>' + money.format(summary.pending_balance_mxn) + '</strong><small>Saldo pendiente</small></div>' +
-    '<div class="stat-card"><strong>' + summary.active_agents + '</strong><small>Vendedoras</small></div>' +
-    '<div class="stat-card"><strong>' + summary.pending_projects + '</strong><small>Sin comision</small></div>';
+  var pending = summary.pending_balance_mxn != null ? summary.pending_balance_mxn : (summary.totals && summary.totals.commissions_pending_mxn);
+  el.innerHTML =
+    '<div class="stat-card" title="Suma de comisiones en estado pendiente, por pagar a vendedoras"><strong>' + money.format(pending) + '</strong><small>Comisiones pendientes de pago</small></div>' +
+    '<div class="stat-card" title="Proyectos que aun no tienen comision asignada"><strong>' + summary.pending_projects + '</strong><small>Proyectos sin comision</small></div>' +
+    '<div class="stat-card" title="Vendedoras registradas y activas"><strong>' + summary.active_agents + '</strong><small>Vendedoras activas</small></div>' +
+    '<div class="stat-card" title="Vendedoras con al menos una comision pendiente"><strong>' + ((summary.agents_with_projects || []).length) + '</strong><small>Vendedoras con pendientes</small></div>';
+  if (hint) {
+    hint.textContent = 'Resumen global. En la pestana 1 puede filtrar por mes (ej. Mayo) para ver vendido y comisiones de ese periodo.';
+  }
+}
+
+function renderCommissionsPeriodTotals(summary) {
+  var el = document.getElementById('commissions-period-totals');
+  if (!el || !summary.totals) return;
+  var t = summary.totals;
+  el.innerHTML =
+    '<div class="stat-card"><strong>' + escapeHtml(t.period_label) + '</strong><small>Periodo consultado</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(t.sold_mxn) + '</strong><small>Total vendido (facturado en comisiones)</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(t.commissions_generated_mxn) + '</strong><small>Comisiones generadas</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(t.commissions_paid_mxn) + '</strong><small>Comisiones pagadas</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(t.commissions_pending_mxn) + '</strong><small>Pendientes de pago (actual)</small></div>';
+}
+
+function renderCommissionsMonthlySeries(series, period) {
+  var el = document.getElementById('commissions-monthly-table');
+  if (!el) return;
+  var rows = series || [];
+  if (!rows.length) {
+    el.innerHTML = '<tr><td colspan="4" class="muted">Sin datos por mes.</td></tr>';
+    return;
+  }
+  el.innerHTML = rows.map(function(row) {
+    var highlight = period && period.filtered && period.year === row.year && period.month === row.month ? ' style="font-weight:600;background:var(--surface-alt,#f0f6ff);"' : '';
+    return '<tr' + highlight + '><td>' + escapeHtml(row.month_label) + '</td><td>' + money.format(row.sold_mxn) + '</td><td>' + money.format(row.commissions_generated_mxn) + '</td><td>' + money.format(row.commissions_paid_mxn) + '</td></tr>';
+  }).join('');
+}
+
+function renderAgentsWithProjects(agentsWithProjects) {
+  var el = document.getElementById('commissions-agents-projects');
+  if (!el) return;
+  var list = agentsWithProjects || [];
+  if (!list.length) {
+    el.innerHTML = '<p class="muted">No hay vendedoras con comisiones pendientes de pago.</p>';
+    return;
+  }
+  el.innerHTML = list.map(function(agent) {
+    var projectRows = (agent.assigned_projects || []).map(function(p) {
+      return '<tr><td>' + escapeHtml(p.quote_number) + '</td><td>' + escapeHtml(p.client_name) + '</td><td>' + escapeHtml(p.order_number) + '</td><td>' + money.format(p.sold_mxn) + '</td><td>' + escapeHtml(p.commission_base_label) + '</td><td>' + money.format(p.commission_mxn) + '</td><td>' + escapeHtml(p.assigned_at || '') + '</td></tr>';
+    }).join('');
+    return '<div class="panel" style="margin-bottom:12px;padding:12px;border:1px solid var(--border,#dde3ee);border-radius:8px;">' +
+      '<p style="margin:0 0 8px;"><strong>' + escapeHtml(agent.name) + '</strong>' +
+      (agent.employee_name ? ' <span class="muted">(' + escapeHtml(agent.employee_name) + ')</span>' : '') +
+      ' — Pendiente: <strong>' + money.format(agent.pending_commissions_mxn) + '</strong> (' + agent.pending_commissions_count + ' comision/es)</p>' +
+      '<div class="table-wrapper"><table class="data-table"><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Pedido</th><th>Vendido</th><th>Base</th><th>Comision</th><th>Asignada</th></tr></thead><tbody>' +
+      projectRows + '</tbody></table></div></div>';
+  }).join('');
 }
 
 function renderAgentsTable(agents, summary) {
@@ -5889,10 +5952,10 @@ function renderAgentsTable(agents, summary) {
   var agentMap = {};
   if (summary && summary.agents) summary.agents.forEach(function(a) { agentMap[a.id] = a; });
   el.innerHTML = agents.map(function(a) {
-    var s = agentMap[a.id] || { earned_mxn: 0, paid_mxn: 0, pending_mxn: 0 };
+    var s = agentMap[a.id] || { pending_mxn: 0, paid_mxn: 0 };
     var empLabel = a.employee_name ? escapeHtml(a.employee_name) : '—';
-    return '<tr><td>' + escapeHtml(a.name) + '</td><td>' + empLabel + '</td><td>' + (a.active ? 'Si' : 'No') + '</td><td>' + a.start_date + '</td><td>' + money.format(s.earned_mxn) + '</td><td>' + money.format(s.paid_mxn) + '</td><td>' + money.format(s.pending_mxn) + '</td><td><button class="secondary" onclick="toggleAgent(' + a.id + ',' + (a.active ? 0 : 1) + ')">' + (a.active ? 'Desactivar' : 'Activar') + '</button></td></tr>';
-  }).join('') || '<tr><td colspan="8" class="muted">Sin vendedoras.</td></tr>';
+    return '<tr><td>' + escapeHtml(a.name) + '</td><td>' + empLabel + '</td><td>' + (a.active ? 'Si' : 'No') + '</td><td>' + money.format(s.pending_mxn) + '</td><td>' + money.format(s.paid_mxn) + '</td><td><button class="secondary" onclick="toggleAgent(' + a.id + ',' + (a.active ? 0 : 1) + ')">' + (a.active ? 'Desactivar' : 'Activar') + '</button></td></tr>';
+  }).join('') || '<tr><td colspan="6" class="muted">Sin vendedoras.</td></tr>';
 }
 
 function renderAvailableProjects(projects) {
@@ -6140,6 +6203,18 @@ if (commissionPayForm) {
 
 attachCommissionModalClose(document.getElementById('commission-assign-modal'));
 attachCommissionModalClose(document.getElementById('commission-pay-modal'));
+
+var commissionsPeriodFilter = document.getElementById('commissions-period-filter');
+if (commissionsPeriodFilter) {
+  commissionsPeriodFilter.addEventListener('change', function() { loadCommissions(); });
+}
+var commissionsPeriodClear = document.getElementById('commissions-period-clear');
+if (commissionsPeriodClear) {
+  commissionsPeriodClear.addEventListener('click', function() {
+    if (commissionsPeriodFilter) commissionsPeriodFilter.value = '';
+    loadCommissions();
+  });
+}
 
 // ===================== ACTIVITY MONITOR =====================
 var activityMonitorTab = document.getElementById('activity-monitor-tab');

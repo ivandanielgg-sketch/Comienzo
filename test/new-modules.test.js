@@ -296,6 +296,16 @@ describe('New modules integration', () => {
       assert.strictEqual(res.status, 200);
       assert.ok(res.body.total_paid_mxn >= 5000);
       assert.ok(res.body.active_agents >= 1);
+      assert.ok(res.body.totals);
+      assert.ok(Array.isArray(res.body.monthly_series));
+      assert.ok(Array.isArray(res.body.agents_with_projects));
+    });
+
+    it('summary filters by month', async () => {
+      const res = await request('GET', '/api/commissions/summary?year=2026&month=5');
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.body.period.filtered, true);
+      assert.ok(res.body.totals.period_label.includes('Mayo'));
     });
 
     it('active commissions list hides pagada', async () => {

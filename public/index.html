@@ -1857,6 +1857,7 @@
               </div>
             </div>
             <div class="cards-row" id="commissions-summary-cards"></div>
+            <p id="commissions-summary-hint" class="muted" style="margin:0 0 12px;font-size:0.9rem;"></p>
             <div class="ecovis-subtabs" id="commissions-subtabs">
               <button id="commissions-subtab-agents" class="secondary active" type="button">1. Vendedoras</button>
               <button id="commissions-subtab-projects" class="secondary" type="button">2. Asignar por proyecto</button>
@@ -1865,7 +1866,22 @@
             </div>
 
             <div id="commissions-agents-section">
-              <h3>Registrar vendedora (empleado activo Vacaciones)</h3>
+              <h3>Resumen de ventas y comisiones</h3>
+              <form id="commissions-period-form" class="stack inline-form" style="margin-bottom:12px;">
+                <label style="display:flex;flex-direction:column;font-size:0.9rem;">Periodo (mes)
+                  <input type="month" id="commissions-period-filter" name="period" />
+                </label>
+                <button type="button" class="secondary" id="commissions-period-clear">Ver acumulado total</button>
+              </form>
+              <div id="commissions-period-totals" class="cards-row"></div>
+              <h4 style="margin:16px 0 8px;">Ventas y comisiones por mes</h4>
+              <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Mes</th><th>Total vendido</th><th>Comisiones generadas</th><th>Comisiones pagadas</th></tr></thead><tbody id="commissions-monthly-table"></tbody></table>
+              </div>
+              <h3 style="margin-top:20px;">Vendedoras con comisiones pendientes de pago</h3>
+              <p class="muted">Proyectos y comisiones extraordinarias asignadas que aun no se han pagado.</p>
+              <div id="commissions-agents-projects"></div>
+              <h3 style="margin-top:20px;">Registrar vendedora (empleado activo Vacaciones)</h3>
               <form id="agent-form" class="stack inline-form">
                 <input type="hidden" name="id" />
                 <select name="employee_id" id="agent-employee-select" required><option value="">Empleado activo...</option></select>
@@ -1880,8 +1896,9 @@
                 <input name="reference" placeholder="Referencia" />
                 <button type="submit">Agregar a pendientes</button>
               </form>
+              <h3 style="margin-top:20px;">Todas las vendedoras</h3>
               <div class="table-wrapper">
-                <table class="data-table"><thead><tr><th>Nombre</th><th>Empleado Vacaciones</th><th>Activa</th><th>Inicio</th><th>Devengadas</th><th>Pagado</th><th>Saldo</th><th></th></tr></thead><tbody id="agents-table"></tbody></table>
+                <table class="data-table"><thead><tr><th>Nombre</th><th>Empleado Vacaciones</th><th>Activa</th><th>Pendiente pago</th><th>Comisiones pagadas</th><th></th></tr></thead><tbody id="agents-table"></tbody></table>
               </div>
             </div>
 
@@ -2247,7 +2264,7 @@
       </div>
     </div>
 
-    <script src="/app.js?v=commissions-ui-20260603"></script>
+    <script src="/app.js?v=commissions-dashboard-20260603b"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>
