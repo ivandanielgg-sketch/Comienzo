@@ -66,6 +66,30 @@ const REPORT_TYPE_LABELS = {
 };
 const ACTIVE_PROJECT_REPORT_WHERE = 'deleted_at IS NULL AND archived_at IS NULL';
 const ARCHIVED_PROJECT_REPORT_WHERE = 'archived_at IS NOT NULL AND deleted_at IS NULL';
+
+function activeProjectReportCountSql(projectTableAlias = 'p') {
+  return `(
+    (SELECT COUNT(*) FROM project_reports r
+      WHERE r.project_id = ${projectTableAlias}.id
+        AND r.deleted_at IS NULL AND r.archived_at IS NULL)
+    + (SELECT COUNT(*) FROM project_failure_reports fr
+      WHERE fr.project_id = ${projectTableAlias}.id AND fr.archived_at IS NULL)
+  )`;
+}
+
+function archivedProjectReportCountSql(projectTableAlias = 'p') {
+  return `(
+    (SELECT COUNT(*) FROM project_reports r
+      WHERE r.project_id = ${projectTableAlias}.id AND r.archived_at IS NOT NULL AND r.deleted_at IS NULL)
+    + (SELECT COUNT(*) FROM project_failure_reports fr
+      WHERE fr.project_id = ${projectTableAlias}.id AND fr.archived_at IS NOT NULL)
+  )`;
+}
+
+function normalizeReportCount(value) {
+  const count = Number(value);
+  return Number.isFinite(count) ? count : 0;
+}
 const SESSION_TTL_MS = 1000 * 60 * 60;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -1484,6 +1508,59 @@ function requireFailureReportView(req, res, next) {
   }
 }
 
+function assertCanViewFailureReport(req, reportRow) {
+  if (req.session.role === 'admin') {
+    return;
+  }
+  const perms = loadUserPermissions(db, req.session.userId, req.session.role);
+  if (reportRow.archived_at) {
+    if (!hasPermission(perms, 'reportsArchive', 'view')) {
+      const error = new Error('Acceso restringido al reporte de falla archivado.');
+      error.statusCode = 403;
+      throw error;
+    }
+    return;
+  }
+  if (hasPermission(perms, 'reports', 'view') || hasPermission(perms, 'reports', 'edit')) {
+    return;
+  }
+  const project = db.prepare('SELECT closed_at FROM projects WHERE id = ?').get(reportRow.project_id);
+  const module = project?.closed_at ? 'closedProjects' : 'projects';
+  if (hasPermission(perms, module, 'view')) {
+    return;
+  }
+  const error = new Error('Acceso restringido. No tienes permisos para consultar este reporte de falla.');
+  error.statusCode = 403;
+  throw error;
+}
+
+app.get('/api/failure-reports/:id', requireAuth, (req, res, next) => {
+  try {
+    const row = db.prepare(
+      `SELECT fr.*,
+        ef.full_name AS failure_responsible_name,
+        es.full_name AS solution_responsible_name
+      FROM project_failure_reports fr
+      LEFT JOIN employees ef ON ef.id = fr.failure_responsible_employee_id
+      LEFT JOIN employees es ON es.id = fr.solution_responsible_employee_id
+      WHERE fr.id = ?`,
+    ).get(req.params.id);
+    if (!row) {
+      const error = new Error('Reporte de falla no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    getProjectOrFail(row.project_id);
+    assertCanViewFailureReport(req, row);
+    const project = db.prepare(
+      'SELECT id, quote_number, client_name, project_description FROM projects WHERE id = ?',
+    ).get(row.project_id);
+    res.json({ ...mapFailureReport(row), project });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/projects/:id/failure-reports', requireAuth, requireFailureReportView, (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
@@ -1574,7 +1651,7 @@ function generateReportFolio(projectId) {
 app.get('/api/reports/projects', requireAuth, requirePermission('reports', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
-  const reportCountSql = `(SELECT COUNT(*) FROM project_reports WHERE project_id = p.id AND ${ACTIVE_PROJECT_REPORT_WHERE})`;
+  const reportCountSql = activeProjectReportCountSql('p');
   const sorting = normalizeSort(req.query, {
     ...PROJECT_SORTS,
     report_count: reportCountSql,
@@ -1585,7 +1662,7 @@ app.get('/api/reports/projects', requireAuth, requirePermission('reports', 'view
       ...PROJECT_FILTERS,
       report_count: { type: 'number', column: reportCountSql },
     },
-    baseWhere: ['p.closed_at IS NULL'],
+    baseWhere: ['p.closed_at IS NULL', 'p.reports_archived_at IS NULL'],
     search: {
       value: search,
       columns: buildProjectListSearchColumns(),
@@ -1611,10 +1688,98 @@ app.get('/api/reports/projects', requireAuth, requirePermission('reports', 'view
     project_description: row.project_description,
     status: row.status,
     closed_at: row.closed_at,
-    report_count: row.report_count,
+    report_count: normalizeReportCount(row.report_count),
   }));
 
   res.json(buildListResponse(data, pag, sorting, filters));
+});
+
+function archiveAllReportsForProject(projectId, audit, username) {
+  db.prepare(
+    `UPDATE project_reports SET
+      archived_at = @archived_at,
+      archived_by_user_id = @archived_by_user_id,
+      archived_by_name = @archived_by_name,
+      updated_at = @updated_at,
+      updated_by_user_id = @updated_by_user_id,
+      updated_by = @updated_by
+    WHERE project_id = @project_id
+      AND deleted_at IS NULL
+      AND archived_at IS NULL`,
+  ).run({
+    project_id: projectId,
+    archived_at: audit.updated_at,
+    archived_by_user_id: audit.updated_by_user_id,
+    archived_by_name: audit.updated_by_name,
+    updated_at: audit.updated_at,
+    updated_by_user_id: audit.updated_by_user_id,
+    updated_by: username,
+  });
+  db.prepare(
+    `UPDATE project_failure_reports SET
+      archived_at = ?,
+      archived_by_user_id = ?,
+      archived_by_name = ?
+    WHERE project_id = ?
+      AND archived_at IS NULL`,
+  ).run(
+    audit.updated_at,
+    audit.updated_by_user_id,
+    audit.updated_by_name,
+    projectId,
+  );
+}
+
+app.post('/api/reports/projects/:id/archive', requireAuth, requirePermission('reports', 'edit'), (req, res, next) => {
+  try {
+    const project = getProjectOrFail(req.params.id);
+    if (project.reports_archived_at) {
+      throw badRequest('Este registro de reportes ya esta archivado.');
+    }
+    const audit = updatedByFields(req);
+    const archiveProject = db.transaction(() => {
+      db.prepare(
+        `UPDATE projects SET
+          reports_archived_at = ?,
+          reports_archived_by_user_id = ?,
+          reports_archived_by_name = ?,
+          updated_at = ?,
+          updated_by_user_id = ?,
+          updated_by_name = ?
+        WHERE id = ?`,
+      ).run(
+        audit.updated_at,
+        audit.updated_by_user_id,
+        audit.updated_by_name,
+        audit.updated_at,
+        audit.updated_by_user_id,
+        audit.updated_by_name,
+        project.id,
+      );
+      archiveAllReportsForProject(project.id, audit, req.session.username);
+    });
+    archiveProject();
+    logAuditEvent(db, {
+      req,
+      action: 'archive',
+      module: 'reports',
+      entityType: 'project',
+      entityId: project.id,
+      entityLabel: project.quote_number,
+      metadata: { client_name: project.client_name },
+    });
+    const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id);
+    res.json({
+      id: row.id,
+      quote_number: row.quote_number,
+      client_name: row.client_name,
+      reports_archived_at: row.reports_archived_at,
+      reports_archived_at_cdmx: formatDateTimeCDMX(row.reports_archived_at),
+      reports_archived_by_name: row.reports_archived_by_name,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/reports', requireAuth, requirePermission('reports', 'view'), (req, res) => {
@@ -2041,6 +2206,118 @@ app.post('/api/failure-reports/:id/archive', requireAuth, requirePermission('rep
   }
 });
 
+app.get('/api/reports/archive/projects', requireAuth, requirePermission('reportsArchive', 'view'), (req, res) => {
+  const { page, limit, search } = parsePaginationParams(req.query);
+  const reportCountSql = archivedProjectReportCountSql('p');
+  const sorting = normalizeSort(req.query, {
+    ...PROJECT_SORTS,
+    reports_archived_at: 'p.reports_archived_at',
+    report_count: reportCountSql,
+  }, 'p.reports_archived_at DESC');
+  const { whereClause, params, filters } = buildWhere({
+    query: req.query,
+    filters: {
+      ...PROJECT_FILTERS,
+      report_count: { type: 'number', column: reportCountSql },
+    },
+    baseWhere: ['p.reports_archived_at IS NOT NULL'],
+    search: {
+      value: search,
+      columns: buildProjectListSearchColumns(),
+    },
+  });
+  const totalRecords = db.prepare(`SELECT COUNT(*) as count FROM projects p WHERE ${whereClause}`).get(...params).count;
+  const pag = buildPaginationMeta(page, limit, totalRecords);
+  const rows = db.prepare(
+    `SELECT p.*, ${reportCountSql} as report_count
+     FROM projects p
+     WHERE ${whereClause}
+     ORDER BY ${sorting.orderBy}
+     LIMIT ? OFFSET ?`,
+  ).all(...params, pag.limit, pag.offset);
+  const data = rows.map((row) => ({
+    id: row.id,
+    quote_number: row.quote_number,
+    order_number: row.order_number,
+    client_name: row.client_name,
+    project_description: row.project_description,
+    status: row.status,
+    report_count: normalizeReportCount(row.report_count),
+    reports_archived_at: row.reports_archived_at,
+    reports_archived_at_cdmx: formatDateTimeCDMX(row.reports_archived_at),
+    reports_archived_by_name: row.reports_archived_by_name,
+  }));
+  res.json(buildListResponse(data, pag, sorting, filters));
+});
+
+app.get('/api/reports/archive/projects/:id/reports', requireAuth, requirePermission('reportsArchive', 'view'), (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    const { page, limit, search } = parsePaginationParams(req.query);
+    const sorting = normalizeSort(req.query, {
+      id: 'r.id',
+      report_folio: 'r.report_folio',
+      report_date: 'r.report_date',
+      service_name: 'r.service_name',
+      technician_name: 'r.technician_name',
+      created_at: 'r.created_at',
+      archived_at: 'r.archived_at',
+    }, 'r.archived_at DESC, r.id DESC');
+    const { whereClause, params, filters } = buildWhere({
+      query: req.query,
+      filters: {
+        id: { type: 'number', column: 'r.id' },
+        report_folio: { type: 'text', column: 'r.report_folio' },
+        report_date: { type: 'date', column: 'r.report_date' },
+        service_name: { type: 'text', column: 'r.service_name' },
+        technician_name: { type: 'text', column: 'r.technician_name' },
+        created_at: { type: 'date', column: 'date(r.created_at)' },
+        archived_at: { type: 'date', column: 'r.archived_at' },
+      },
+      baseWhere: ['r.project_id = ?', 'r.deleted_at IS NULL', 'r.archived_at IS NOT NULL'],
+      params: [req.params.id],
+      search: {
+        value: search,
+        columns: PROJECT_REPORT_SEARCH_COLUMNS_PROJECT_SCOPED,
+      },
+    });
+    const result = paginateSqlList({
+      tableSql: `SELECT r.*, e.full_name AS executed_by_name
+        FROM project_reports r
+        LEFT JOIN employees e ON e.id = r.executed_by_employee_id`,
+      countSql: 'SELECT COUNT(*) as count FROM project_reports r',
+      whereClause,
+      params,
+      page,
+      limit,
+      orderBy: sorting.orderBy,
+      map: mapProjectReport,
+    });
+    res.json(buildListResponse(result.data, result.pagination, sorting, filters));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/reports/archive/projects/:id/failure-reports', requireAuth, requirePermission('reportsArchive', 'view'), (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    const rows = db.prepare(
+      `SELECT fr.*,
+        ef.full_name AS failure_responsible_name,
+        es.full_name AS solution_responsible_name
+      FROM project_failure_reports fr
+      LEFT JOIN employees ef ON ef.id = fr.failure_responsible_employee_id
+      LEFT JOIN employees es ON es.id = fr.solution_responsible_employee_id
+      WHERE fr.project_id = ? AND fr.archived_at IS NOT NULL
+      ORDER BY fr.archived_at DESC, fr.id DESC`,
+    ).all(req.params.id);
+    res.json({ data: rows.map(mapFailureReport) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/reports/archive/clients', requireAuth, requirePermission('reportsArchive', 'view'), (req, res) => {
   const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
   let sql = `
@@ -2120,7 +2397,7 @@ app.get('/api/reports/archive/client/:clientName', requireAuth, requirePermissio
       es.full_name AS executed_by_name
     FROM project_failure_reports fr
     JOIN projects p ON fr.project_id = p.id
-    JOIN employees es ON es.id = fr.solution_responsible_employee_id
+    LEFT JOIN employees es ON es.id = fr.solution_responsible_employee_id
     WHERE fr.archived_at IS NOT NULL AND p.client_name = ?
     ORDER BY archived_at DESC`,
   ).all(clientName, clientName);
@@ -2216,7 +2493,10 @@ app.get('/api/closed-projects/client/:clientName', requireAuth, requirePermissio
     orderBy: sorting.orderBy,
     map: (project) => ({
       ...mapProject(project, exchangeRates),
-      report_count: db.prepare(`SELECT COUNT(*) as count FROM project_reports WHERE project_id = ? AND ${ACTIVE_PROJECT_REPORT_WHERE}`).get(project.id).count,
+      report_count: normalizeReportCount(
+        db.prepare(`SELECT ${activeProjectReportCountSql('p')} AS count FROM projects p WHERE p.id = ?`)
+          .get(project.id).count,
+      ),
     }),
   });
   res.json(buildListResponse(result.data, result.pagination, sorting, filters));
