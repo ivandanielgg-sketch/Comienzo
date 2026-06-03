@@ -151,6 +151,15 @@ const detailPanel = document.querySelector('#detail-panel');
 const closedDetailPanel = document.querySelector('#closed-detail-panel');
 const paymentForm = document.querySelector('#payment-form');
 const costForm = document.querySelector('#cost-form');
+const failureReportForm = document.querySelector('#failure-report-form');
+const failureReportMessage = document.querySelector('#failure-report-message');
+const reportsFailurePanel = document.querySelector('#reports-failure-panel');
+const reportsFailureForm = document.querySelector('#reports-failure-form');
+const reportsFailureMessage = document.querySelector('#reports-failure-message');
+const reportsFailureSubtitle = document.querySelector('#reports-failure-subtitle');
+const reportsFailureBack = document.querySelector('#reports-failure-back');
+const detailFailureReportsList = document.querySelector('#detail-failure-reports-list');
+const closedDetailFailureReportsList = document.querySelector('#closed-detail-failure-reports-list');
 const paymentsList = document.querySelector('#payments-list');
 const costsList = document.querySelector('#costs-list');
 const closedPaymentsList = document.querySelector('#closed-payments-list');
@@ -487,9 +496,22 @@ const reportsProjectColumns = [
 
 const reportListColumns = [
   { key: 'report_folio', label: 'Folio', type: 'text', sortable: true },
+  {
+    key: 'report_type',
+    label: 'Tipo',
+    type: 'text',
+    sortable: false,
+    render: (r) => escapeHtml(r.report_type_label || (r._kind === 'failure' ? 'Reporte de falla' : r.report_type || '')),
+  },
   { key: 'report_date', label: 'Fecha', type: 'date', sortable: true },
   { key: 'service_name', label: 'Servicio', type: 'text', sortable: true, render: (r) => escapeHtml(r.service_name || '') },
-  { key: 'technician_name', label: 'Tecnico', type: 'text', sortable: true, render: (r) => escapeHtml(r.technician_name || '') },
+  {
+    key: 'executed_by_name',
+    label: 'Ejecuto',
+    type: 'text',
+    sortable: false,
+    render: (r) => escapeHtml(r.executed_by_name || r.technician_name || r.solution_responsible_name || ''),
+  },
 ];
 
 const ecovisProjectColumns = [
@@ -1084,8 +1106,150 @@ async function loadProjectAssignableEmployees() {
       projectForm?.elements?.id?.value ? projectForm.elements.tecnico_id?.value : null,
       projectForm?.elements?.id?.value ? projectForm.elements.vendedor_id?.value : null,
     );
+    populateFailureReportEmployeeSelects();
+    populateReportsFailureEmployeeSelects();
   } catch (_error) {
     state.projectAssignableEmployees = [];
+  }
+}
+
+async function loadReportsAssignableEmployees() {
+  try {
+    const result = await api('/api/reports/assignable-employees');
+    state.reportsAssignableEmployees = result.data || [];
+    populateReportExecutedBySelect();
+    populateReportsFailureEmployeeSelects();
+  } catch (_error) {
+    state.reportsAssignableEmployees = state.projectAssignableEmployees || [];
+    populateReportExecutedBySelect();
+    populateReportsFailureEmployeeSelects();
+  }
+}
+
+function populateReportExecutedBySelect(selectedId) {
+  if (!reportForm?.elements?.executed_by_employee_id) return;
+  const employees = state.reportsAssignableEmployees || state.projectAssignableEmployees || [];
+  const options = employees.map((emp) => (
+    `<option value="${emp.id}">${escapeHtml(emp.full_name)} (${escapeHtml(emp.employee_number)})</option>`
+  )).join('');
+  reportForm.elements.executed_by_employee_id.innerHTML =
+    `<option value="">Seleccione empleado...</option>${options}`;
+  if (selectedId) {
+    reportForm.elements.executed_by_employee_id.value = String(selectedId);
+  }
+}
+
+function populateReportsFailureEmployeeSelects() {
+  const employees = state.reportsAssignableEmployees || state.projectAssignableEmployees || [];
+  const options = employees.map((emp) => (
+    `<option value="${emp.id}">${escapeHtml(emp.full_name)} (${escapeHtml(emp.employee_number)})</option>`
+  )).join('');
+  const forms = [reportsFailureForm, failureReportForm].filter(Boolean);
+  forms.forEach((form) => {
+    const failureSelect = form.elements.failure_responsible_employee_id;
+    const solutionSelect = form.elements.solution_responsible_employee_id;
+    if (failureSelect) failureSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
+    if (solutionSelect) solutionSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
+  });
+}
+
+function syncReportsFailureResponsibleVisibility() {
+  if (!reportsFailureForm) return;
+  const cause = reportsFailureForm.elements.cause?.value || 'interna';
+  const wrap = document.getElementById('reports-failure-responsible-wrap');
+  const failureSelect = reportsFailureForm.elements.failure_responsible_employee_id;
+  const isInterna = cause === 'interna';
+  if (wrap) wrap.classList.toggle('hidden', !isInterna);
+  if (failureSelect) {
+    failureSelect.required = isInterna;
+    if (!isInterna) failureSelect.value = '';
+  }
+}
+
+function openReportsFailureForm(projectId) {
+  const project = state.reportsAllProjects.find((p) => p.id === Number(projectId));
+  if (!project || !reportsFailurePanel || !reportsFailureForm) return;
+  state.currentReportProjectId = Number(projectId);
+  reportsProjectsTable.closest('.panel').classList.add('hidden');
+  reportFormPanel.classList.add('hidden');
+  reportListPanel.classList.add('hidden');
+  reportsFailurePanel.classList.remove('hidden');
+  reportsFailureForm.reset();
+  reportsFailureForm.elements.project_id.value = project.id;
+  if (reportsFailureSubtitle) {
+    reportsFailureSubtitle.textContent = `Proyecto #${project.id} - ${project.client_name}`;
+  }
+  populateReportsFailureEmployeeSelects();
+  syncReportsFailureResponsibleVisibility();
+  setMessage(reportsFailureMessage, '');
+}
+
+function populateFailureReportEmployeeSelects() {
+  if (!failureReportForm) {
+    return;
+  }
+  const options = (state.projectAssignableEmployees || []).map((emp) => (
+    `<option value="${emp.id}">${escapeHtml(emp.full_name)} (${escapeHtml(emp.employee_number)})</option>`
+  )).join('');
+  const failureSelect = failureReportForm.elements.failure_responsible_employee_id;
+  const solutionSelect = failureReportForm.elements.solution_responsible_employee_id;
+  if (failureSelect) {
+    failureSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
+  }
+  if (solutionSelect) {
+    solutionSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
+  }
+}
+
+function syncFailureResponsibleVisibility() {
+  if (!failureReportForm) {
+    return;
+  }
+  const cause = failureReportForm.elements.cause?.value || 'interna';
+  const wrap = document.querySelector('#failure-responsible-wrap');
+  const failureSelect = failureReportForm.elements.failure_responsible_employee_id;
+  const isInterna = cause === 'interna';
+  if (wrap) {
+    wrap.classList.toggle('hidden', !isInterna);
+  }
+  if (failureSelect) {
+    failureSelect.required = isInterna;
+    if (!isInterna) {
+      failureSelect.value = '';
+    }
+  }
+}
+
+function renderFailureReportEntry(report) {
+  const failureLine = report.cause === 'interna' && report.failure_responsible_name
+    ? `<small>Responsable de la falla: ${escapeHtml(report.failure_responsible_name)}</small>`
+    : '<small>Responsable de la falla: Cliente</small>';
+  return `
+    <li>
+      <div>
+        <strong>${escapeHtml(report.cause_label)} — ${escapeHtml(report.registered_at_cdmx || report.registered_at)}</strong>
+        <small>${escapeHtml(report.problem_description)}</small>
+        ${failureLine}
+        <small>Responsable de solucionarlo: ${escapeHtml(report.solution_responsible_name || '')}</small>
+      </div>
+    </li>
+  `;
+}
+
+async function loadFailureReports(projectId, listElement) {
+  if (!listElement || !projectId) {
+    return;
+  }
+  try {
+    const result = await api(`/api/projects/${projectId}/failure-reports`);
+    const items = result.data || [];
+    listElement.innerHTML = renderEntries(
+      items,
+      renderFailureReportEntry,
+      'Sin reportes de falla registrados.',
+    );
+  } catch (error) {
+    listElement.innerHTML = `<li class="muted">${escapeHtml(error.message)}</li>`;
   }
 }
 
@@ -1232,6 +1396,7 @@ function selectClosedProject(projectId) {
   if (cdrl && typeof renderDetailReports === 'function') {
     renderDetailReports(project.id, cdrl);
   }
+  loadFailureReports(project.id, closedDetailFailureReportsList);
 
   closedPaymentsList.innerHTML = renderEntries(
     project.payments,
@@ -1303,6 +1468,8 @@ function renderDetail(project) {
   if (drl && typeof renderDetailReports === 'function') {
     renderDetailReports(project.id, drl);
   }
+  loadFailureReports(project.id, detailFailureReportsList);
+  syncFailureResponsibleVisibility();
 
   paymentsList.innerHTML = renderEntries(
     project.payments,
@@ -1540,6 +1707,43 @@ costForm.addEventListener('submit', async (event) => {
   setDefaultDates();
   await loadProjects();
 });
+
+if (failureReportForm) {
+  failureReportForm.elements.cause?.addEventListener('change', syncFailureResponsibleVisibility);
+  syncFailureResponsibleVisibility();
+
+  failureReportForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!state.selectedProjectId) {
+      return;
+    }
+
+    syncFailureResponsibleVisibility();
+    const payload = {
+      cause: failureReportForm.elements.cause.value,
+      problem_description: failureReportForm.elements.problem_description.value.trim(),
+      solution_responsible_employee_id: failureReportForm.elements.solution_responsible_employee_id.value,
+    };
+    if (payload.cause === 'interna') {
+      payload.failure_responsible_employee_id =
+        failureReportForm.elements.failure_responsible_employee_id.value;
+    }
+
+    try {
+      await api(`/api/projects/${state.selectedProjectId}/failure-reports`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      failureReportForm.elements.problem_description.value = '';
+      failureReportForm.elements.failure_responsible_employee_id.value = '';
+      failureReportForm.elements.solution_responsible_employee_id.value = '';
+      setMessage(failureReportMessage, 'Reporte de falla registrado.');
+      await loadFailureReports(state.selectedProjectId, detailFailureReportsList);
+    } catch (error) {
+      setMessage(failureReportMessage, error.message, true);
+    }
+  });
+}
 
 paymentsList.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action="delete-payment"]');
@@ -2102,6 +2306,7 @@ function renderReportsProjectsTable() {
 function showReportsMainList() {
   reportFormPanel.classList.add('hidden');
   reportListPanel.classList.add('hidden');
+  if (reportsFailurePanel) reportsFailurePanel.classList.add('hidden');
   reportsProjectsTable.closest('.panel').classList.remove('hidden');
 }
 
@@ -2118,6 +2323,7 @@ function openReportForm(projectId, reportData) {
   setMessage(reportMessage, '');
 
   if (reportData) {
+    state.currentReportType = reportData.report_type || 'boiler_startup';
     reportFormTitle.textContent = 'Editar reporte';
     reportFormSubtitle.textContent = `Folio: ${reportData.report_folio}`;
     reportForm.elements.id.value = reportData.id;
@@ -2144,6 +2350,7 @@ function openReportForm(projectId, reportData) {
     reportForm.elements.comments.value = reportData.comments || '';
     reportForm.elements.technician_name.value = reportData.technician_name || '';
     reportForm.elements.plant_manager_name.value = reportData.plant_manager_name || '';
+    populateReportExecutedBySelect(reportData.executed_by_employee_id);
 
     const safety = reportData.safety_tests ? JSON.parse(reportData.safety_tests) : {};
     reportForm.elements.safety_alarmas.checked = Boolean(safety.alarmas);
@@ -2176,6 +2383,8 @@ function openReportForm(projectId, reportData) {
     reportForm.elements.client_name.value = project.client_name || '';
     reportForm.elements.service_name.value = project.project_description || '';
     reportForm.elements.assigned_technicians.value = project.technician_name || '';
+    populateReportExecutedBySelect(project.tecnico_id || null);
+    state.currentReportType = 'boiler_startup';
   }
 }
 
@@ -2228,6 +2437,8 @@ function collectReportPayload() {
     emissions_high_fire: emHigh,
     technician_name: reportForm.elements.technician_name.value,
     plant_manager_name: reportForm.elements.plant_manager_name.value,
+    executed_by_employee_id: Number(reportForm.elements.executed_by_employee_id.value),
+    report_type: state.currentReportType || 'boiler_startup',
   };
 }
 
@@ -2255,12 +2466,26 @@ async function loadProjectReports(projectId) {
       limit: state.projReportsPag.limit,
       ...buildTableParams('projectReports'),
     });
-    const result = await api(`/api/projects/${projectId}/reports?${params}`);
-    state.reportsProjectReports = result.data;
+    const [result, failures] = await Promise.all([
+      api(`/api/projects/${projectId}/reports?${params}`),
+      api(`/api/projects/${projectId}/failure-reports`),
+    ]);
+    const failureRows = (failures.data || []).map((fr) => ({
+      ...fr,
+      _kind: 'failure',
+      report_folio: `FALLA-${fr.id}`,
+      report_date: String(fr.registered_at || '').slice(0, 10),
+      service_name: fr.problem_description,
+      report_type: 'failure_report',
+      report_type_label: 'Reporte de falla',
+      executed_by_name: fr.solution_responsible_name,
+    }));
+    const merged = [...(result.data || []), ...failureRows];
+    state.reportsProjectReports = merged;
     state.projReportsPagination = result.pagination;
-    renderReportList(result.data, result.pagination, projectId);
+    renderReportList(merged, result.pagination, projectId);
   } catch (error) {
-    reportListTable.innerHTML = '<tr><td colspan="5" class="muted">Error al cargar reportes.</td></tr>';
+    reportListTable.innerHTML = '<tr><td colspan="6" class="muted">Error al cargar reportes.</td></tr>';
   }
 }
 
@@ -2277,11 +2502,20 @@ function renderReportList(reports, pagination, projectId) {
     filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
     onRefresh: () => loadProjectReports(pid),
     pageState: state.projReportsPag,
-    renderActions: (r) => `
-      <div class="row-actions">
-        <button class="secondary" data-action="report-edit" data-id="${r.id}" type="button">Editar</button>
-        <button class="secondary" data-action="report-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>
-      </div>`,
+    renderActions: (r) => {
+      if (r._kind === 'failure') {
+        return `
+          <div class="row-actions">
+            <button class="secondary" data-action="failure-archive" data-id="${r.id}" type="button">Archivar</button>
+          </div>`;
+      }
+      return `
+        <div class="row-actions">
+          <button class="secondary" data-action="report-edit" data-id="${r.id}" type="button">Editar</button>
+          <button class="secondary" data-action="report-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>
+          <button class="secondary" data-action="report-archive" data-id="${r.id}" type="button">Archivar</button>
+        </div>`;
+    },
   });
 }
 
@@ -2319,6 +2553,7 @@ if (reportsTab) {
     state.reportsProjStatus = '';
     if (reportSearch) reportSearch.value = '';
     if (reportStatusFilter) reportStatusFilter.value = '';
+    await loadReportsAssignableEmployees();
     await loadReportsProjects();
   });
 }
@@ -2387,6 +2622,29 @@ if (reportListTable) {
     const printBtn = event.target.closest('[data-action="report-print"]');
     if (printBtn) {
       openReportPrintView(printBtn.dataset.id, printBtn.dataset.type);
+      return;
+    }
+    const archiveBtn = event.target.closest('[data-action="report-archive"]');
+    if (archiveBtn) {
+      if (!window.confirm('Archivar este reporte en el Archivo de Reportes?')) return;
+      try {
+        await api(`/api/reports/${archiveBtn.dataset.id}/archive`, { method: 'POST', body: '{}' });
+        await loadProjectReports(state.currentReportProjectId);
+        await loadReportsProjects();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+    const failureArchiveBtn = event.target.closest('[data-action="failure-archive"]');
+    if (failureArchiveBtn) {
+      if (!window.confirm('Archivar este reporte de falla en el Archivo de Reportes?')) return;
+      try {
+        await api(`/api/failure-reports/${failureArchiveBtn.dataset.id}/archive`, { method: 'POST', body: '{}' });
+        await loadProjectReports(state.currentReportProjectId);
+      } catch (error) {
+        window.alert(error.message);
+      }
     }
   });
 }
@@ -3573,10 +3831,51 @@ function showReportTypeSelector(projectId) {
         openGeneralEquipmentForm(pendingReportProjectId);
       } else if (type === 'autoflame_system_startup') {
         openAutoflameForm(pendingReportProjectId);
+      } else if (type === 'failure_report') {
+        openReportsFailureForm(pendingReportProjectId);
       }
     });
   });
 })();
+
+if (reportsFailureBack) {
+  reportsFailureBack.addEventListener('click', () => {
+    if (state.currentReportProjectId) {
+      openReportListForProject(state.currentReportProjectId);
+      return;
+    }
+    showReportsMainList();
+  });
+}
+
+if (reportsFailureForm) {
+  reportsFailureForm.elements.cause?.addEventListener('change', syncReportsFailureResponsibleVisibility);
+  syncReportsFailureResponsibleVisibility();
+  reportsFailureForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const projectId = reportsFailureForm.elements.project_id.value;
+    syncReportsFailureResponsibleVisibility();
+    const payload = {
+      cause: reportsFailureForm.elements.cause.value,
+      problem_description: reportsFailureForm.elements.problem_description.value.trim(),
+      solution_responsible_employee_id: reportsFailureForm.elements.solution_responsible_employee_id.value,
+    };
+    if (payload.cause === 'interna') {
+      payload.failure_responsible_employee_id =
+        reportsFailureForm.elements.failure_responsible_employee_id.value;
+    }
+    try {
+      await api(`/api/projects/${projectId}/failure-reports`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setMessage(reportsFailureMessage, 'Reporte de falla registrado.', true);
+      setTimeout(() => openReportListForProject(projectId), 600);
+    } catch (error) {
+      setMessage(reportsFailureMessage, error.message);
+    }
+  });
+}
 
 // ===================== GENERAL EQUIPMENT/SERVICE DELIVERY REPORT =====================
 
@@ -3597,6 +3896,7 @@ function openGeneralEquipmentForm(projectId) {
   reportForm.elements.client_name.value = project.client_name || '';
   reportForm.elements.service_name.value = project.project_description || '';
   reportForm.elements.assigned_technicians.value = project.technician_name || '';
+  populateReportExecutedBySelect(project.tecnico_id || null);
   state.currentReportType = 'general_equipment_service_delivery';
   showGeneralEquipmentFields();
 }
@@ -3641,6 +3941,7 @@ function openAutoflameForm(projectId) {
   reportForm.elements.client_name.value = project.client_name || '';
   reportForm.elements.service_name.value = project.project_description || '';
   reportForm.elements.assigned_technicians.value = project.technician_name || '';
+  populateReportExecutedBySelect(project.tecnico_id || null);
   state.currentReportType = 'autoflame_system_startup';
   showAutoflameFields();
 }
@@ -3720,6 +4021,7 @@ collectReportPayload = function() {
       assigned_technicians: reportForm.elements.assigned_technicians.value,
       technician_name: reportForm.elements.technician_name.value || reportForm.elements.assigned_technicians.value,
       plant_manager_name: reportForm.elements.plant_manager_name.value,
+      executed_by_employee_id: Number(reportForm.elements.executed_by_employee_id.value),
       comments: reportForm.elements.comments.value,
       report_data: {
         equipment_zone: (reportForm.elements.ge_zone || {}).value || '',
@@ -3763,6 +4065,7 @@ collectReportPayload = function() {
       assigned_technicians: reportForm.elements.assigned_technicians.value,
       technician_name: reportForm.elements.technician_name.value || reportForm.elements.assigned_technicians.value,
       plant_manager_name: reportForm.elements.plant_manager_name.value,
+      executed_by_employee_id: Number(reportForm.elements.executed_by_employee_id.value),
       comments: reportForm.elements.comments.value,
       report_data: {
         site_name: (reportForm.elements.af_site || {}).value || '',
@@ -3891,7 +4194,7 @@ async function loadArchiveClients() {
       <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border:1px solid var(--border);border-radius:12px;margin-bottom:8px;background:#f8fbff;">
         <div>
           <strong>${escapeHtml(c.client_name)}</strong>
-          <small class="muted" style="display:block;">Proyectos cerrados: ${c.closed_projects_count} | Reportes: ${c.reports_count} | Ultimo: ${c.last_report_date || 'N/A'}</small>
+          <small class="muted" style="display:block;">Reportes archivados: ${c.reports_count} | Ultimo archivado: ${escapeHtml(c.last_archived_at_cdmx || c.last_archived_at || 'N/A')}</small>
         </div>
         <button class="secondary" data-action="archive-view-client" data-client="${escapeHtml(c.client_name)}" type="button">Ver reportes</button>
       </div>
@@ -3945,28 +4248,32 @@ async function loadArchiveClientReports(clientName) {
     const params = new URLSearchParams({ page: state.archiveReportsPag.page, limit: state.archiveReportsPag.limit });
     const result = await api(`/api/reports/archive/client/${encodeURIComponent(clientName)}?${params}`);
     const reports = result.data || [];
-    const typeLabels = { boiler_startup: 'Arranque Caldera', general_equipment_service_delivery: 'Entrega General', autoflame_system_startup: 'Autoflame' };
     if (!reports.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="muted">Sin reportes archivados para este cliente.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="muted">Sin reportes archivados para este cliente.</td></tr>';
       return;
     }
     tbody.innerHTML = reports.map((r) => `
       <tr>
-        <td>${escapeHtml(r.report_folio)}</td>
-        <td>${typeLabels[r.report_type] || r.report_type || 'Caldera'}</td>
-        <td>${escapeHtml(r.project_description || '')}</td>
-        <td>${escapeHtml(r.report_date)}</td>
-        <td>${escapeHtml(r.assigned_technicians || r.technician_name || '')}</td>
+        <td>${escapeHtml(r.folio || r.report_folio)}</td>
+        <td>${escapeHtml(r.report_type_label || r.report_type || '')}</td>
+        <td>${escapeHtml(r.origin_label || `Proyecto #${r.project_id}`)}</td>
+        <td>${escapeHtml(r.report_date || '')}</td>
+        <td>${escapeHtml(r.archived_at_cdmx || r.archived_at || '')}</td>
+        <td>${escapeHtml(r.executed_by_name || '')}</td>
         <td>
           <div class="row-actions">
-            <button class="secondary" data-action="archive-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>
-            ${canAccess('reportsArchive', 'delete') ? `<button class="danger" data-action="archive-delete" data-id="${r.id}" data-client="${escapeHtml(clientName)}" type="button">Eliminar</button>` : ''}
+            ${r.record_kind === 'technical'
+    ? `<button class="secondary" data-action="archive-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>`
+    : ''}
+            ${canAccess('reportsArchive', 'delete') && r.record_kind === 'technical'
+    ? `<button class="danger" data-action="archive-delete" data-id="${r.id}" data-client="${escapeHtml(clientName)}" type="button">Eliminar</button>`
+    : ''}
           </div>
         </td>
       </tr>
     `).join('');
   } catch (e) {
-    tbody.innerHTML = '<tr><td colspan="6" class="muted">Error al cargar reportes.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="muted">Error al cargar reportes.</td></tr>';
   }
 }
 

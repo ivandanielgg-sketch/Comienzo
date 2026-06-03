@@ -48,6 +48,12 @@ function ensurePostgresColumns(database) {
   }
   const { migrateProjectEmployeeAssignments } = require('./projectAssignmentsMigration');
   migrateProjectEmployeeAssignments(database, { postgres: true });
+
+  const { migrateProjectFailureReports } = require('./projectFailureReportsMigration');
+  migrateProjectFailureReports(database, { postgres: true });
+
+  const { migrateProjectReportsEnhancements } = require('./projectReportsEnhancementsMigration');
+  migrateProjectReportsEnhancements(database, { postgres: true });
 }
 
 

@@ -63,6 +63,7 @@ const MIGRATION_ORDER = [
   'project_payments',
   'project_costs',
   'project_reports',
+  'project_failure_reports',
   'sales_commissions',
   'financial_project_omissions',
   'kpi_manual_quote_captures',
