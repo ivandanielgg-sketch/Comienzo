@@ -532,6 +532,12 @@
                 Fecha del reporte
                 <input name="report_date" type="date" required />
               </label>
+              <label>
+                Empleado que ejecuto el servicio
+                <select name="executed_by_employee_id" id="report-executed-by-select" required>
+                  <option value="">Seleccione empleado...</option>
+                </select>
+              </label>
 
               <h3 class="full" style="margin-bottom:0;margin-top:12px;">Datos generales</h3>
               <label>
@@ -639,9 +645,10 @@
                 <thead>
                   <tr>
                     <th>Folio</th>
+                    <th>Tipo</th>
                     <th>Fecha</th>
                     <th>Servicio</th>
-                    <th>Tecnico</th>
+                    <th>Ejecuto</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -649,6 +656,47 @@
               </table>
             </div>
             <div id="project-reports-pagination"></div>
+          </div>
+
+          <div id="reports-failure-panel" class="panel hidden">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">REVRAM</p>
+                <h2>Reporte de falla</h2>
+                <p id="reports-failure-subtitle" class="muted"></p>
+              </div>
+              <div class="row-actions">
+                <button id="reports-failure-back" class="secondary" type="button">Volver a lista</button>
+              </div>
+            </div>
+            <form id="reports-failure-form" class="stack">
+              <input type="hidden" name="project_id" />
+              <label>
+                Causa
+                <select name="cause" required>
+                  <option value="interna">Interna (REVRAM)</option>
+                  <option value="externa">Externa (cliente)</option>
+                </select>
+              </label>
+              <label>
+                Descripcion del problema
+                <textarea name="problem_description" rows="3" required></textarea>
+              </label>
+              <label id="reports-failure-responsible-wrap">
+                Responsable de la falla
+                <select name="failure_responsible_employee_id">
+                  <option value="">Seleccione empleado...</option>
+                </select>
+              </label>
+              <label>
+                Responsable de solucionarlo
+                <select name="solution_responsible_employee_id" required>
+                  <option value="">Seleccione empleado...</option>
+                </select>
+              </label>
+              <button type="submit">Registrar reporte de falla</button>
+              <p id="reports-failure-message" class="message"></p>
+            </form>
           </div>
         </section>
 
@@ -1721,7 +1769,7 @@
               <div>
                 <p class="eyebrow">Archivo</p>
                 <h2>ARCHIVO DE REPORTES</h2>
-                <p class="muted">Reportes de proyectos cerrados agrupados por cliente.</p>
+                <p class="muted">Reportes tecnicos y de falla archivados desde el modulo Reportes, agrupados por cliente.</p>
               </div>
             </div>
             <div style="margin-bottom:12px;">
@@ -1745,9 +1793,10 @@
                   <tr>
                     <th>Folio</th>
                     <th>Tipo</th>
-                    <th>Proyecto</th>
-                    <th>Fecha</th>
-                    <th>Tecnico</th>
+                    <th>Origen</th>
+                    <th>Fecha reporte</th>
+                    <th>Archivado</th>
+                    <th>Ejecuto / Solucion</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -1765,6 +1814,7 @@
               <button type="button" class="report-type-option" data-type="boiler_startup">FORMATO DE ARRANQUE DE CALDERA</button>
               <button type="button" class="report-type-option" data-type="general_equipment_service_delivery">ENTREGA GENERAL DE EQUIPO/SERVICIO</button>
               <button type="button" class="report-type-option" data-type="autoflame_system_startup">ARRANQUE DE SISTEMA AUTOFLAME</button>
+              <button type="button" class="report-type-option" data-type="failure_report">REPORTE DE FALLA</button>
               <button type="button" class="secondary" id="report-type-cancel">Cancelar</button>
             </div>
           </div>

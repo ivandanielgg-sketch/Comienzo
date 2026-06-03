@@ -51,6 +51,10 @@ function mapFailureReport(row, formatDateTimeCDMX) {
     registered_at_cdmx: formatDateTimeCDMX(row.registered_at),
     created_at: row.created_at,
     created_by_name: row.created_by_name || null,
+    archived_at: row.archived_at || null,
+    archived_at_cdmx: row.archived_at ? formatDateTimeCDMX(row.archived_at) : null,
+    archived_by_name: row.archived_by_name || null,
+    is_archived: Boolean(row.archived_at),
   };
 }
 

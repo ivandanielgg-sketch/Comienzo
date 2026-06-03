@@ -161,7 +161,8 @@ function normalizeCollectionStatus(project, totals) {
 }
 
 function normalizeReportStatus(report, isComplete) {
-  if (report?.deleted_at) return 'archivado';
+  if (report?.archived_at) return 'archivado';
+  if (report?.deleted_at) return 'eliminado';
   if (isComplete) return 'completo';
   return 'pendiente';
 }
@@ -310,7 +311,11 @@ function isReportComplete(report) {
 
   const hasDate = !!report.report_date;
   const hasClient = !!report.client_name;
-  const hasTechnician = !!(report.technician_name || report.assigned_technicians);
+  const hasTechnician = !!(
+    report.executed_by_employee_id
+    || report.technician_name
+    || report.assigned_technicians
+  );
   const hasActivity = !!(report.service_name || report.comments);
 
   if (report.report_type === 'boiler_startup') {
@@ -903,6 +908,10 @@ function computeEmployeeKpis(employee, projects, reports, period, manualQuotes) 
   } else if (dept === 'Técnico') {
     const assigned = related.filter((p) => normalizeText(p.technician_name).includes(name));
     const finished = assigned.filter((p) => normalizeProjectStatus(p.status) === 'terminado' || p.closed_at);
+    const executedInPeriod = reports.filter((r) => (
+      r.executed_by_employee_id === employee.employeeId
+      && isDateInRange(r.report_date, period.startDate, period.endDate)
+    ));
     let complete = 0;
     let noReport = 0;
     for (const p of finished) {
@@ -910,9 +919,14 @@ function computeEmployeeKpis(employee, projects, reports, period, manualQuotes) 
       if (!r || !isReportComplete(r)) noReport += 1;
       else complete += 1;
     }
+    const executedComplete = executedInPeriod.filter((r) => isReportComplete(r)).length;
     kpis = {
       assigned_services: assigned.length,
+      services_executed: executedInPeriod.length,
       complete_reports: finished.length ? safePercent(safeRatio(complete, finished.length)) : null,
+      executed_reports_complete: executedInPeriod.length
+        ? safePercent(safeRatio(executedComplete, executedInPeriod.length))
+        : null,
       services_without_report: noReport,
       reworks: assigned.filter((p) => p.rework).length,
     };
@@ -1119,7 +1133,9 @@ function computeKpiCharts(db, projects, period, manualQuotes, exchangeRates) {
   const settings = loadKpiSettings(db);
   const receivable_buckets = computeReceivableBuckets(projects, settings);
 
-  const reports = db.prepare('SELECT * FROM project_reports WHERE deleted_at IS NULL').all();
+  const reports = db.prepare(
+    'SELECT * FROM project_reports WHERE deleted_at IS NULL AND archived_at IS NULL',
+  ).all();
   const reportsByProject = {};
   reports.forEach((r) => { reportsByProject[r.project_id] = r; });
   const finished = projects.filter((p) => normalizeProjectStatus(p.status) === 'terminado' || p.closed_at);
@@ -1170,7 +1186,9 @@ function buildKpiContext(db, query) {
     employee,
   });
 
-  const reports = db.prepare('SELECT * FROM project_reports WHERE deleted_at IS NULL').all();
+  const reports = db.prepare(
+    'SELECT * FROM project_reports WHERE deleted_at IS NULL AND archived_at IS NULL',
+  ).all();
   const reportsByProject = {};
   reports.forEach((r) => { reportsByProject[r.project_id] = r; });
 
