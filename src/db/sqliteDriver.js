@@ -1039,6 +1039,9 @@ function migrate(database) {
 
   const { migrateProjectEmployeeAssignments } = require('./projectAssignmentsMigration');
   migrateProjectEmployeeAssignments(database);
+
+  const { migrateProjectFailureReports } = require('./projectFailureReportsMigration');
+  migrateProjectFailureReports(database);
 }
 
 function seedDefaultEmployees(database) {

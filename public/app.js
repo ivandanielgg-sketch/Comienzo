@@ -151,6 +151,10 @@ const detailPanel = document.querySelector('#detail-panel');
 const closedDetailPanel = document.querySelector('#closed-detail-panel');
 const paymentForm = document.querySelector('#payment-form');
 const costForm = document.querySelector('#cost-form');
+const failureReportForm = document.querySelector('#failure-report-form');
+const failureReportMessage = document.querySelector('#failure-report-message');
+const detailFailureReportsList = document.querySelector('#detail-failure-reports-list');
+const closedDetailFailureReportsList = document.querySelector('#closed-detail-failure-reports-list');
 const paymentsList = document.querySelector('#payments-list');
 const costsList = document.querySelector('#costs-list');
 const closedPaymentsList = document.querySelector('#closed-payments-list');
@@ -1084,8 +1088,78 @@ async function loadProjectAssignableEmployees() {
       projectForm?.elements?.id?.value ? projectForm.elements.tecnico_id?.value : null,
       projectForm?.elements?.id?.value ? projectForm.elements.vendedor_id?.value : null,
     );
+    populateFailureReportEmployeeSelects();
   } catch (_error) {
     state.projectAssignableEmployees = [];
+  }
+}
+
+function populateFailureReportEmployeeSelects() {
+  if (!failureReportForm) {
+    return;
+  }
+  const options = (state.projectAssignableEmployees || []).map((emp) => (
+    `<option value="${emp.id}">${escapeHtml(emp.full_name)} (${escapeHtml(emp.employee_number)})</option>`
+  )).join('');
+  const failureSelect = failureReportForm.elements.failure_responsible_employee_id;
+  const solutionSelect = failureReportForm.elements.solution_responsible_employee_id;
+  if (failureSelect) {
+    failureSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
+  }
+  if (solutionSelect) {
+    solutionSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
+  }
+}
+
+function syncFailureResponsibleVisibility() {
+  if (!failureReportForm) {
+    return;
+  }
+  const cause = failureReportForm.elements.cause?.value || 'interna';
+  const wrap = document.querySelector('#failure-responsible-wrap');
+  const failureSelect = failureReportForm.elements.failure_responsible_employee_id;
+  const isInterna = cause === 'interna';
+  if (wrap) {
+    wrap.classList.toggle('hidden', !isInterna);
+  }
+  if (failureSelect) {
+    failureSelect.required = isInterna;
+    if (!isInterna) {
+      failureSelect.value = '';
+    }
+  }
+}
+
+function renderFailureReportEntry(report) {
+  const failureLine = report.cause === 'interna' && report.failure_responsible_name
+    ? `<small>Responsable de la falla: ${escapeHtml(report.failure_responsible_name)}</small>`
+    : '<small>Responsable de la falla: Cliente</small>';
+  return `
+    <li>
+      <div>
+        <strong>${escapeHtml(report.cause_label)} — ${escapeHtml(report.registered_at_cdmx || report.registered_at)}</strong>
+        <small>${escapeHtml(report.problem_description)}</small>
+        ${failureLine}
+        <small>Responsable de solucionarlo: ${escapeHtml(report.solution_responsible_name || '')}</small>
+      </div>
+    </li>
+  `;
+}
+
+async function loadFailureReports(projectId, listElement) {
+  if (!listElement || !projectId) {
+    return;
+  }
+  try {
+    const result = await api(`/api/projects/${projectId}/failure-reports`);
+    const items = result.data || [];
+    listElement.innerHTML = renderEntries(
+      items,
+      renderFailureReportEntry,
+      'Sin reportes de falla registrados.',
+    );
+  } catch (error) {
+    listElement.innerHTML = `<li class="muted">${escapeHtml(error.message)}</li>`;
   }
 }
 
@@ -1232,6 +1306,7 @@ function selectClosedProject(projectId) {
   if (cdrl && typeof renderDetailReports === 'function') {
     renderDetailReports(project.id, cdrl);
   }
+  loadFailureReports(project.id, closedDetailFailureReportsList);
 
   closedPaymentsList.innerHTML = renderEntries(
     project.payments,
@@ -1303,6 +1378,8 @@ function renderDetail(project) {
   if (drl && typeof renderDetailReports === 'function') {
     renderDetailReports(project.id, drl);
   }
+  loadFailureReports(project.id, detailFailureReportsList);
+  syncFailureResponsibleVisibility();
 
   paymentsList.innerHTML = renderEntries(
     project.payments,
@@ -1540,6 +1617,43 @@ costForm.addEventListener('submit', async (event) => {
   setDefaultDates();
   await loadProjects();
 });
+
+if (failureReportForm) {
+  failureReportForm.elements.cause?.addEventListener('change', syncFailureResponsibleVisibility);
+  syncFailureResponsibleVisibility();
+
+  failureReportForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!state.selectedProjectId) {
+      return;
+    }
+
+    syncFailureResponsibleVisibility();
+    const payload = {
+      cause: failureReportForm.elements.cause.value,
+      problem_description: failureReportForm.elements.problem_description.value.trim(),
+      solution_responsible_employee_id: failureReportForm.elements.solution_responsible_employee_id.value,
+    };
+    if (payload.cause === 'interna') {
+      payload.failure_responsible_employee_id =
+        failureReportForm.elements.failure_responsible_employee_id.value;
+    }
+
+    try {
+      await api(`/api/projects/${state.selectedProjectId}/failure-reports`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      failureReportForm.elements.problem_description.value = '';
+      failureReportForm.elements.failure_responsible_employee_id.value = '';
+      failureReportForm.elements.solution_responsible_employee_id.value = '';
+      setMessage(failureReportMessage, 'Reporte de falla registrado.');
+      await loadFailureReports(state.selectedProjectId, detailFailureReportsList);
+    } catch (error) {
+      setMessage(failureReportMessage, error.message, true);
+    }
+  });
+}
 
 paymentsList.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action="delete-payment"]');

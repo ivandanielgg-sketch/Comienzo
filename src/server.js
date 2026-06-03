@@ -390,6 +390,23 @@ function normalizeCost(body) {
   };
 }
 
+const {
+  FAILURE_REPORT_FROM_SQL,
+  createFailureReportValidators,
+  mapFailureReport: mapFailureReportRow,
+} = require('./projectFailureReports');
+
+const { normalizeFailureReport } = createFailureReportValidators({
+  badRequest,
+  enumValue,
+  requiredText,
+  getActiveEmployeeOrFail,
+});
+
+function mapFailureReport(row) {
+  return mapFailureReportRow(row, formatDateTimeCDMX);
+}
+
 function normalizeUser(body, { requirePassword = false } = {}) {
   const username = requiredText(body, 'username', 'Usuario');
   const password = trim(body.password);
@@ -1415,6 +1432,101 @@ app.delete('/api/projects/:projectId/costs/:costId', requireAuth, requirePermiss
     );
     logAuditEvent(db, { req, action: 'delete', module: 'costs', entityType: 'project_cost', entityId: Number(req.params.costId), entityLabel: before ? `${before.category} ${before.amount}` : null, before });
     res.json(mapProject(getProjectOrFail(req.params.projectId), getExchangeRateMap()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+function requireFailureReportView(req, res, next) {
+  try {
+    const project = getProjectOrFail(req.params.id);
+    if (req.session.role === 'admin') {
+      return next();
+    }
+    const perms = loadUserPermissions(db, req.session.userId, req.session.role);
+    const module = project.closed_at ? 'closedProjects' : 'projects';
+    if (hasPermission(perms, module, 'view')) {
+      return next();
+    }
+    return res.status(403).json({
+      message: 'Acceso restringido. No tienes permisos para consultar o modificar este apartado.',
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+app.get('/api/projects/:id/failure-reports', requireAuth, requireFailureReportView, (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    const rows = db.prepare(
+      `SELECT fr.*,
+        ef.full_name AS failure_responsible_name,
+        es.full_name AS solution_responsible_name
+      ${FAILURE_REPORT_FROM_SQL}
+      WHERE fr.project_id = ?
+      ORDER BY fr.registered_at DESC, fr.id DESC`,
+    ).all(req.params.id);
+    res.json({ data: rows.map(mapFailureReport) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/projects/:id/failure-reports', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
+  try {
+    getProjectOrFail(req.params.id);
+    const report = normalizeFailureReport(req.body);
+    const audit = createdByFields(req);
+    const result = db.prepare(
+      `INSERT INTO project_failure_reports (
+        project_id,
+        cause,
+        problem_description,
+        failure_responsible_employee_id,
+        solution_responsible_employee_id,
+        registered_at,
+        created_at,
+        created_by_user_id,
+        created_by_name
+      ) VALUES (
+        @project_id,
+        @cause,
+        @problem_description,
+        @failure_responsible_employee_id,
+        @solution_responsible_employee_id,
+        @registered_at,
+        @created_at,
+        @created_by_user_id,
+        @created_by_name
+      )`,
+    ).run({
+      ...report,
+      project_id: req.params.id,
+      registered_at: audit.created_at,
+      created_at: audit.created_at,
+      created_by_user_id: audit.created_by_user_id,
+      created_by_name: audit.created_by_name,
+    });
+
+    const row = db.prepare(
+      `SELECT fr.*,
+        ef.full_name AS failure_responsible_name,
+        es.full_name AS solution_responsible_name
+      ${FAILURE_REPORT_FROM_SQL}
+      WHERE fr.id = ?`,
+    ).get(result.lastInsertRowid);
+
+    logAuditEvent(db, {
+      req,
+      action: 'create',
+      module: 'projects',
+      entityType: 'project_failure_report',
+      entityId: result.lastInsertRowid,
+      entityLabel: `Falla ${report.cause} proyecto ${req.params.id}`,
+      after: report,
+    });
+    res.status(201).json(mapFailureReport(row));
   } catch (error) {
     next(error);
   }

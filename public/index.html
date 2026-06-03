@@ -270,6 +270,38 @@
               <button class="secondary" id="detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
             </div>
 
+            <div class="detail-reports-section detail-failure-reports-section" style="margin-bottom:16px;">
+              <h3>Reportes de falla</h3>
+              <ul id="detail-failure-reports-list" class="entry-list"></ul>
+              <form id="failure-report-form" class="stack" style="margin-top:12px;">
+                <label>
+                  Causa
+                  <select name="cause" required>
+                    <option value="interna">Interna (REVRAM)</option>
+                    <option value="externa">Externa (cliente)</option>
+                  </select>
+                </label>
+                <label>
+                  Descripcion del problema
+                  <textarea name="problem_description" rows="3" required></textarea>
+                </label>
+                <label id="failure-responsible-wrap">
+                  Responsable de la falla
+                  <select name="failure_responsible_employee_id" id="failure-responsible-select">
+                    <option value="">Seleccione empleado...</option>
+                  </select>
+                </label>
+                <label>
+                  Responsable de solucionarlo
+                  <select name="solution_responsible_employee_id" id="solution-responsible-select" required>
+                    <option value="">Seleccione empleado...</option>
+                  </select>
+                </label>
+                <button type="submit">Registrar reporte de falla</button>
+                <p id="failure-report-message" class="message"></p>
+              </form>
+            </div>
+
             <div class="layout two-columns">
               <div>
                 <h3>Agregar pago</h3>
@@ -409,6 +441,11 @@
               <h3>Reportes generados</h3>
               <ul id="closed-detail-reports-list" class="entry-list"></ul>
               <button class="secondary" id="closed-detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
+            </div>
+
+            <div class="detail-reports-section detail-failure-reports-section" style="margin-bottom:16px;">
+              <h3>Reportes de falla</h3>
+              <ul id="closed-detail-failure-reports-list" class="entry-list"></ul>
             </div>
 
             <div class="layout two-columns">
