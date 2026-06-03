@@ -4,7 +4,13 @@ const { createdByFields, updatedByFields, logAuditEvent, nowUtc } = require('./a
 const { MODULES, isAdminOnlyModule } = require('./permissions');
 const { roundMoney, buildProjectTotals } = require('./calculations');
 const { getEmpleadosActivos } = require('./vacations');
-const { loadExchangeRates, mapProjectForCommission } = require('./commissions');
+const {
+  PROJECT_COMMISSION_BASE_TYPES,
+  loadExchangeRates,
+  mapProjectForCommission,
+  calculateProjectCommission,
+  mapCommissionListRow,
+} = require('./commissions');
 
 function commissionProjectMetrics(db, project) {
   const rates = loadExchangeRates(db);
@@ -22,15 +28,6 @@ function commissionProjectMetrics(db, project) {
     netProfitMxn: grossProfitMxn,
     finalMargin: totals.final_margin,
   };
-}
-
-function mapCommissionRow(row) {
-  const finalMargin = row.final_margin_snapshot;
-  const marginPercent =
-    finalMargin != null ? roundMoney(Number(finalMargin) * 100) : row.total_sale_mxn_snapshot > 0
-      ? roundMoney((row.gross_profit_mxn_snapshot / row.total_sale_mxn_snapshot) * 100)
-      : null;
-  return { ...row, final_margin: finalMargin, final_margin_percent: marginPercent };
 }
 
 /** Agregado por usuario — compatible SQLite y PostgreSQL (PG exige agregados fuera de GROUP BY). */
@@ -59,6 +56,16 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       .get(employeeId);
     if (!employee) throw badRequest('Empleado activo no encontrado en Vacaciones.');
     return employee;
+  }
+
+  function resolveCommissionAgentOrFail(salesAgentId) {
+    const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ? AND deleted_at IS NULL AND active = 1').get(salesAgentId);
+    if (!agent) throw badRequest('Vendedora no encontrada o inactiva.');
+    if (agent.employee_id) {
+      const linkedEmployee = db.prepare('SELECT active FROM employees WHERE id = ?').get(agent.employee_id);
+      if (!linkedEmployee || !linkedEmployee.active) throw badRequest('La vendedora debe ser un empleado activo de Vacaciones.');
+    }
+    return agent;
   }
 
   // ===================== ROLE PERMISSIONS CONFIGURATION =====================
@@ -108,27 +115,24 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
   app.get('/api/commissions/summary', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
     try {
       const totalEarned = db.prepare("SELECT COALESCE(SUM(commission_amount_mxn), 0) as total FROM sales_commissions WHERE deleted_at IS NULL AND status NOT IN ('no_aplica', 'cancelada')").get().total;
-      const totalAdjustments = db.prepare('SELECT COALESCE(SUM(amount_mxn), 0) as total FROM sales_commission_balance_adjustments WHERE deleted_at IS NULL').get().total;
       const totalPaid = db.prepare("SELECT COALESCE(SUM(amount_mxn), 0) as total FROM sales_commission_payments WHERE deleted_at IS NULL").get().total;
       const activeAgents = db.prepare("SELECT COUNT(*) as cnt FROM sales_commission_agents WHERE active = 1 AND deleted_at IS NULL").get().cnt;
-      const pendingProjects = db.prepare("SELECT COUNT(*) as cnt FROM projects WHERE deleted_at IS NULL AND id NOT IN (SELECT project_id FROM sales_commissions WHERE deleted_at IS NULL AND status != 'cancelada')").get().cnt;
+      const pendingProjects = db.prepare(`SELECT COUNT(*) as cnt FROM projects WHERE deleted_at IS NULL
+        AND id NOT IN (SELECT sc.project_id FROM sales_commissions sc WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada' AND sc.project_id IS NOT NULL)`).get().cnt;
       const agentSummaries = db.prepare(`SELECT sca.id, sca.name, sca.employee_id, sca.active,
         COALESCE((SELECT SUM(sc.commission_amount_mxn) FROM sales_commissions sc WHERE sc.sales_agent_id = sca.id AND sc.deleted_at IS NULL AND sc.status NOT IN ('no_aplica', 'cancelada')), 0) as earned_mxn,
         COALESCE((SELECT SUM(scp.amount_mxn) FROM sales_commission_payments scp WHERE scp.sales_agent_id = sca.id AND scp.deleted_at IS NULL), 0) as paid_mxn,
-        COALESCE((SELECT SUM(scba.amount_mxn) FROM sales_commission_balance_adjustments scba WHERE scba.sales_agent_id = sca.id AND scba.deleted_at IS NULL), 0) as adjustments_mxn,
         (SELECT COUNT(*) FROM sales_commissions sc2 WHERE sc2.sales_agent_id = sca.id AND sc2.deleted_at IS NULL AND sc2.status NOT IN ('no_aplica', 'cancelada')) as projects_count
         FROM sales_commission_agents sca WHERE sca.deleted_at IS NULL ORDER BY sca.name`).all();
-      const totalBalance = roundMoney(totalEarned + totalAdjustments - totalPaid);
       res.json({
         total_earned_mxn: roundMoney(totalEarned),
-        total_adjustments_mxn: roundMoney(totalAdjustments),
         total_paid_mxn: roundMoney(totalPaid),
-        pending_balance_mxn: totalBalance,
+        pending_balance_mxn: roundMoney(totalEarned - totalPaid),
         active_agents: activeAgents,
         pending_projects: pendingProjects,
         agents: agentSummaries.map((a) => ({
           ...a,
-          pending_mxn: roundMoney(a.earned_mxn + a.adjustments_mxn - a.paid_mxn),
+          pending_mxn: roundMoney(a.earned_mxn - a.paid_mxn),
         })),
       });
     } catch (error) { next(error); }
@@ -203,7 +207,10 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
       const rates = loadExchangeRates(db);
       const projects = db.prepare(`SELECT p.* FROM projects p
         WHERE p.deleted_at IS NULL
-          AND p.id NOT IN (SELECT sc.project_id FROM sales_commissions sc WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada')
+          AND p.id NOT IN (
+            SELECT sc.project_id FROM sales_commissions sc
+            WHERE sc.deleted_at IS NULL AND sc.status != 'cancelada' AND sc.project_id IS NOT NULL
+          )
         ORDER BY p.id DESC`).all();
       res.json(projects.map((p) => mapProjectForCommission(db, p, rates)));
     } catch (error) { next(error); }
@@ -223,26 +230,29 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
         }
         const conditions = ["sc.deleted_at IS NULL", "sc.status = 'pagada'"];
         const params = [];
-        if (clientName) { conditions.push('p.client_name LIKE ?'); params.push(`%${clientName}%`); }
+        if (clientName) {
+          conditions.push('(p.client_name LIKE ? OR (sc.commission_type = \'extraordinaria\' AND sc.notes LIKE ?))');
+          params.push(`%${clientName}%`, `%${clientName}%`);
+        }
         if (quoteNumber) { conditions.push('p.quote_number LIKE ?'); params.push(`%${quoteNumber}%`); }
         if (orderNumber) { conditions.push('p.order_number LIKE ?'); params.push(`%${orderNumber}%`); }
-        if (dateFrom) { conditions.push('date(sc.updated_at) >= date(?)'); params.push(dateFrom); }
-        if (dateTo) { conditions.push('date(sc.updated_at) <= date(?)'); params.push(dateTo); }
+        if (dateFrom) { conditions.push('date(COALESCE(sc.paid_at, sc.updated_at)) >= date(?)'); params.push(dateFrom); }
+        if (dateTo) { conditions.push('date(COALESCE(sc.paid_at, sc.updated_at)) <= date(?)'); params.push(dateTo); }
         const rows = db.prepare(`SELECT sc.*, sca.name as agent_name, p.quote_number, p.client_name, p.order_number
           FROM sales_commissions sc
           JOIN sales_commission_agents sca ON sca.id = sc.sales_agent_id
-          JOIN projects p ON p.id = sc.project_id
+          LEFT JOIN projects p ON p.id = sc.project_id
           WHERE ${conditions.join(' AND ')}
-          ORDER BY sc.updated_at DESC`).all(...params);
-        return res.json(rows.map(mapCommissionRow));
+          ORDER BY COALESCE(sc.paid_at, sc.updated_at) DESC`).all(...params);
+        return res.json(rows.map(mapCommissionListRow));
       }
       const rows = db.prepare(`SELECT sc.*, sca.name as agent_name, p.quote_number, p.client_name, p.order_number
         FROM sales_commissions sc
         JOIN sales_commission_agents sca ON sca.id = sc.sales_agent_id
-        JOIN projects p ON p.id = sc.project_id
-        WHERE sc.deleted_at IS NULL AND sc.status IN ('pendiente', 'parcial', 'no_aplica')
+        LEFT JOIN projects p ON p.id = sc.project_id
+        WHERE sc.deleted_at IS NULL AND sc.status = 'pendiente'
         ORDER BY sc.assigned_at DESC`).all();
-      res.json(rows.map(mapCommissionRow));
+      res.json(rows.map(mapCommissionListRow));
     } catch (error) { next(error); }
   });
 
@@ -250,75 +260,86 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
     try {
       const projectId = numberValue(req.body, 'project_id', 'Proyecto', { min: 1 });
       const salesAgentId = numberValue(req.body, 'sales_agent_id', 'Vendedora', { min: 1 });
-      const baseType = enumValue(req.body, 'commission_calculation_base_type', 'Base de calculo', ['total_sale_mxn', 'gross_profit_mxn', 'net_profit_mxn', 'no_aplica']);
+      const baseType = enumValue(req.body, 'commission_calculation_base_type', 'Tipo de comision', PROJECT_COMMISSION_BASE_TYPES);
       const existing = db.prepare("SELECT id FROM sales_commissions WHERE project_id = ? AND deleted_at IS NULL AND status != 'cancelada'").get(projectId);
-      if (existing) throw badRequest('Este proyecto ya tiene una comision activa asignada.');
+      if (existing) throw badRequest('Este proyecto ya tiene una comision asignada y no puede reasignarse.');
       const project = db.prepare('SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL').get(projectId);
       if (!project) throw badRequest('Proyecto no encontrado.');
-      const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ? AND deleted_at IS NULL AND active = 1').get(salesAgentId);
-      if (!agent) throw badRequest('Vendedora no encontrada o inactiva.');
-      if (agent.employee_id) {
-        const linkedEmployee = db.prepare('SELECT active FROM employees WHERE id = ?').get(agent.employee_id);
-        if (!linkedEmployee || !linkedEmployee.active) throw badRequest('La vendedora debe ser un empleado activo de Vacaciones.');
-      }
+      const agent = resolveCommissionAgentOrFail(salesAgentId);
       const { totalSaleMxn, grossProfitMxn, netProfitMxn, finalMargin } = commissionProjectMetrics(db, project);
-      let commissionBaseMxn = 0;
-      let commissionPercentage = 0;
-      let commissionAmountMxn = 0;
-      let status = 'pendiente';
-      let noApplyReason = null;
-      if (baseType === 'no_aplica') {
-        noApplyReason = requiredText(req.body, 'no_apply_reason', 'Motivo de No Aplica');
-        status = 'no_aplica';
-      } else {
-        commissionPercentage = numberValue(req.body, 'commission_percentage', 'Porcentaje de comision', { min: 1, max: 20 });
-        if (baseType === 'total_sale_mxn') commissionBaseMxn = totalSaleMxn;
-        else if (baseType === 'gross_profit_mxn') commissionBaseMxn = grossProfitMxn;
-        else if (baseType === 'net_profit_mxn') commissionBaseMxn = netProfitMxn;
-        if (commissionBaseMxn < 0) throw badRequest('La base de calculo es negativa. Se sugiere usar No Aplica.');
-        commissionAmountMxn = roundMoney(commissionBaseMxn * (commissionPercentage / 100));
-      }
+      const manualAmount = baseType === 'monto_manual'
+        ? numberValue(req.body, 'commission_amount_mxn', 'Monto de comision', { min: 0.01 })
+        : null;
+      const calc = calculateProjectCommission(baseType, totalSaleMxn, manualAmount);
+      if (!calc || calc.commissionAmountMxn <= 0) throw badRequest('Monto de comision invalido.');
       const audit = createdByFields(req);
-      const result = db.prepare(`INSERT INTO sales_commissions (project_id, sales_agent_id, commission_calculation_base_type, commission_base_mxn, total_sale_mxn_snapshot, gross_profit_mxn_snapshot, net_profit_mxn_snapshot, final_margin_snapshot, commission_percentage, commission_amount_mxn, status, no_apply_reason, notes, assigned_by_user_id, assigned_by_name, assigned_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(projectId, salesAgentId, baseType, commissionBaseMxn, totalSaleMxn, grossProfitMxn, netProfitMxn, finalMargin, commissionPercentage, commissionAmountMxn, status, noApplyReason, optionalText(req.body, 'notes'), audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at, audit.created_at);
+      const result = db.prepare(`INSERT INTO sales_commissions (
+          project_id, sales_agent_id, commission_type, commission_calculation_base_type, commission_base_mxn,
+          total_sale_mxn_snapshot, gross_profit_mxn_snapshot, net_profit_mxn_snapshot, final_margin_snapshot,
+          commission_percentage, commission_amount_mxn, status, notes, reference,
+          assigned_by_user_id, assigned_by_name, assigned_at, created_at, updated_at
+        ) VALUES (?, ?, 'proyecto', ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?, ?, ?)`).run(
+        projectId, salesAgentId, baseType, calc.commissionBaseMxn, totalSaleMxn, grossProfitMxn, netProfitMxn, finalMargin,
+        calc.commissionPercentage, calc.commissionAmountMxn, optionalText(req.body, 'notes'), optionalText(req.body, 'reference'),
+        audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at, audit.created_at,
+      );
       const commission = db.prepare('SELECT * FROM sales_commissions WHERE id = ?').get(result.lastInsertRowid);
-      logAuditEvent(db, { req, action: 'create', module: 'commissions', entityType: 'sales_commission', entityId: commission.id, entityLabel: `${project.quote_number} - ${agent.name}`, after: commission, metadata: { base_type: baseType } });
-      res.status(201).json(mapCommissionRow(commission));
+      logAuditEvent(db, { req, action: 'create', module: 'commissions', entityType: 'sales_commission', entityId: commission.id, entityLabel: `${project.quote_number} - ${agent.name}`, after: commission, metadata: { base_type: baseType, commission_type: 'proyecto' } });
+      res.status(201).json(mapCommissionListRow({ ...commission, quote_number: project.quote_number, client_name: project.client_name, order_number: project.order_number, agent_name: agent.name }));
     } catch (error) { next(error); }
   });
 
-  app.get('/api/commissions/balance-adjustments', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
-    try {
-      const agentId = req.query.sales_agent_id;
-      let rows;
-      if (agentId) {
-        rows = db.prepare(`SELECT scba.*, sca.name as agent_name FROM sales_commission_balance_adjustments scba
-          JOIN sales_commission_agents sca ON sca.id = scba.sales_agent_id
-          WHERE scba.sales_agent_id = ? AND scba.deleted_at IS NULL ORDER BY scba.created_at DESC`).all(agentId);
-      } else {
-        rows = db.prepare(`SELECT scba.*, sca.name as agent_name FROM sales_commission_balance_adjustments scba
-          JOIN sales_commission_agents sca ON sca.id = scba.sales_agent_id
-          WHERE scba.deleted_at IS NULL ORDER BY scba.created_at DESC`).all();
-      }
-      res.json(rows);
-    } catch (error) { next(error); }
-  });
-
-  app.post('/api/commissions/balance-adjustments', requireAuth, requirePermission('commissions', 'configure'), (req, res, next) => {
+  app.post('/api/commissions/extraordinary', requireAuth, requirePermission('commissions', 'create'), (req, res, next) => {
     try {
       const salesAgentId = numberValue(req.body, 'sales_agent_id', 'Vendedora', { min: 1 });
-      const adjustmentType = enumValue(req.body, 'adjustment_type', 'Tipo de ajuste', ['saldo_inicial', 'extraordinario']);
-      const amountMxn = numberValue(req.body, 'amount_mxn', 'Monto', { min: 0.01 });
+      const amountMxn = numberValue(req.body, 'commission_amount_mxn', 'Monto', { min: 0.01 });
       const description = requiredText(req.body, 'description', 'Descripcion');
       const reference = optionalText(req.body, 'reference');
-      const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ? AND deleted_at IS NULL').get(salesAgentId);
-      if (!agent) throw badRequest('Vendedora no encontrada.');
+      const agent = resolveCommissionAgentOrFail(salesAgentId);
       const audit = createdByFields(req);
-      const result = db.prepare(`INSERT INTO sales_commission_balance_adjustments (sales_agent_id, adjustment_type, amount_mxn, description, reference, created_by_user_id, created_by_name, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(salesAgentId, adjustmentType, roundMoney(amountMxn), description, reference, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
-      const row = db.prepare('SELECT * FROM sales_commission_balance_adjustments WHERE id = ?').get(result.lastInsertRowid);
-      logAuditEvent(db, { req, action: 'create', module: 'commissions', entityType: 'sales_commission_balance_adjustment', entityId: row.id, entityLabel: `${agent.name} - ${adjustmentType}`, after: row });
-      res.status(201).json(row);
+      const rounded = roundMoney(amountMxn);
+      const result = db.prepare(`INSERT INTO sales_commissions (
+          project_id, sales_agent_id, commission_type, commission_calculation_base_type, commission_base_mxn,
+          commission_percentage, commission_amount_mxn, status, notes, reference,
+          assigned_by_user_id, assigned_by_name, assigned_at, created_at, updated_at
+        ) VALUES (NULL, ?, 'extraordinaria', 'monto_manual', ?, 0, ?, 'pendiente', ?, ?, ?, ?, ?, ?, ?)`).run(
+        salesAgentId, rounded, rounded, description, reference,
+        audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at, audit.created_at,
+      );
+      const commission = db.prepare('SELECT * FROM sales_commissions WHERE id = ?').get(result.lastInsertRowid);
+      logAuditEvent(db, { req, action: 'create', module: 'commissions', entityType: 'sales_commission', entityId: commission.id, entityLabel: `Extraordinaria - ${agent.name}`, after: commission, metadata: { commission_type: 'extraordinaria' } });
+      res.status(201).json(mapCommissionListRow({ ...commission, agent_name: agent.name }));
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/commissions/:id/pay', requireAuth, requirePermission('commissions', 'pay'), (req, res, next) => {
+    try {
+      const commission = db.prepare('SELECT * FROM sales_commissions WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+      if (!commission) throw badRequest('Comision no encontrada.');
+      if (commission.status === 'pagada') throw badRequest('Esta comision ya esta pagada.');
+      if (commission.status === 'cancelada') throw badRequest('No se puede pagar una comision cancelada.');
+      const paymentDate = requiredText(req.body, 'payment_date', 'Fecha de pago');
+      const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+      const currency = currencyValue(req.body, 'currency', 'Moneda');
+      const exchangeRateToMxn = currency === 'MXN' ? 1 : numberValue(req.body, 'exchange_rate_to_mxn', 'Tipo de cambio', { min: 0.01 });
+      const amountMxn = roundMoney(amountOriginal * exchangeRateToMxn);
+      const reference = optionalText(req.body, 'reference');
+      const notes = optionalText(req.body, 'notes');
+      const audit = createdByFields(req);
+      const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ?').get(commission.sales_agent_id);
+      const payResult = db.prepare(`INSERT INTO sales_commission_payments (
+          commission_id, sales_agent_id, payment_date, amount_original, currency, exchange_rate_to_mxn, amount_mxn,
+          reference, notes, created_by_user_id, created_by_name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        commission.id, commission.sales_agent_id, paymentDate, amountOriginal, currency, exchangeRateToMxn, amountMxn,
+        reference, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at,
+      );
+      db.prepare(`UPDATE sales_commissions SET status='pagada', paid_at=?, reference=COALESCE(?, reference), updated_at=? WHERE id=?`)
+        .run(paymentDate, reference, audit.created_at, commission.id);
+      const payment = db.prepare('SELECT * FROM sales_commission_payments WHERE id = ?').get(payResult.lastInsertRowid);
+      const updated = db.prepare('SELECT * FROM sales_commissions WHERE id = ?').get(commission.id);
+      logAuditEvent(db, { req, action: 'pay', module: 'commissions', entityType: 'sales_commission', entityId: commission.id, entityLabel: `${agent?.name || ''} - ${amountMxn} MXN`, after: updated, metadata: { payment_id: payment.id } });
+      res.status(201).json({ commission: mapCommissionListRow(updated), payment });
     } catch (error) { next(error); }
   });
 
@@ -338,38 +359,16 @@ function registerNewModules(app, db, { requireAuth, requirePermission, badReques
   app.get('/api/commissions/payments', requireAuth, requirePermission('commissions', 'view'), (req, res, next) => {
     try {
       const agentId = req.query.agent_id;
-      let payments;
-      if (agentId) { payments = db.prepare('SELECT * FROM sales_commission_payments WHERE sales_agent_id = ? AND deleted_at IS NULL ORDER BY payment_date DESC').all(agentId); }
-      else { payments = db.prepare('SELECT scp.*, sca.name as agent_name FROM sales_commission_payments scp JOIN sales_commission_agents sca ON sca.id = scp.sales_agent_id WHERE scp.deleted_at IS NULL ORDER BY scp.payment_date DESC').all(); }
+      const baseSql = `SELECT scp.*, sca.name as agent_name, sc.commission_type, p.quote_number
+        FROM sales_commission_payments scp
+        JOIN sales_commission_agents sca ON sca.id = scp.sales_agent_id
+        LEFT JOIN sales_commissions sc ON sc.id = scp.commission_id
+        LEFT JOIN projects p ON p.id = sc.project_id
+        WHERE scp.deleted_at IS NULL`;
+      const payments = agentId
+        ? db.prepare(`${baseSql} AND scp.sales_agent_id = ? ORDER BY scp.payment_date DESC`).all(agentId)
+        : db.prepare(`${baseSql} ORDER BY scp.payment_date DESC`).all();
       res.json(payments);
-    } catch (error) { next(error); }
-  });
-
-  app.post('/api/commissions/payments', requireAuth, requirePermission('commissions', 'pay'), (req, res, next) => {
-    try {
-      const salesAgentId = numberValue(req.body, 'sales_agent_id', 'Vendedora', { min: 1 });
-      const paymentDate = requiredText(req.body, 'payment_date', 'Fecha de pago');
-      const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
-      const currency = currencyValue(req.body, 'currency', 'Moneda');
-      const exchangeRateToMxn = currency === 'MXN' ? 1 : numberValue(req.body, 'exchange_rate_to_mxn', 'Tipo de cambio', { min: 0.01 });
-      const amountMxn = roundMoney(amountOriginal * exchangeRateToMxn);
-      const paymentMethod = optionalText(req.body, 'payment_method');
-      const reference = optionalText(req.body, 'reference');
-      const notes = optionalText(req.body, 'notes');
-      const audit = createdByFields(req);
-      const agent = db.prepare('SELECT * FROM sales_commission_agents WHERE id = ? AND deleted_at IS NULL').get(salesAgentId);
-      if (!agent) throw badRequest('Vendedora no encontrada.');
-      const result = db.prepare('INSERT INTO sales_commission_payments (sales_agent_id, payment_date, amount_original, currency, exchange_rate_to_mxn, amount_mxn, payment_method, reference, notes, created_by_user_id, created_by_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(salesAgentId, paymentDate, amountOriginal, currency, exchangeRateToMxn, amountMxn, paymentMethod, reference, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
-      const payment = db.prepare('SELECT * FROM sales_commission_payments WHERE id = ?').get(result.lastInsertRowid);
-      const totalPaidMxn = db.prepare("SELECT COALESCE(SUM(amount_mxn), 0) as total FROM sales_commission_payments WHERE sales_agent_id = ? AND deleted_at IS NULL").get(salesAgentId).total;
-      const pendingCommissions = db.prepare("SELECT * FROM sales_commissions WHERE sales_agent_id = ? AND deleted_at IS NULL AND status IN ('pendiente', 'parcial') ORDER BY assigned_at").all(salesAgentId);
-      let remaining = totalPaidMxn;
-      for (const c of pendingCommissions) {
-        if (remaining >= c.commission_amount_mxn) { db.prepare("UPDATE sales_commissions SET status='pagada', updated_at=CURRENT_TIMESTAMP WHERE id=?").run(c.id); remaining -= c.commission_amount_mxn; }
-        else if (remaining > 0) { db.prepare("UPDATE sales_commissions SET status='parcial', updated_at=CURRENT_TIMESTAMP WHERE id=?").run(c.id); remaining = 0; }
-      }
-      logAuditEvent(db, { req, action: 'create', module: 'commissions', entityType: 'sales_commission_payment', entityId: payment.id, entityLabel: `${agent.name} - ${amountMxn} MXN`, after: payment });
-      res.status(201).json(payment);
     } catch (error) { next(error); }
   });
 

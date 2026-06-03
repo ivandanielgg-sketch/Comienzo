@@ -116,8 +116,19 @@ describe('New modules integration', () => {
       const emps = await request('GET', '/api/commissions/active-employees');
       const agents = await request('GET', '/api/commissions/agents');
       const used = new Set((agents.body || []).map((a) => a.employee_id).filter(Boolean));
-      const employee = emps.body.find((e) => !used.has(e.id));
-      assert.ok(employee, 'Se requiere un empleado activo sin vendedora registrada.');
+      let employee = emps.body.find((e) => !used.has(e.id));
+      if (!employee) {
+        const suffix = Date.now().toString(36);
+        const created = await request('POST', '/api/employees', {
+          employee_number: `EMP-COMM-${suffix}`,
+          full_name: `Vendedora Comm ${suffix}`,
+          hire_date: '2024-01-01',
+          department: 'Ventas',
+          active: true,
+        });
+        assert.strictEqual(created.status, 201);
+        employee = { id: created.body.id };
+      }
       const res = await request('POST', '/api/commissions/agents', { employee_id: employee.id, start_date: '2025-06-01' });
       assert.strictEqual(res.status, 201);
       assert.strictEqual(res.body.employee_id, employee.id);
@@ -180,27 +191,32 @@ describe('New modules integration', () => {
       await request('DELETE', `/api/projects/${openRes.body.id}`, { password: 'admin123' });
     });
 
-    it('assign commission on gross profit', async () => {
+    it('assign commission 1% on invoiced amount', async () => {
       const res = await request('POST', '/api/commissions', {
         project_id: projectId, sales_agent_id: 1,
-        commission_calculation_base_type: 'gross_profit_mxn', commission_percentage: 10
+        commission_calculation_base_type: 'facturado_1pct',
       });
       assert.strictEqual(res.status, 201);
       assert.strictEqual(res.body.status, 'pendiente');
-      assert.strictEqual(res.body.commission_percentage, 10);
-      assert.ok(res.body.commission_amount_mxn > 0);
-      assert.ok(res.body.total_sale_mxn_snapshot);
+      assert.strictEqual(res.body.commission_percentage, 1);
+      assert.strictEqual(res.body.commission_amount_mxn, 2000);
+      assert.strictEqual(res.body.commission_type, 'proyecto');
+    });
+
+    it('assigned project disappears from available list', async () => {
+      const res = await request('GET', '/api/commissions/available-projects');
+      assert.ok(!res.body.find((x) => x.quote_number === `COMM-${suffix}-001`));
     });
 
     it('cannot assign duplicate commission', async () => {
       const res = await request('POST', '/api/commissions', {
         project_id: projectId, sales_agent_id: 1,
-        commission_calculation_base_type: 'total_sale_mxn', commission_percentage: 5
+        commission_calculation_base_type: 'facturado_3pct',
       });
       assert.strictEqual(res.status, 400);
     });
 
-    it('commission percentage must be 1-20', async () => {
+    it('manual amount commission on second project', async () => {
       const projRes = await request('POST', '/api/projects', {
         quote_number: `COMM-${suffix}-002`, order_number: `ORD-${suffix}-002`, purchase_order_not_applicable: true,
         tecnico_id: 1, vendedor_id: 2, client_name: 'C2', project_description: 'T',
@@ -210,12 +226,13 @@ describe('New modules integration', () => {
       await request('DELETE', `/api/projects/${projRes.body.id}`, { password: 'admin123' });
       const res = await request('POST', '/api/commissions', {
         project_id: projRes.body.id, sales_agent_id: 1,
-        commission_calculation_base_type: 'total_sale_mxn', commission_percentage: 25
+        commission_calculation_base_type: 'monto_manual', commission_amount_mxn: 7500,
       });
-      assert.strictEqual(res.status, 400);
+      assert.strictEqual(res.status, 201);
+      assert.strictEqual(res.body.commission_amount_mxn, 7500);
     });
 
-    it('no_aplica requires reason', async () => {
+    it('rejects invalid commission base type', async () => {
       const projRes = await request('POST', '/api/projects', {
         quote_number: `COMM-${suffix}-003`, order_number: `ORD-${suffix}-003`, purchase_order_not_applicable: true,
         tecnico_id: 1, vendedor_id: 2, client_name: 'C3', project_description: 'T',
@@ -225,7 +242,7 @@ describe('New modules integration', () => {
       await request('DELETE', `/api/projects/${projRes.body.id}`, { password: 'admin123' });
       const res = await request('POST', '/api/commissions', {
         project_id: projRes.body.id, sales_agent_id: 1,
-        commission_calculation_base_type: 'no_aplica'
+        commission_calculation_base_type: 'gross_profit_mxn',
       });
       assert.strictEqual(res.status, 400);
     });
@@ -243,12 +260,29 @@ describe('New modules integration', () => {
       await request('POST', '/api/commissions/agents', { name: 'Laura Fernandez', start_date: '2025-01-01' });
     });
 
-    it('register commission payment', async () => {
-      const res = await request('POST', '/api/commissions/payments', {
-        sales_agent_id: 1, payment_date: '2026-05-28', amount_original: 5000, currency: 'MXN'
+    it('creates extraordinary commission as pending', async () => {
+      const res = await request('POST', '/api/commissions/extraordinary', {
+        sales_agent_id: 1,
+        commission_amount_mxn: 3200,
+        description: 'Premio cambio de proveedor',
+        reference: 'EXT-001',
       });
       assert.strictEqual(res.status, 201);
-      assert.strictEqual(res.body.amount_mxn, 5000);
+      assert.strictEqual(res.body.commission_type, 'extraordinaria');
+      assert.strictEqual(res.body.status, 'pendiente');
+      assert.strictEqual(res.body.commission_amount_mxn, 3200);
+    });
+
+    it('register payment on assigned commission', async () => {
+      const pending = await request('GET', '/api/commissions');
+      const target = pending.body.find((c) => c.status === 'pendiente');
+      assert.ok(target, 'Debe existir comision pendiente');
+      const res = await request('POST', `/api/commissions/${target.id}/pay`, {
+        payment_date: '2026-05-28', amount_original: target.commission_amount_mxn, currency: 'MXN', reference: 'PAY-001',
+      });
+      assert.strictEqual(res.status, 201);
+      assert.strictEqual(res.body.commission.status, 'pagada');
+      assert.strictEqual(res.body.payment.amount_mxn, target.commission_amount_mxn);
     });
 
     it('list payments', async () => {
@@ -275,17 +309,11 @@ describe('New modules integration', () => {
       assert.strictEqual(res.status, 400);
     });
 
-    it('balance adjustment affects summary', async () => {
-      const res = await request('POST', '/api/commissions/balance-adjustments', {
-        sales_agent_id: 1,
-        adjustment_type: 'saldo_inicial',
-        amount_mxn: 1500,
-        description: 'Saldo arrastre',
-        reference: 'REF-001',
-      });
-      assert.strictEqual(res.status, 201);
-      const summary = await request('GET', '/api/commissions/summary');
-      assert.ok(summary.body.total_adjustments_mxn >= 1500);
+    it('history search returns paid commissions with filter', async () => {
+      const res = await request('GET', '/api/commissions?paid=1&date_from=2020-01-01');
+      assert.strictEqual(res.status, 200);
+      assert.ok(Array.isArray(res.body));
+      assert.ok(res.body.some((c) => c.status === 'pagada'));
     });
   });
 

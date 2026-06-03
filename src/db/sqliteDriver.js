@@ -952,10 +952,11 @@ function migrate(database) {
     );
     CREATE TABLE IF NOT EXISTS sales_commissions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
+      project_id INTEGER,
       closed_project_id INTEGER,
       sales_agent_id INTEGER NOT NULL,
-      commission_calculation_base_type TEXT NOT NULL CHECK (commission_calculation_base_type IN ('total_sale_mxn', 'gross_profit_mxn', 'net_profit_mxn', 'no_aplica')),
+      commission_type TEXT NOT NULL DEFAULT 'proyecto',
+      commission_calculation_base_type TEXT NOT NULL,
       commission_base_mxn REAL NOT NULL DEFAULT 0,
       total_sale_mxn_snapshot REAL,
       gross_profit_mxn_snapshot REAL,
@@ -966,9 +967,11 @@ function migrate(database) {
       status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'parcial', 'pagada', 'no_aplica', 'cancelada')),
       no_apply_reason TEXT,
       notes TEXT,
+      reference TEXT,
       assigned_by_user_id INTEGER,
       assigned_by_name TEXT,
       assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      paid_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       deleted_at TEXT,
@@ -978,9 +981,10 @@ function migrate(database) {
       FOREIGN KEY (project_id) REFERENCES projects(id),
       FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_commissions_project_active ON sales_commissions (project_id) WHERE deleted_at IS NULL AND status != 'cancelada';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_commissions_project_active ON sales_commissions (project_id) WHERE deleted_at IS NULL AND status != 'cancelada' AND project_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS sales_commission_payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      commission_id INTEGER,
       sales_agent_id INTEGER NOT NULL,
       payment_date TEXT NOT NULL,
       amount_original REAL NOT NULL CHECK (amount_original > 0),
@@ -1089,6 +1093,9 @@ function migrate(database) {
 
   const { migrateProjectReportsEnhancements } = require('./projectReportsEnhancementsMigration');
   migrateProjectReportsEnhancements(database);
+
+  const { migrateCommissionsFlow } = require('./commissionsFlowMigration');
+  migrateCommissionsFlow(database);
 }
 
 function seedDefaultEmployees(database) {
