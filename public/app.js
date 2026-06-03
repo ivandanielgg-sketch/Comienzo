@@ -5896,26 +5896,41 @@ async function loadAvailableProjectsOnly() {
 async function loadCommissions() {
   if (!commissionsView) return;
   populateCommissionsYearFilter();
+  var summaryError = null;
   try {
-    var summary = await api('/api/commissions/summary' + getCommissionsPeriodQuery());
-    var agents = await api('/api/commissions/agents');
     commissionActiveEmployees = await api('/api/commissions/active-employees');
+    populateAssignModalEmployees();
+  } catch (e) {
+    console.error('Error loading active employees:', e);
+    commissionActiveEmployees = [];
+  }
+  try {
+    var agents = await api('/api/commissions/agents');
     var commissions = await api('/api/commissions');
     var payments = await api('/api/commissions/payments');
-    renderCommissionsSummary(summary);
-    renderCommissionsPeriodTotals(summary);
-    renderCommissionsMonthlySeries(summary.monthly_series, summary.period);
-    renderAgentsWithProjects(summary.agents_with_projects);
-    renderAgentsTable(agents, summary);
     renderCommissionsTable(commissions);
     renderCommissionPayments(payments);
     populateCommissionEmployeeSelect(agents);
     populateAgentSelects(agents, commissionActiveEmployees);
-    populateAssignModalEmployees();
-    await loadAvailableProjectsOnly();
+    try {
+      var summary = await api('/api/commissions/summary' + getCommissionsPeriodQuery());
+      renderCommissionsSummary(summary);
+      renderCommissionsPeriodTotals(summary);
+      renderCommissionsMonthlySeries(summary.monthly_series, summary.period);
+      renderAgentsWithProjects(summary.agents_with_projects);
+      renderAgentsTable(agents, summary);
+    } catch (e) {
+      summaryError = e;
+      console.error('Error loading commissions summary:', e);
+      renderAgentsTable(agents, null);
+    }
   } catch (e) {
     console.error('Error loading commissions:', e);
     window.alert(e.message || 'Error al cargar comisiones.');
+  }
+  await loadAvailableProjectsOnly();
+  if (summaryError) {
+    window.alert(summaryError.message || 'No se pudo cargar el resumen de comisiones. Los empleados activos y proyectos siguen disponibles si el servidor esta actualizado.');
   }
 }
 

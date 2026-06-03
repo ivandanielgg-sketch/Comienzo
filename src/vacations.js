@@ -213,7 +213,7 @@ function getEmpleadosActivos(db) {
     .prepare(
       `SELECT id, employee_number, full_name, hire_date, department, position, active
        FROM employees
-       WHERE active = 1
+       WHERE COALESCE(active, 0) <> 0
        ORDER BY full_name`,
     )
     .all();

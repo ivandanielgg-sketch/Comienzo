@@ -54,6 +54,9 @@ function ensurePostgresColumns(database) {
 
   const { migrateProjectReportsEnhancements } = require('./projectReportsEnhancementsMigration');
   migrateProjectReportsEnhancements(database, { postgres: true });
+
+  const { migrateCommissionsPostgres } = require('./commissionsPostgresMigration');
+  migrateCommissionsPostgres(database);
 }
 
 
