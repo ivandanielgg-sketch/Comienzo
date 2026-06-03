@@ -207,6 +207,18 @@ function calculateAccruedVacationDays(hireDate, referenceDate) {
   return total;
 }
 
+/** Empleados activos del modulo Vacaciones (para selectores en otros modulos). */
+function getEmpleadosActivos(db) {
+  return db
+    .prepare(
+      `SELECT id, employee_number, full_name, hire_date, department, position, active
+       FROM employees
+       WHERE active = 1
+       ORDER BY full_name`,
+    )
+    .all();
+}
+
 module.exports = {
   calculateVacationEntitlement,
   calculateBusinessDays,
@@ -216,4 +228,5 @@ module.exports = {
   calculateEntitlementForExercise,
   calculateAnnualVacationEntitlementByYear,
   calculateAccruedVacationDays,
+  getEmpleadosActivos,
 };

@@ -5798,38 +5798,152 @@ api('/api/session')
 // ===================== COMMISSIONS MODULE =====================
 var commissionsTab = document.getElementById('commissions-tab');
 var commissionsView = document.getElementById('commissions-view');
+var commissionActiveEmployees = [];
+var commissionProjectsById = {};
+var commissionAssignProjectSale = 0;
+
+function formatCommissionMargin(row) {
+  if (row.final_margin != null && row.final_margin !== undefined) return formatPercentDecimal(row.final_margin);
+  if (row.final_margin_percent != null && row.final_margin_percent !== undefined) return row.final_margin_percent + '%';
+  if (row.margin != null && row.margin !== undefined) return row.margin + '%';
+  return 'Sin facturar';
+}
+
+function switchCommissionsSubtab(name) {
+  var sections = ['agents', 'projects', 'pending', 'history'];
+  sections.forEach(function(s) {
+    var section = document.getElementById('commissions-' + s + '-section');
+    var btn = document.getElementById('commissions-subtab-' + s);
+    if (section) section.classList.toggle('hidden', s !== name);
+    if (btn) btn.classList.toggle('active', s === name);
+  });
+}
+
+function attachCommissionModalClose(modal) {
+  if (!modal || modal.dataset.boundClose) return;
+  modal.dataset.boundClose = '1';
+  modal.addEventListener('mousedown', function(event) {
+    if (event.target === modal) modal.dataset.backdropDown = '1';
+  });
+  modal.addEventListener('click', function(event) {
+    if (event.target.closest('.modal-close') || (event.target === modal && modal.dataset.backdropDown === '1')) {
+      modal.classList.add('hidden');
+    }
+    delete modal.dataset.backdropDown;
+  });
+  var content = modal.querySelector('.modal-content');
+  if (content) {
+    content.addEventListener('mousedown', function(event) {
+      event.stopPropagation();
+      delete modal.dataset.backdropDown;
+    });
+  }
+}
+
 if (commissionsTab) {
   commissionsTab.addEventListener('click', async function() {
     switchView('commissions');
+    switchCommissionsSubtab('agents');
     await loadCommissions();
   });
+}
+
+['agents', 'projects', 'pending', 'history'].forEach(function(tab) {
+  var btn = document.getElementById('commissions-subtab-' + tab);
+  if (btn) btn.addEventListener('click', function() { switchCommissionsSubtab(tab); });
+});
+
+function getCommissionsPeriodQuery() {
+  var input = document.getElementById('commissions-period-filter');
+  if (!input || !input.value) return '';
+  var parts = input.value.split('-');
+  if (parts.length < 2) return '';
+  return '?year=' + encodeURIComponent(parts[0]) + '&month=' + encodeURIComponent(Number(parts[1]));
 }
 
 async function loadCommissions() {
   if (!commissionsView) return;
   try {
-    var summary = await api('/api/commissions/summary');
+    var summary = await api('/api/commissions/summary' + getCommissionsPeriodQuery());
     var agents = await api('/api/commissions/agents');
+    commissionActiveEmployees = await api('/api/commissions/active-employees');
     var available = await api('/api/commissions/available-projects');
     var commissions = await api('/api/commissions');
     var payments = await api('/api/commissions/payments');
     renderCommissionsSummary(summary);
+    renderCommissionsPeriodTotals(summary);
+    renderCommissionsMonthlySeries(summary.monthly_series, summary.period);
+    renderAgentsWithProjects(summary.agents_with_projects);
     renderAgentsTable(agents, summary);
     renderAvailableProjects(available);
     renderCommissionsTable(commissions);
     renderCommissionPayments(payments);
-    populateAgentSelects(agents);
+    populateCommissionEmployeeSelect(agents);
+    populateAgentSelects(agents, commissionActiveEmployees);
+    populateAssignModalEmployees();
   } catch (e) { console.error('Error loading commissions:', e); }
 }
 
 function renderCommissionsSummary(summary) {
   var el = document.getElementById('commissions-summary-cards');
+  var hint = document.getElementById('commissions-summary-hint');
   if (!el) return;
-  el.innerHTML = '<div class="stat-card"><strong>' + money.format(summary.total_earned_mxn) + '</strong><small>Devengadas</small></div>' +
-    '<div class="stat-card"><strong>' + money.format(summary.total_paid_mxn) + '</strong><small>Pagadas</small></div>' +
-    '<div class="stat-card"><strong>' + money.format(summary.pending_balance_mxn) + '</strong><small>Saldo pendiente</small></div>' +
-    '<div class="stat-card"><strong>' + summary.active_agents + '</strong><small>Vendedoras</small></div>' +
-    '<div class="stat-card"><strong>' + summary.pending_projects + '</strong><small>Sin comision</small></div>';
+  var pending = summary.pending_balance_mxn != null ? summary.pending_balance_mxn : (summary.totals && summary.totals.commissions_pending_mxn);
+  el.innerHTML =
+    '<div class="stat-card" title="Suma de comisiones en estado pendiente, por pagar a vendedoras"><strong>' + money.format(pending) + '</strong><small>Comisiones pendientes de pago</small></div>' +
+    '<div class="stat-card" title="Proyectos que aun no tienen comision asignada"><strong>' + summary.pending_projects + '</strong><small>Proyectos sin comision</small></div>' +
+    '<div class="stat-card" title="Vendedoras registradas y activas"><strong>' + summary.active_agents + '</strong><small>Vendedoras activas</small></div>' +
+    '<div class="stat-card" title="Vendedoras con al menos una comision pendiente"><strong>' + ((summary.agents_with_projects || []).length) + '</strong><small>Vendedoras con pendientes</small></div>';
+  if (hint) {
+    hint.textContent = 'Resumen global. En la pestana 1 puede filtrar por mes (ej. Mayo) para ver vendido y comisiones de ese periodo.';
+  }
+}
+
+function renderCommissionsPeriodTotals(summary) {
+  var el = document.getElementById('commissions-period-totals');
+  if (!el || !summary.totals) return;
+  var t = summary.totals;
+  el.innerHTML =
+    '<div class="stat-card"><strong>' + escapeHtml(t.period_label) + '</strong><small>Periodo consultado</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(t.sold_mxn) + '</strong><small>Total vendido (facturado en comisiones)</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(t.commissions_generated_mxn) + '</strong><small>Comisiones generadas</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(t.commissions_paid_mxn) + '</strong><small>Comisiones pagadas</small></div>' +
+    '<div class="stat-card"><strong>' + money.format(t.commissions_pending_mxn) + '</strong><small>Pendientes de pago (actual)</small></div>';
+}
+
+function renderCommissionsMonthlySeries(series, period) {
+  var el = document.getElementById('commissions-monthly-table');
+  if (!el) return;
+  var rows = series || [];
+  if (!rows.length) {
+    el.innerHTML = '<tr><td colspan="4" class="muted">Sin datos por mes.</td></tr>';
+    return;
+  }
+  el.innerHTML = rows.map(function(row) {
+    var highlight = period && period.filtered && period.year === row.year && period.month === row.month ? ' style="font-weight:600;background:var(--surface-alt,#f0f6ff);"' : '';
+    return '<tr' + highlight + '><td>' + escapeHtml(row.month_label) + '</td><td>' + money.format(row.sold_mxn) + '</td><td>' + money.format(row.commissions_generated_mxn) + '</td><td>' + money.format(row.commissions_paid_mxn) + '</td></tr>';
+  }).join('');
+}
+
+function renderAgentsWithProjects(agentsWithProjects) {
+  var el = document.getElementById('commissions-agents-projects');
+  if (!el) return;
+  var list = agentsWithProjects || [];
+  if (!list.length) {
+    el.innerHTML = '<p class="muted">No hay vendedoras con comisiones pendientes de pago.</p>';
+    return;
+  }
+  el.innerHTML = list.map(function(agent) {
+    var projectRows = (agent.assigned_projects || []).map(function(p) {
+      return '<tr><td>' + escapeHtml(p.quote_number) + '</td><td>' + escapeHtml(p.client_name) + '</td><td>' + escapeHtml(p.order_number) + '</td><td>' + money.format(p.sold_mxn) + '</td><td>' + escapeHtml(p.commission_base_label) + '</td><td>' + money.format(p.commission_mxn) + '</td><td>' + escapeHtml(p.assigned_at || '') + '</td></tr>';
+    }).join('');
+    return '<div class="panel" style="margin-bottom:12px;padding:12px;border:1px solid var(--border,#dde3ee);border-radius:8px;">' +
+      '<p style="margin:0 0 8px;"><strong>' + escapeHtml(agent.name) + '</strong>' +
+      (agent.employee_name ? ' <span class="muted">(' + escapeHtml(agent.employee_name) + ')</span>' : '') +
+      ' — Pendiente: <strong>' + money.format(agent.pending_commissions_mxn) + '</strong> (' + agent.pending_commissions_count + ' comision/es)</p>' +
+      '<div class="table-wrapper"><table class="data-table"><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Pedido</th><th>Vendido</th><th>Base</th><th>Comision</th><th>Asignada</th></tr></thead><tbody>' +
+      projectRows + '</tbody></table></div></div>';
+  }).join('');
 }
 
 function renderAgentsTable(agents, summary) {
@@ -5838,57 +5952,142 @@ function renderAgentsTable(agents, summary) {
   var agentMap = {};
   if (summary && summary.agents) summary.agents.forEach(function(a) { agentMap[a.id] = a; });
   el.innerHTML = agents.map(function(a) {
-    var s = agentMap[a.id] || { earned_mxn: 0, paid_mxn: 0, pending_mxn: 0 };
-    return '<tr><td>' + escapeHtml(a.name) + '</td><td>' + (a.active ? 'Si' : 'No') + '</td><td>' + a.start_date + '</td><td>' + money.format(s.earned_mxn) + '</td><td>' + money.format(s.paid_mxn) + '</td><td>' + money.format(s.pending_mxn) + '</td><td><button class="secondary" onclick="toggleAgent(' + a.id + ',' + (a.active ? 0 : 1) + ')">' + (a.active ? 'Desactivar' : 'Activar') + '</button></td></tr>';
-  }).join('') || '<tr><td colspan="7" class="muted">Sin vendedoras.</td></tr>';
+    var s = agentMap[a.id] || { pending_mxn: 0, paid_mxn: 0 };
+    var empLabel = a.employee_name ? escapeHtml(a.employee_name) : '—';
+    return '<tr><td>' + escapeHtml(a.name) + '</td><td>' + empLabel + '</td><td>' + (a.active ? 'Si' : 'No') + '</td><td>' + money.format(s.pending_mxn) + '</td><td>' + money.format(s.paid_mxn) + '</td><td><button class="secondary" onclick="toggleAgent(' + a.id + ',' + (a.active ? 0 : 1) + ')">' + (a.active ? 'Desactivar' : 'Activar') + '</button></td></tr>';
+  }).join('') || '<tr><td colspan="6" class="muted">Sin vendedoras.</td></tr>';
 }
 
 function renderAvailableProjects(projects) {
   var el = document.getElementById('available-projects-table');
   if (!el) return;
+  commissionProjectsById = {};
+  (projects || []).forEach(function(p) { commissionProjectsById[p.id] = p; });
   el.innerHTML = projects.map(function(p) {
-    return '<tr><td>' + escapeHtml(p.quote_number) + '</td><td>' + escapeHtml(p.client_name) + '</td><td>' + money.format(p.total_sale_mxn) + '</td><td>' + money.format(p.total_costs_mxn) + '</td><td>' + money.format(p.gross_profit_mxn) + '</td><td>' + p.margin + '%</td><td><button class="secondary" onclick="assignCommission(' + p.id + ')">Asignar</button></td></tr>';
-  }).join('') || '<tr><td colspan="7" class="muted">No hay proyectos disponibles.</td></tr>';
+    return '<tr><td>' + escapeHtml(p.quote_number) + '</td><td>' + escapeHtml(p.client_name) + '</td><td>' + escapeHtml(p.order_number || '—') + '</td><td>' + money.format(p.total_sale_mxn) + '</td><td>' + formatCommissionMargin(p) + '</td><td><button type="button" class="secondary" onclick="openAssignCommissionModal(' + p.id + ')">Asignar comision</button></td></tr>';
+  }).join('') || '<tr><td colspan="6" class="muted">No hay proyectos disponibles para comision.</td></tr>';
 }
 
 function renderCommissionsTable(commissions) {
   var el = document.getElementById('commissions-table');
   if (!el) return;
-  var baseLabels = { total_sale_mxn: 'Venta Total', gross_profit_mxn: 'Util. Bruta', net_profit_mxn: 'Util. Neta', no_aplica: 'N/A' };
   el.innerHTML = commissions.map(function(c) {
-    return '<tr><td>' + escapeHtml(c.quote_number) + '</td><td>' + escapeHtml(c.client_name) + '</td><td>' + escapeHtml(c.agent_name) + '</td><td>' + (baseLabels[c.commission_calculation_base_type] || '') + '</td><td>' + c.commission_percentage + '%</td><td>' + money.format(c.commission_amount_mxn) + '</td><td>' + c.status + '</td><td></td></tr>';
-  }).join('') || '<tr><td colspan="8" class="muted">Sin comisiones.</td></tr>';
+    var tipo = c.commission_type === 'extraordinaria' ? 'Extraordinaria' : 'Proyecto';
+    var marginCell = c.commission_type === 'extraordinaria' ? '—' : formatCommissionMargin(c);
+    return '<tr><td>' + escapeHtml(c.display_quote || c.quote_number || '—') + '</td><td>' + escapeHtml(c.display_client || c.client_name || '—') + '</td><td>' + escapeHtml(c.agent_name) + '</td><td>' + escapeHtml(c.commission_base_label || '') + '</td><td>' + money.format(c.commission_amount_mxn) + '</td><td>' + marginCell + '</td><td>' + tipo + '</td><td><button type="button" class="secondary" onclick="openPayCommissionModal(' + c.id + ')">Registrar pago</button></td></tr>';
+  }).join('') || '<tr><td colspan="8" class="muted">Sin comisiones en espera de pago.</td></tr>';
+}
+
+function renderArchivedCommissions(commissions) {
+  var el = document.getElementById('commissions-archived-table');
+  if (!el) return;
+  el.innerHTML = commissions.map(function(c) {
+    return '<tr><td>' + escapeHtml(c.display_quote || c.quote_number || '—') + '</td><td>' + escapeHtml(c.display_client || c.client_name || '—') + '</td><td>' + escapeHtml(c.agent_name) + '</td><td>' + escapeHtml(c.commission_base_label || '') + '</td><td>' + money.format(c.commission_amount_mxn) + '</td><td>' + (c.paid_at || c.updated_at || c.assigned_at || '') + '</td><td>' + escapeHtml(c.reference || '') + '</td></tr>';
+  }).join('') || '<tr><td colspan="7" class="muted">Sin resultados. Use los filtros para consultar el historico.</td></tr>';
 }
 
 function renderCommissionPayments(payments) {
   var el = document.getElementById('commission-payments-table');
   if (!el) return;
   el.innerHTML = payments.map(function(p) {
-    return '<tr><td>' + escapeHtml(p.agent_name || '') + '</td><td>' + p.payment_date + '</td><td>' + money.format(p.amount_mxn) + '</td><td>' + p.currency + '</td><td>' + escapeHtml(p.reference || '') + '</td></tr>';
-  }).join('') || '<tr><td colspan="5" class="muted">Sin pagos.</td></tr>';
+    return '<tr><td>' + escapeHtml(p.agent_name || '') + '</td><td>' + escapeHtml(p.quote_number || (p.commission_type === 'extraordinaria' ? 'Extraordinaria' : '—')) + '</td><td>' + p.payment_date + '</td><td>' + money.format(p.amount_mxn) + '</td><td>' + p.currency + '</td><td>' + escapeHtml(p.reference || '') + '</td></tr>';
+  }).join('') || '<tr><td colspan="6" class="muted">Sin pagos registrados.</td></tr>';
 }
 
-function populateAgentSelects(agents) {
-  var sel = document.querySelector('#commission-payment-form select[name="sales_agent_id"]');
-  if (sel) {
-    var active = agents.filter(function(a) { return a.active; });
-    sel.innerHTML = '<option value="">Vendedora...</option>' + active.map(function(a) { return '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>'; }).join('');
+function populateCommissionEmployeeSelect(agents) {
+  var sel = document.getElementById('agent-employee-select');
+  if (!sel) return;
+  var registeredIds = {};
+  (agents || []).forEach(function(a) { if (a.employee_id) registeredIds[a.employee_id] = true; });
+  var options = (commissionActiveEmployees || [])
+    .filter(function(e) { return !registeredIds[e.id]; })
+    .map(function(e) {
+      return '<option value="' + e.id + '">' + escapeHtml(e.full_name) + (e.employee_number ? ' (' + escapeHtml(e.employee_number) + ')' : '') + '</option>';
+    }).join('');
+  sel.innerHTML = '<option value="">Empleado (Vacaciones activos)...</option>' + options;
+}
+
+function populateAgentSelects(agents, activeEmployees) {
+  var active = agents.filter(function(a) { return a.active; });
+  window._commissionActiveAgents = active;
+  window._commissionActiveEmployees = activeEmployees || commissionActiveEmployees || [];
+  populateAssignModalEmployees();
+  var extraSel = document.querySelector('#commission-extraordinary-form select[name="employee_id"]');
+  if (extraSel) {
+    extraSel.innerHTML = buildVacationEmployeeOptions(window._commissionActiveEmployees);
   }
 }
 
-async function assignCommission(projectId) {
-  var agentName = window.prompt('Nombre de la vendedora:');
-  if (!agentName) return;
-  var agents = await api('/api/commissions/agents');
-  var agent = agents.find(function(a) { return a.name.toLowerCase().includes(agentName.toLowerCase()); });
-  if (!agent) { window.alert('Vendedora no encontrada.'); return; }
-  var baseType = window.prompt('Base (total_sale_mxn / gross_profit_mxn / net_profit_mxn / no_aplica):', 'gross_profit_mxn');
-  if (!baseType) return;
-  var payload = { project_id: projectId, sales_agent_id: agent.id, commission_calculation_base_type: baseType };
-  if (baseType === 'no_aplica') { payload.no_apply_reason = window.prompt('Motivo:') || 'N/A'; }
-  else { payload.commission_percentage = Number(window.prompt('Porcentaje (1-20):', '10')); }
-  try { await api('/api/commissions', { method: 'POST', body: JSON.stringify(payload) }); await loadCommissions(); }
-  catch (e) { window.alert(e.message); }
+function buildVacationEmployeeOptions(employees) {
+  return '<option value="">Empleado activo (Vacaciones)...</option>' + (employees || []).map(function(e) {
+    return '<option value="' + e.id + '">' + escapeHtml(e.full_name) +
+      (e.employee_number ? ' (' + escapeHtml(e.employee_number) + ')' : '') + '</option>';
+  }).join('');
+}
+
+function populateAssignModalEmployees() {
+  var sel = document.querySelector('#commission-assign-form select[name="employee_id"]');
+  if (!sel) return;
+  sel.innerHTML = buildVacationEmployeeOptions(commissionActiveEmployees);
+}
+
+function updateCommissionAssignPreview() {
+  var form = document.getElementById('commission-assign-form');
+  var preview = document.getElementById('commission-assign-preview');
+  if (!form || !preview) return;
+  var baseType = form.elements.commission_calculation_base_type.value;
+  var manualWrap = document.getElementById('commission-assign-manual-wrap');
+  if (manualWrap) manualWrap.classList.toggle('hidden', baseType !== 'monto_manual');
+  var sale = commissionAssignProjectSale || 0;
+  var amount = 0;
+  if (baseType === 'facturado_1pct') amount = Math.round(sale * 0.01 * 100) / 100;
+  else if (baseType === 'facturado_3pct') amount = Math.round(sale * 0.03 * 100) / 100;
+  else if (baseType === 'monto_manual') amount = Number(form.elements.commission_amount_mxn.value) || 0;
+  preview.textContent = amount > 0 ? money.format(amount) : '—';
+}
+
+function openAssignCommissionModal(projectId) {
+  var p = commissionProjectsById[projectId];
+  if (!p) return;
+  var employees = commissionActiveEmployees || [];
+  if (!employees.length) {
+    window.alert('No hay empleados activos en Vacaciones para asignar comisiones.');
+    return;
+  }
+  var modal = document.getElementById('commission-assign-modal');
+  var form = document.getElementById('commission-assign-form');
+  if (!modal || !form) return;
+  commissionAssignProjectSale = Number(p.total_sale_mxn) || 0;
+  form.reset();
+  form.elements.project_id.value = projectId;
+  document.getElementById('commission-assign-project-summary').textContent =
+    'Cotizacion ' + p.quote_number + ' · Cliente ' + p.client_name + ' · Facturado ' + money.format(p.total_sale_mxn) + ' · Utilidad real ' + formatCommissionMargin(p);
+  populateAssignModalEmployees();
+  form.elements.commission_calculation_base_type.value = 'facturado_1pct';
+  updateCommissionAssignPreview();
+  document.getElementById('commission-assign-message').textContent = '';
+  modal.classList.remove('hidden');
+  switchCommissionsSubtab('projects');
+}
+
+function openPayCommissionModal(commissionId) {
+  var modal = document.getElementById('commission-pay-modal');
+  var form = document.getElementById('commission-pay-form');
+  if (!modal || !form) return;
+  api('/api/commissions').then(function(rows) {
+    var c = rows.find(function(x) { return x.id === commissionId; });
+    if (!c) { window.alert('Comision no encontrada.'); return; }
+    form.reset();
+    form.elements.commission_id.value = commissionId;
+    form.elements.payment_date.value = new Date().toISOString().slice(0, 10);
+    form.elements.amount_original.value = c.commission_amount_mxn;
+    form.elements.currency.value = 'MXN';
+    document.getElementById('commission-pay-rate-wrap').classList.add('hidden');
+    document.getElementById('commission-pay-summary').textContent =
+      (c.display_quote || '—') + ' · ' + (c.display_client || '—') + ' · ' + (c.agent_name || '') + ' · ' + money.format(c.commission_amount_mxn);
+    document.getElementById('commission-pay-message').textContent = '';
+    modal.classList.remove('hidden');
+  }).catch(function(e) { window.alert(e.message); });
 }
 
 async function toggleAgent(id, active) {
@@ -5904,19 +6103,119 @@ if (agentForm) {
   agentForm.addEventListener('submit', async function(e) {
     e.preventDefault();
     var payload = Object.fromEntries(new FormData(agentForm).entries());
+    payload.employee_id = Number(payload.employee_id);
     try { await api('/api/commissions/agents', { method: 'POST', body: JSON.stringify(payload) }); agentForm.reset(); await loadCommissions(); }
     catch (err) { window.alert(err.message); }
   });
 }
 
-var commissionPaymentForm = document.getElementById('commission-payment-form');
-if (commissionPaymentForm) {
-  commissionPaymentForm.addEventListener('submit', async function(e) {
+var commissionExtraordinaryForm = document.getElementById('commission-extraordinary-form');
+if (commissionExtraordinaryForm) {
+  commissionExtraordinaryForm.addEventListener('submit', async function(e) {
     e.preventDefault();
-    var payload = Object.fromEntries(new FormData(commissionPaymentForm).entries());
-    payload.amount_original = Number(payload.amount_original);
-    try { await api('/api/commissions/payments', { method: 'POST', body: JSON.stringify(payload) }); commissionPaymentForm.reset(); await loadCommissions(); }
-    catch (err) { window.alert(err.message); }
+    var payload = Object.fromEntries(new FormData(commissionExtraordinaryForm).entries());
+    payload.employee_id = Number(payload.employee_id);
+    payload.commission_amount_mxn = Number(payload.commission_amount_mxn);
+    try {
+      await api('/api/commissions/extraordinary', { method: 'POST', body: JSON.stringify(payload) });
+      commissionExtraordinaryForm.reset();
+      await loadCommissions();
+      switchCommissionsSubtab('pending');
+    } catch (err) { window.alert(err.message); }
+  });
+}
+
+var commissionArchivedSearchForm = document.getElementById('commission-archived-search-form');
+if (commissionArchivedSearchForm) {
+  commissionArchivedSearchForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var fd = new FormData(commissionArchivedSearchForm);
+    var params = new URLSearchParams({ paid: '1' });
+    ['client_name', 'quote_number', 'order_number', 'date_from', 'date_to'].forEach(function(key) {
+      var val = (fd.get(key) || '').toString().trim();
+      if (val) params.set(key, val);
+    });
+    try {
+      var rows = await api('/api/commissions?' + params.toString());
+      renderArchivedCommissions(rows);
+      switchCommissionsSubtab('history');
+    } catch (err) { window.alert(err.message); }
+  });
+}
+
+var commissionAssignForm = document.getElementById('commission-assign-form');
+if (commissionAssignForm) {
+  commissionAssignForm.elements.commission_calculation_base_type.addEventListener('change', updateCommissionAssignPreview);
+  commissionAssignForm.elements.commission_amount_mxn.addEventListener('input', updateCommissionAssignPreview);
+  commissionAssignForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msg = document.getElementById('commission-assign-message');
+    var fd = new FormData(commissionAssignForm);
+    var payload = {
+      project_id: Number(fd.get('project_id')),
+      employee_id: Number(fd.get('employee_id')),
+      commission_calculation_base_type: fd.get('commission_calculation_base_type'),
+      reference: fd.get('reference') || undefined,
+    };
+    if (payload.commission_calculation_base_type === 'monto_manual') {
+      payload.commission_amount_mxn = Number(fd.get('commission_amount_mxn'));
+    }
+    try {
+      await api('/api/commissions', { method: 'POST', body: JSON.stringify(payload) });
+      document.getElementById('commission-assign-modal').classList.add('hidden');
+      await loadCommissions();
+      switchCommissionsSubtab('pending');
+      if (msg) msg.textContent = '';
+    } catch (err) {
+      if (msg) { msg.textContent = err.message; msg.className = 'message error'; }
+      else window.alert(err.message);
+    }
+  });
+}
+
+var commissionPayForm = document.getElementById('commission-pay-form');
+if (commissionPayForm) {
+  commissionPayForm.elements.currency.addEventListener('change', function() {
+    var wrap = document.getElementById('commission-pay-rate-wrap');
+    if (wrap) wrap.classList.toggle('hidden', commissionPayForm.elements.currency.value === 'MXN');
+  });
+  commissionPayForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msg = document.getElementById('commission-pay-message');
+    var fd = new FormData(commissionPayForm);
+    var commissionId = fd.get('commission_id');
+    var payload = {
+      payment_date: fd.get('payment_date'),
+      amount_original: Number(fd.get('amount_original')),
+      currency: fd.get('currency'),
+      reference: fd.get('reference') || undefined,
+    };
+    if (payload.currency !== 'MXN') payload.exchange_rate_to_mxn = Number(fd.get('exchange_rate_to_mxn'));
+    try {
+      await api('/api/commissions/' + commissionId + '/pay', { method: 'POST', body: JSON.stringify(payload) });
+      document.getElementById('commission-pay-modal').classList.add('hidden');
+      await loadCommissions();
+      switchCommissionsSubtab('history');
+      if (msg) msg.textContent = '';
+    } catch (err) {
+      if (msg) { msg.textContent = err.message; msg.className = 'message error'; }
+      else window.alert(err.message);
+    }
+  });
+}
+
+attachCommissionModalClose(document.getElementById('commission-assign-modal'));
+attachCommissionModalClose(document.getElementById('commission-pay-modal'));
+
+var commissionsPeriodFilter = document.getElementById('commissions-period-filter');
+if (commissionsPeriodFilter) {
+  commissionsPeriodFilter.addEventListener('change', function() { loadCommissions(); });
+}
+var commissionsPeriodClear = document.getElementById('commissions-period-clear');
+if (commissionsPeriodClear) {
+  commissionsPeriodClear.addEventListener('click', function() {
+    if (commissionsPeriodFilter) commissionsPeriodFilter.value = '';
+    loadCommissions();
   });
 }
 

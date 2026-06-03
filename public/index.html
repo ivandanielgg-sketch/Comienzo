@@ -1853,38 +1853,141 @@
               <div>
                 <p class="eyebrow">Modulo Comisiones</p>
                 <h2>Comisiones de Vendedoras</h2>
+                <p class="muted">Empleados activos de Vacaciones · 1% / 3% facturado o monto manual · Pago por comision · Historico con filtros</p>
               </div>
             </div>
             <div class="cards-row" id="commissions-summary-cards"></div>
-            <h3>Vendedoras</h3>
-            <form id="agent-form" class="stack inline-form">
-              <input type="hidden" name="id" />
-              <input name="name" placeholder="Nombre vendedora" required />
-              <input name="start_date" type="date" required />
-              <button type="submit">Guardar vendedora</button>
-            </form>
-            <div class="table-wrapper">
-              <table><thead><tr><th>Nombre</th><th>Activa</th><th>Inicio</th><th>Comisiones Devengadas</th><th>Pagado</th><th>Saldo</th><th></th></tr></thead><tbody id="agents-table"></tbody></table>
+            <p id="commissions-summary-hint" class="muted" style="margin:0 0 12px;font-size:0.9rem;"></p>
+            <div class="ecovis-subtabs" id="commissions-subtabs">
+              <button id="commissions-subtab-agents" class="secondary active" type="button">1. Vendedoras</button>
+              <button id="commissions-subtab-projects" class="secondary" type="button">2. Asignar por proyecto</button>
+              <button id="commissions-subtab-pending" class="secondary" type="button">3. Pendientes de pago</button>
+              <button id="commissions-subtab-history" class="secondary" type="button">4. Historico pagadas</button>
             </div>
-            <h3>Proyectos Disponibles para Comision</h3>
-            <div class="table-wrapper">
-              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Venta MXN</th><th>Costo MXN</th><th>Utilidad Bruta</th><th>Margen</th><th></th></tr></thead><tbody id="available-projects-table"></tbody></table>
+
+            <div id="commissions-agents-section">
+              <h3>Resumen de ventas y comisiones</h3>
+              <form id="commissions-period-form" class="stack inline-form" style="margin-bottom:12px;">
+                <label style="display:flex;flex-direction:column;font-size:0.9rem;">Periodo (mes)
+                  <input type="month" id="commissions-period-filter" name="period" />
+                </label>
+                <button type="button" class="secondary" id="commissions-period-clear">Ver acumulado total</button>
+              </form>
+              <div id="commissions-period-totals" class="cards-row"></div>
+              <h4 style="margin:16px 0 8px;">Ventas y comisiones por mes</h4>
+              <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Mes</th><th>Total vendido</th><th>Comisiones generadas</th><th>Comisiones pagadas</th></tr></thead><tbody id="commissions-monthly-table"></tbody></table>
+              </div>
+              <h3 style="margin-top:20px;">Vendedoras con comisiones pendientes de pago</h3>
+              <p class="muted">Proyectos y comisiones extraordinarias asignadas que aun no se han pagado.</p>
+              <div id="commissions-agents-projects"></div>
+              <h3 style="margin-top:20px;">Registrar vendedora (empleado activo Vacaciones)</h3>
+              <form id="agent-form" class="stack inline-form">
+                <input type="hidden" name="id" />
+                <select name="employee_id" id="agent-employee-select" required><option value="">Empleado activo...</option></select>
+                <input name="start_date" type="date" required />
+                <button type="submit">Guardar vendedora</button>
+              </form>
+              <h3 style="margin-top:16px;">Comision extraordinaria (sin proyecto)</h3>
+              <form id="commission-extraordinary-form" class="stack inline-form">
+                <select name="employee_id" required><option value="">Empleado activo (Vacaciones)...</option></select>
+                <input name="commission_amount_mxn" type="number" step="0.01" min="0.01" placeholder="Monto MXN" required />
+                <input name="description" placeholder="Descripcion (ej. premio proveedor)" required />
+                <input name="reference" placeholder="Referencia" />
+                <button type="submit">Agregar a pendientes</button>
+              </form>
+              <h3 style="margin-top:20px;">Todas las vendedoras</h3>
+              <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Nombre</th><th>Empleado Vacaciones</th><th>Activa</th><th>Pendiente pago</th><th>Comisiones pagadas</th><th></th></tr></thead><tbody id="agents-table"></tbody></table>
+              </div>
             </div>
-            <h3>Comisiones Asignadas</h3>
-            <div class="table-wrapper">
-              <table><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Vendedora</th><th>Base</th><th>%</th><th>Monto MXN</th><th>Status</th><th></th></tr></thead><tbody id="commissions-table"></tbody></table>
+
+            <div id="commissions-projects-section" class="hidden">
+              <p class="muted">Proyectos abiertos o cerrados sin comision asignada. Al asignar, el proyecto desaparece de esta lista.</p>
+              <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Pedido</th><th>Facturado MXN</th><th>Utilidad real</th><th></th></tr></thead><tbody id="available-projects-table"></tbody></table>
+              </div>
             </div>
-            <h3>Pagos de Comisiones</h3>
-            <form id="commission-payment-form" class="stack inline-form">
-              <select name="sales_agent_id" required><option value="">Vendedora...</option></select>
-              <input name="payment_date" type="date" required />
-              <input name="amount_original" type="text" inputmode="decimal" placeholder="Monto" required />
-              <select name="currency"><option value="MXN">MXN</option><option value="USD">USD</option><option value="EUR">EUR</option></select>
-              <input name="reference" placeholder="Referencia" />
-              <button type="submit">Registrar pago</button>
-            </form>
-            <div class="table-wrapper">
-              <table><thead><tr><th>Vendedora</th><th>Fecha</th><th>Monto</th><th>Moneda</th><th>Referencia</th></tr></thead><tbody id="commission-payments-table"></tbody></table>
+
+            <div id="commissions-pending-section" class="hidden">
+              <p class="muted">Comisiones asignadas en espera de pago (proyecto y extraordinarias).</p>
+              <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Vendedora</th><th>Base</th><th>Monto MXN</th><th>Utilidad real</th><th>Tipo</th><th></th></tr></thead><tbody id="commissions-table"></tbody></table>
+              </div>
+            </div>
+
+            <div id="commissions-history-section" class="hidden">
+              <p class="muted">El historico no se muestra por defecto. Indique al menos un filtro para consultar comisiones pagadas.</p>
+              <form id="commission-archived-search-form" class="stack inline-form">
+                <input name="client_name" placeholder="Cliente" />
+                <input name="quote_number" placeholder="No. cotizacion" />
+                <input name="order_number" placeholder="No. pedido" />
+                <input name="date_from" type="date" title="Desde" />
+                <input name="date_to" type="date" title="Hasta" />
+                <button type="submit">Buscar en historico</button>
+              </form>
+              <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Cotizacion</th><th>Cliente</th><th>Vendedora</th><th>Base</th><th>Monto MXN</th><th>Fecha pago</th><th>Referencia</th></tr></thead><tbody id="commissions-archived-table"></tbody></table>
+              </div>
+              <h3 style="margin-top:20px;">Detalle de pagos registrados</h3>
+              <div class="table-wrapper">
+                <table class="data-table"><thead><tr><th>Vendedora</th><th>Cotizacion</th><th>Fecha</th><th>Monto</th><th>Moneda</th><th>Referencia</th></tr></thead><tbody id="commission-payments-table"></tbody></table>
+              </div>
+            </div>
+          </div>
+
+          <div id="commission-assign-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2>Asignar comision a proyecto</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="commission-assign-form" class="grid-form">
+                <input type="hidden" name="project_id" />
+                <p class="full muted" id="commission-assign-project-summary"></p>
+                <label class="full">Empleado (Vacaciones, activos) *
+                  <select name="employee_id" required><option value="">Seleccione empleado...</option></select>
+                </label>
+                <p class="full muted" style="margin:0;">Solo empleados activos del modulo Vacaciones. Debe estar registrado como vendedora en la pestana 1.</p>
+                <label class="full">Tipo de comision *
+                  <select name="commission_calculation_base_type" required>
+                    <option value="facturado_1pct">1% sobre cantidad facturada</option>
+                    <option value="facturado_3pct">3% sobre cantidad facturada</option>
+                    <option value="monto_manual">Monto definido a mano</option>
+                  </select>
+                </label>
+                <label id="commission-assign-manual-wrap" class="full hidden">Monto comision (MXN) *
+                  <input name="commission_amount_mxn" type="number" step="0.01" min="0.01" />
+                </label>
+                <p class="full"><strong>Monto calculado:</strong> <span id="commission-assign-preview">—</span></p>
+                <label class="full">Referencia (opcional)<input name="reference" /></label>
+                <button type="submit" class="full">Asignar comision</button>
+                <p id="commission-assign-message" class="message full"></p>
+              </form>
+            </div>
+          </div>
+
+          <div id="commission-pay-modal" class="modal-overlay hidden">
+            <div class="modal-content panel">
+              <div class="panel-header">
+                <h2>Registrar pago de comision</h2>
+                <button class="secondary modal-close" type="button">Cerrar</button>
+              </div>
+              <form id="commission-pay-form" class="grid-form">
+                <input type="hidden" name="commission_id" />
+                <p class="full muted" id="commission-pay-summary"></p>
+                <label>Fecha de pago *<input name="payment_date" type="date" required /></label>
+                <label class="full money-field">Monto *
+                  <div class="money-row">
+                    <input name="amount_original" type="number" step="0.01" min="0.01" required />
+                    <select name="currency"><option value="MXN">MXN</option><option value="USD">USD</option><option value="EUR">EUR</option></select>
+                  </div>
+                </label>
+                <label id="commission-pay-rate-wrap" class="full hidden">Tipo de cambio a MXN *<input name="exchange_rate_to_mxn" type="number" step="0.0001" min="0.0001" /></label>
+                <label class="full">Referencia<input name="reference" /></label>
+                <button type="submit" class="full">Marcar como pagada</button>
+                <p id="commission-pay-message" class="message full"></p>
+              </form>
             </div>
           </div>
         </section>
@@ -2162,7 +2265,7 @@
       </div>
     </div>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=commissions-vacaciones-employees-20260603c"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>

@@ -149,6 +149,7 @@ CREATE TABLE employees (
 CREATE TABLE sales_commission_agents (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
+      employee_id INTEGER,
       related_user_id INTEGER,
       active INTEGER NOT NULL DEFAULT 1,
       start_date TEXT NOT NULL,
@@ -163,8 +164,11 @@ CREATE TABLE sales_commission_agents (
       deleted_at TEXT,
       deleted_by_user_id INTEGER,
       deleted_by_name TEXT,
-      delete_reason TEXT
+      delete_reason TEXT,
+      FOREIGN KEY (employee_id) REFERENCES employees(id)
     );
+
+CREATE UNIQUE INDEX idx_sales_commission_agents_employee_active ON sales_commission_agents (employee_id) WHERE deleted_at IS NULL AND employee_id IS NOT NULL;
 
 CREATE TABLE ecovis_payments (
       id SERIAL PRIMARY KEY,
@@ -621,22 +625,26 @@ CREATE TABLE project_failure_reports (
 
 CREATE TABLE sales_commissions (
       id SERIAL PRIMARY KEY,
-      project_id INTEGER NOT NULL,
+      project_id INTEGER,
       closed_project_id INTEGER,
       sales_agent_id INTEGER NOT NULL,
-      commission_calculation_base_type TEXT NOT NULL CHECK (commission_calculation_base_type IN ('total_sale_mxn', 'gross_profit_mxn', 'net_profit_mxn', 'no_aplica')),
+      commission_type TEXT NOT NULL DEFAULT 'proyecto',
+      commission_calculation_base_type TEXT NOT NULL,
       commission_base_mxn DOUBLE PRECISION NOT NULL DEFAULT 0,
       total_sale_mxn_snapshot DOUBLE PRECISION,
       gross_profit_mxn_snapshot DOUBLE PRECISION,
       net_profit_mxn_snapshot DOUBLE PRECISION,
+      final_margin_snapshot DOUBLE PRECISION,
       commission_percentage DOUBLE PRECISION NOT NULL DEFAULT 0,
       commission_amount_mxn DOUBLE PRECISION NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'parcial', 'pagada', 'no_aplica', 'cancelada')),
       no_apply_reason TEXT,
       notes TEXT,
+      reference TEXT,
       assigned_by_user_id INTEGER,
       assigned_by_name TEXT,
       assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      paid_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       deleted_at TEXT,
@@ -644,6 +652,24 @@ CREATE TABLE sales_commissions (
       deleted_by_name TEXT,
       delete_reason TEXT,
       FOREIGN KEY (project_id) REFERENCES projects(id),
+      FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
+    );
+
+CREATE TABLE sales_commission_balance_adjustments (
+      id SERIAL PRIMARY KEY,
+      sales_agent_id INTEGER NOT NULL,
+      adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('saldo_inicial', 'extraordinario')),
+      amount_mxn DOUBLE PRECISION NOT NULL,
+      description TEXT NOT NULL,
+      reference TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT,
       FOREIGN KEY (sales_agent_id) REFERENCES sales_commission_agents(id)
     );
 
@@ -737,6 +763,7 @@ CREATE TABLE payroll_attendance_employees (
 
 CREATE TABLE sales_commission_payments (
       id SERIAL PRIMARY KEY,
+      commission_id INTEGER,
       sales_agent_id INTEGER NOT NULL,
       payment_date TEXT NOT NULL,
       amount_original DOUBLE PRECISION NOT NULL CHECK (amount_original > 0),
@@ -835,7 +862,7 @@ CREATE UNIQUE INDEX idx_payroll_week_unique
       ON payroll_attendance_weeks (year, week_number)
       WHERE deleted_at IS NULL AND status != 'cancelada';
 
-CREATE UNIQUE INDEX idx_sales_commissions_project_active ON sales_commissions (project_id) WHERE deleted_at IS NULL AND status != 'cancelada';
+CREATE UNIQUE INDEX idx_sales_commissions_project_active ON sales_commissions (project_id) WHERE deleted_at IS NULL AND status != 'cancelada' AND project_id IS NOT NULL;
 
 CREATE INDEX idx_sessions_expires ON sessions (expires);
 
