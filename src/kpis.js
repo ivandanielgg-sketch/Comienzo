@@ -363,15 +363,63 @@ function applyFilters(projects, filters) {
   }
   if (filters.employeeId && filters.employee) {
     const emp = filters.employee;
-    const name = normalizeText(emp.fullName);
+    const empId = Number(emp.employeeId);
     result = result.filter((p) => {
       const dept = emp.kpiDepartment;
-      if (dept === 'Ventas') return normalizeText(p.seller).includes(name);
-      if (dept === 'Técnico') return normalizeText(p.technician_name).includes(name);
-      return normalizeText(p.seller).includes(name) || normalizeText(p.technician_name).includes(name);
+      if (dept === 'Ventas') {
+        return p.vendedor_id === empId
+          || (!p.vendedor_id && normalizeText(p.seller).includes(normalizeText(emp.fullName)));
+      }
+      if (dept === 'Técnico') {
+        return p.tecnico_id === empId
+          || (!p.tecnico_id && normalizeText(p.technician_name).includes(normalizeText(emp.fullName)));
+      }
+      return p.vendedor_id === empId || p.tecnico_id === empId
+        || normalizeText(p.seller).includes(normalizeText(emp.fullName))
+        || normalizeText(p.technician_name).includes(normalizeText(emp.fullName));
     });
   }
   return result;
+}
+
+function resolveProjectDueDate(project) {
+  return project.fecha_vencimiento || project.due_date || project.promised_delivery_date || null;
+}
+
+function loadReportsForKpis(db) {
+  const sqlFull = `
+    SELECT r.*, e.full_name AS executed_by_name
+    FROM project_reports r
+    LEFT JOIN employees e ON e.id = r.executed_by_employee_id
+    WHERE r.deleted_at IS NULL AND r.archived_at IS NULL`;
+  const sqlLegacy = `
+    SELECT r.*, NULL AS executed_by_name
+    FROM project_reports r
+    WHERE r.deleted_at IS NULL`;
+  try {
+    return db.prepare(sqlFull).all();
+  } catch (_) {
+    return db.prepare(sqlLegacy).all();
+  }
+}
+
+function filterReportsForCharts(reports, projects, period, filters, employees) {
+  const projectIds = new Set(projects.map((p) => p.id));
+  let rows = reports.filter((r) => projectIds.has(r.project_id));
+  rows = rows.filter((r) => isDateInRange(r.report_date, period.startDate, period.endDate));
+  if (filters.department) {
+    const dept = normalizeDepartment(filters.department) || filters.department;
+    if (dept === 'Técnico') {
+      const techIds = new Set(
+        employees.filter((e) => e.kpiDepartment === 'Técnico').map((e) => e.employeeId),
+      );
+      rows = rows.filter((r) => techIds.has(r.executed_by_employee_id));
+    }
+  }
+  if (filters.employeeId && filters.employee?.kpiDepartment === 'Técnico') {
+    rows = rows.filter((r) => r.executed_by_employee_id === filters.employee.employeeId);
+  }
+  return rows;
 }
 
 
@@ -879,9 +927,16 @@ function computeEmployeeKpis(employee, projects, reports, period, manualQuotes) 
   const name = normalizeText(employee.fullName);
   const dept = employee.kpiDepartment;
   const related = projects.filter((p) => {
-    if (dept === 'Ventas') return normalizeText(p.seller).includes(name);
-    if (dept === 'Técnico') return normalizeText(p.technician_name).includes(name);
-    return normalizeText(p.seller).includes(name) || normalizeText(p.technician_name).includes(name);
+    if (dept === 'Ventas') {
+      return p.vendedor_id === employee.employeeId
+        || (!p.vendedor_id && normalizeText(p.seller).includes(name));
+    }
+    if (dept === 'Técnico') {
+      return p.tecnico_id === employee.employeeId
+        || (!p.tecnico_id && normalizeText(p.technician_name).includes(name));
+    }
+    return p.vendedor_id === employee.employeeId || p.tecnico_id === employee.employeeId
+      || normalizeText(p.seller).includes(name) || normalizeText(p.technician_name).includes(name);
   });
 
   const reportsByProject = {};
@@ -906,7 +961,10 @@ function computeEmployeeKpis(employee, projects, reports, period, manualQuotes) 
     };
     trafficLight = noFollowUp > 0 ? 'red' : 'green';
   } else if (dept === 'Técnico') {
-    const assigned = related.filter((p) => normalizeText(p.technician_name).includes(name));
+    const assigned = related.filter(
+      (p) => p.tecnico_id === employee.employeeId
+        || (!p.tecnico_id && normalizeText(p.technician_name).includes(name)),
+    );
     const finished = assigned.filter((p) => normalizeProjectStatus(p.status) === 'terminado' || p.closed_at);
     const executedInPeriod = reports.filter((r) => (
       r.executed_by_employee_id === employee.employeeId
@@ -1071,48 +1129,194 @@ function generateAlerts(projects, reports, settings, sales) {
 
 function computeReceivableBuckets(projects, settings) {
   const today = extractDate(new Date().toISOString());
-  const b1 = settings.receivable_bucket1_days || 30;
-  const b2 = settings.receivable_bucket2_days || 60;
-  const b3 = settings.receivable_bucket3_days || 90;
-  const crit = settings.receivable_critical_days || 120;
   const buckets = {
-    not_due: { label: 'No vencido', amount: 0, count: 0 },
-    days_1_30: { label: `1-${b1} dias`, amount: 0, count: 0 },
-    days_31_60: { label: `${b1 + 1}-${b2} dias`, amount: 0, count: 0 },
-    days_61_90: { label: `${b2 + 1}-${b3} dias`, amount: 0, count: 0 },
-    over_critical: { label: `Mas de ${crit} dias`, amount: 0, count: 0 },
+    por_vencer: { label: 'Por vencer', amount: 0, count: 0 },
+    vencidos: { label: 'Vencidos', amount: 0, count: 0 },
   };
   for (const p of projects) {
     const pending = p.totals?.pending_collection || 0;
     if (pending <= 0.01) continue;
-    const due = p.due_date;
+    const due = resolveProjectDueDate(p);
     if (!due || today <= due) {
-      buckets.not_due.amount += pending;
-      buckets.not_due.count += 1;
-      continue;
+      buckets.por_vencer.amount += pending;
+      buckets.por_vencer.count += 1;
+    } else {
+      buckets.vencidos.amount += pending;
+      buckets.vencidos.count += 1;
     }
-    const days = daysBetween(due, today) || 0;
-    if (days <= b1) { buckets.days_1_30.amount += pending; buckets.days_1_30.count += 1; }
-    else if (days <= b2) { buckets.days_31_60.amount += pending; buckets.days_31_60.count += 1; }
-    else if (days <= b3) { buckets.days_61_90.amount += pending; buckets.days_61_90.count += 1; }
-    else { buckets.over_critical.amount += pending; buckets.over_critical.count += 1; }
   }
   Object.values(buckets).forEach((b) => { b.amount = roundMoney(b.amount); });
   return Object.values(buckets);
 }
 
-function computeKpiCharts(db, projects, period, manualQuotes, exchangeRates) {
+function countProjectsWonForSeller(projects, employeeId, start, end) {
+  return projects.filter(
+    (p) => p.vendedor_id === employeeId && isDateInRange(p.created_at, start, end),
+  ).length;
+}
+
+function computeSellerSuccessForPeriod(projects, manualQuotes, period, employees, filters) {
+  let sellers = employees.filter((e) => e.kpiDepartment === 'Ventas');
+  if (filters.department) {
+    const dept = normalizeDepartment(filters.department) || filters.department;
+    if (dept !== 'Ventas') sellers = [];
+    else sellers = employees.filter((e) => e.kpiDepartment === 'Ventas');
+  }
+  if (filters.employeeId && filters.employee?.kpiDepartment === 'Ventas') {
+    sellers = sellers.filter((e) => e.employeeId === filters.employee.employeeId);
+  }
+
   const months = getMonthsInPeriod(period).slice(-12);
+  const monthlySuccess = [];
+  for (const mo of months) {
+    const start = formatDate(mo.year, mo.month, 1);
+    const end = formatDate(mo.year, mo.month, lastDayOfMonth(mo.year, mo.month));
+    const monthCaptures = manualQuotes.filter((c) => c.year === mo.year && c.month === mo.month);
+    let quotes = 0;
+    let won = 0;
+    if (sellers.length) {
+      for (const seller of sellers) {
+        quotes += monthCaptures
+          .filter((c) => c.employee_id === seller.employeeId)
+          .reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
+        won += countProjectsWonForSeller(projects, seller.employeeId, start, end);
+      }
+    } else {
+      quotes = monthCaptures.reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
+      won = projects.filter((p) => isDateInRange(p.created_at, start, end)).length;
+    }
+    monthlySuccess.push({
+      label: `${pad2(mo.month)}/${mo.year}`,
+      quotes_sent: quotes,
+      projects_won: won,
+      success_percent: safePercent(safeRatio(won, quotes)),
+    });
+  }
+
+  const sellerRates = sellers.map((seller) => {
+    const { quotesSent, quotedAmountMxn, hasCapture } = getManualQuotesForEmployee(
+      manualQuotes,
+      period,
+      seller.employeeId,
+    );
+    const won = projects.filter(
+      (p) => p.vendedor_id === seller.employeeId
+        && isDateInRange(p.created_at, period.startDate, period.endDate),
+    ).length;
+    return {
+      employee_id: seller.employeeId,
+      full_name: seller.fullName,
+      quotes_sent: hasCapture ? quotesSent : 0,
+      projects_won: won,
+      quoted_amount_mxn: quotedAmountMxn,
+      success_percent: hasCapture ? safePercent(safeRatio(won, quotesSent)) : null,
+    };
+  });
+
+  return { monthlySuccess, sellerRates };
+}
+
+function computeServicesByMonth(reports, period, employees, filters) {
+  const months = getMonthsInPeriod(period).slice(-12);
+  const labels = months.map((mo) => `${pad2(mo.month)}/${mo.year}`);
+  const techEmployees = employees.filter((e) => e.kpiDepartment === 'Técnico');
+  let techIds = new Set(techEmployees.map((e) => e.employeeId));
+  if (filters.employeeId && filters.employee?.kpiDepartment === 'Técnico') {
+    techIds = new Set([filters.employee.employeeId]);
+  } else if (filters.department) {
+    const dept = normalizeDepartment(filters.department) || filters.department;
+    if (dept === 'Ventas') techIds = new Set();
+    else if (dept === 'Técnico') techIds = new Set(techEmployees.map((e) => e.employeeId));
+  }
+
+  const counts = {};
+  for (const report of reports) {
+    const techId = report.executed_by_employee_id;
+    if (!techId || !techIds.has(techId)) continue;
+    const monthKey = extractDate(report.report_date).slice(0, 7);
+    if (!monthKey) continue;
+    const key = `${techId}`;
+    if (!counts[key]) {
+      counts[key] = {
+        employee_id: techId,
+        full_name: report.executed_by_name || `Tecnico #${techId}`,
+        byMonth: {},
+      };
+    }
+    counts[key].byMonth[monthKey] = (counts[key].byMonth[monthKey] || 0) + 1;
+  }
+
+  const series = Object.values(counts)
+    .map((row) => ({
+      employee_id: row.employee_id,
+      full_name: row.full_name,
+      data: months.map((mo) => {
+        const mk = `${mo.year}-${pad2(mo.month)}`;
+        return row.byMonth[mk] || 0;
+      }),
+      total: months.reduce((s, mo) => s + (row.byMonth[`${mo.year}-${pad2(mo.month)}`] || 0), 0),
+    }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 8);
+
+  return { labels, series };
+}
+
+function computeEmployeeComparisonChart(sellerRates, servicesByMonth, filters) {
+  const dept = filters.department ? (normalizeDepartment(filters.department) || filters.department) : null;
+  if (dept === 'Técnico') {
+    return {
+      mode: 'technician_services',
+      items: servicesByMonth.series.map((s) => ({
+        label: s.full_name,
+        value: s.total,
+      })),
+    };
+  }
+  return {
+    mode: 'seller_success',
+    items: sellerRates.map((s) => ({
+      label: s.full_name,
+      value: s.success_percent,
+      projects_won: s.projects_won,
+      quotes_sent: s.quotes_sent,
+    })),
+  };
+}
+
+function computeKpiCharts(db, {
+  projects,
+  period,
+  manualQuotes,
+  exchangeRates,
+  reports,
+  employees,
+  filters,
+}) {
+  const months = getMonthsInPeriod(period).slice(-12);
+  const filteredReports = filterReportsForCharts(reports, projects, period, filters, employees);
+  const { monthlySuccess, sellerRates } = computeSellerSuccessForPeriod(
+    projects,
+    manualQuotes,
+    period,
+    employees,
+    filters,
+  );
+  const servicesByMonth = computeServicesByMonth(filteredReports, period, employees, filters);
+
   const trend = [];
   for (const mo of months) {
     const start = formatDate(mo.year, mo.month, 1);
     const end = formatDate(mo.year, mo.month, lastDayOfMonth(mo.year, mo.month));
     const subPeriod = { startDate: start, endDate: end, label: `${pad2(mo.month)}/${mo.year}` };
     const monthProjects = projects.filter((p) => isDateInRange(p.created_at, start, end));
-    const manualAgg = aggregateManualQuotesForPeriod(
-      manualQuotes.filter((c) => c.year === mo.year && c.month === mo.month),
-      subPeriod,
-    );
+    const monthQuoteRows = manualQuotes.filter((c) => c.year === mo.year && c.month === mo.month);
+    let quotesSent = monthQuoteRows.reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
+    if (filters.employeeId && filters.employee?.kpiDepartment === 'Ventas') {
+      quotesSent = monthQuoteRows
+        .filter((c) => c.employee_id === filters.employee.employeeId)
+        .reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
+    }
     const sold = monthProjects.filter((p) => p.closed_at && isDateInRange(p.closed_at, start, end));
     let collected = 0;
     for (const p of projects) {
@@ -1122,39 +1326,28 @@ function computeKpiCharts(db, projects, period, manualQuotes, exchangeRates) {
         }
       }
     }
+    const successRow = monthlySuccess.find((r) => r.label === subPeriod.label);
     trend.push({
       label: subPeriod.label,
-      quoted_amount_mxn: manualAgg.quotedAmountMxn,
+      quoted_amount_mxn: roundMoney(monthQuoteRows.reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0)),
       sold_amount_mxn: roundMoney(sold.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0)),
       collected_amount_mxn: roundMoney(collected),
+      quotes_sent: quotesSent,
+      projects_won: successRow?.projects_won ?? monthProjects.length,
+      quote_success_percent: successRow?.success_percent ?? null,
     });
   }
 
   const settings = loadKpiSettings(db);
   const receivable_buckets = computeReceivableBuckets(projects, settings);
-
-  const reports = db.prepare(
-    'SELECT * FROM project_reports WHERE deleted_at IS NULL AND archived_at IS NULL',
-  ).all();
-  const reportsByProject = {};
-  reports.forEach((r) => { reportsByProject[r.project_id] = r; });
-  const finished = projects.filter((p) => normalizeProjectStatus(p.status) === 'terminado' || p.closed_at);
-  let complete = 0;
-  let pending = 0;
-  let overdue = 0;
-  const critDays = settings.report_missing_critical_days || 7;
-  for (const p of finished) {
-    const report = reportsByProject[p.id];
-    if (report && isReportComplete(report)) { complete += 1; continue; }
-    const days = daysBetween(p.closed_at || p.updated_at, new Date().toISOString());
-    if (days !== null && days > critDays) overdue += 1;
-    else pending += 1;
-  }
+  const employee_comparison = computeEmployeeComparisonChart(sellerRates, servicesByMonth, filters);
 
   return {
     monthly_trend: trend,
     receivable_buckets,
-    technical_reports: { complete, pending, overdue },
+    seller_close_rates: sellerRates,
+    services_by_month: servicesByMonth,
+    employee_comparison,
   };
 }
 
@@ -1186,9 +1379,7 @@ function buildKpiContext(db, query) {
     employee,
   });
 
-  const reports = db.prepare(
-    'SELECT * FROM project_reports WHERE deleted_at IS NULL AND archived_at IS NULL',
-  ).all();
+  const reports = loadReportsForKpis(db);
   const reportsByProject = {};
   reports.forEach((r) => { reportsByProject[r.project_id] = r; });
 
@@ -1200,7 +1391,19 @@ function buildKpiContext(db, query) {
   const reportsKpi = computeReportsKpis(projects, reports);
   const billing = computeBillingKpis(projects, period);
   const collection = computeCollectionKpis(projects, period, exchangeRates);
-  const charts = computeKpiCharts(db, projects, period, manualQuotes, exchangeRates);
+  const charts = computeKpiCharts(db, {
+    projects,
+    period,
+    manualQuotes,
+    exchangeRates,
+    reports,
+    employees,
+    filters: {
+      department: query.department || null,
+      employeeId: query.employeeId ? Number(query.employeeId) : null,
+      employee,
+    },
+  });
   const unassigned = loadActiveKpiEmployees(db).filter((e) => !e.kpiDepartment);
 
   return {
@@ -1350,4 +1553,7 @@ module.exports = {
   computeAlerts,
   computeDetail,
   generateAlerts,
+  computeKpiCharts,
+  computeReceivableBuckets,
+  resolveProjectDueDate,
 };

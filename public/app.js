@@ -6058,48 +6058,150 @@ function destroyKpiCharts() {
   kpiChartInstances = {};
 }
 
-function renderKpiCharts(summary, employees) {
-  if (typeof Chart === 'undefined') return;
+function kpiChartPanel(canvasId) {
+  const canvas = document.getElementById(canvasId);
+  return canvas ? canvas.closest('.kpi-chart-panel') : null;
+}
+
+function ensureKpiChartCanvas(canvasId) {
+  const panel = kpiChartPanel(canvasId);
+  if (!panel) return null;
+  let canvas = document.getElementById(canvasId);
+  const empty = panel.querySelector('.kpi-chart-empty');
+  if (empty) empty.remove();
+  if (!canvas || canvas.tagName !== 'CANVAS') {
+    if (canvas && canvas.tagName !== 'CANVAS') canvas.remove();
+    canvas = document.createElement('canvas');
+    canvas.id = canvasId;
+    canvas.height = 200;
+    panel.appendChild(canvas);
+  }
+  return canvas;
+}
+
+function showKpiChartEmpty(canvasId, message) {
+  const panel = kpiChartPanel(canvasId);
+  if (!panel) return;
+  const canvas = panel.querySelector('canvas');
+  if (canvas) canvas.remove();
+  const existing = panel.querySelector('.kpi-chart-empty');
+  if (existing) {
+    existing.textContent = message;
+    return;
+  }
+  const p = document.createElement('p');
+  p.className = 'kpi-chart-empty muted';
+  p.textContent = message;
+  panel.appendChild(p);
+}
+
+const KPI_CHART_COLORS = ['#2563eb', '#22c55e', '#eab308', '#f97316', '#8b5cf6', '#06b6d4', '#ec4899', '#64748b'];
+
+function renderKpiCharts(summary) {
+  if (typeof Chart === 'undefined') {
+    console.warn('Chart.js no cargado; graficas KPI omitidas.');
+    return;
+  }
   destroyKpiCharts();
   const charts = summary.charts || {};
+
   const trend = charts.monthly_trend || [];
-  const trendCtx = document.getElementById('kpi-chart-trend');
-  if (trendCtx) {
+  const trendCanvas = ensureKpiChartCanvas('kpi-chart-trend');
+  if (trendCanvas) {
     if (!trend.length) {
-      const empty = trendCtx.parentElement && trendCtx.parentElement.querySelector('.kpi-chart-empty');
-      if (empty) empty.remove();
-      const p = document.createElement('p');
-      p.className = 'kpi-chart-empty';
-      p.textContent = 'Sin datos de tendencia para el periodo.';
-      trendCtx.replaceWith(p);
+      showKpiChartEmpty('kpi-chart-trend', 'Sin datos de tendencia para el periodo.');
     } else {
-      const canvas = document.createElement('canvas');
-      canvas.id = 'kpi-chart-trend';
-      trendCtx.replaceWith(canvas);
-      kpiChartInstances.trend = new Chart(canvas, {
+      const successData = trend.map(function(t) { return t.quote_success_percent; });
+      const hasSuccess = successData.some(function(v) { return v != null && Number.isFinite(v); });
+      const datasets = [
+        { label: 'Monto cotizado', data: trend.map(function(t) { return t.quoted_amount_mxn || 0; }), borderColor: '#2563eb', tension: 0.2, yAxisID: 'y' },
+        { label: 'Monto vendido', data: trend.map(function(t) { return t.sold_amount_mxn || 0; }), borderColor: '#22c55e', tension: 0.2, yAxisID: 'y' },
+        { label: 'Monto cobrado', data: trend.map(function(t) { return t.collected_amount_mxn || 0; }), borderColor: '#eab308', tension: 0.2, yAxisID: 'y' },
+      ];
+      if (hasSuccess) {
+        datasets.push({
+          label: 'Exito cotizaciones (%)',
+          data: successData.map(function(v) { return v == null ? null : Number(v); }),
+          borderColor: '#8b5cf6',
+          backgroundColor: 'rgba(139, 92, 246, 0.12)',
+          tension: 0.2,
+          yAxisID: 'y1',
+        });
+      }
+      kpiChartInstances.trend = new Chart(trendCanvas, {
         type: 'line',
-        data: {
-          labels: trend.map(function(t) { return t.label; }),
-          datasets: [
-            { label: 'Monto cotizado', data: trend.map(function(t) { return t.quoted_amount_mxn; }), borderColor: '#2563eb', tension: 0.2 },
-            { label: 'Monto vendido', data: trend.map(function(t) { return t.sold_amount_mxn; }), borderColor: '#22c55e', tension: 0.2 },
-            { label: 'Monto cobrado', data: trend.map(function(t) { return t.collected_amount_mxn; }), borderColor: '#eab308', tension: 0.2 },
-          ],
-        },
+        data: { labels: trend.map(function(t) { return t.label; }), datasets },
         options: {
           plugins: {
             tooltip: {
               callbacks: {
                 label: function(ctx) {
+                  if (ctx.dataset.yAxisID === 'y1') {
+                    return ctx.dataset.label + ': ' + (ctx.parsed.y == null ? '—' : ctx.parsed.y + '%');
+                  }
                   return ctx.dataset.label + ': ' + formatCurrencyMXN(ctx.parsed.y);
                 },
               },
             },
           },
           scales: {
-            y: {
-              ticks: {
-                callback: function(v) { return formatCurrencyMXN(v); },
+            y: { position: 'left', ticks: { callback: function(v) { return formatCurrencyMXN(v); } } },
+            y1: {
+              position: 'right',
+              grid: { drawOnChartArea: false },
+              min: 0,
+              max: 100,
+              ticks: { callback: function(v) { return v + '%'; } },
+            },
+          },
+        },
+      });
+    }
+  }
+
+  const comparison = charts.employee_comparison || { mode: 'seller_success', items: [] };
+  const empCanvas = ensureKpiChartCanvas('kpi-chart-employees');
+  if (empCanvas) {
+    const items = comparison.items || [];
+    if (!items.length) {
+      showKpiChartEmpty('kpi-chart-employees', 'Sin datos de empleados para los filtros seleccionados.');
+    } else if (comparison.mode === 'technician_services') {
+      kpiChartInstances.employees = new Chart(empCanvas, {
+        type: 'bar',
+        data: {
+          labels: items.map(function(i) { return i.label; }),
+          datasets: [{
+            label: 'Servicios en periodo',
+            data: items.map(function(i) { return i.value || 0; }),
+            backgroundColor: '#2563eb',
+          }],
+        },
+        options: { indexAxis: 'y' },
+      });
+    } else {
+      kpiChartInstances.employees = new Chart(empCanvas, {
+        type: 'bar',
+        data: {
+          labels: items.map(function(i) { return i.label; }),
+          datasets: [{
+            label: 'Exito cotizaciones (%)',
+            data: items.map(function(i) { return i.value == null ? 0 : i.value; }),
+            backgroundColor: '#2563eb',
+          }],
+        },
+        options: {
+          indexAxis: 'y',
+          scales: {
+            x: { min: 0, max: 100, ticks: { callback: function(v) { return v + '%'; } } },
+          },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: function(ctx) {
+                  const item = items[ctx.dataIndex];
+                  const pct = item.value == null ? '—' : item.value + '%';
+                  return 'Exito: ' + pct + ' (' + (item.projects_won || 0) + ' / ' + (item.quotes_sent || 0) + ')';
+                },
               },
             },
           },
@@ -6108,88 +6210,66 @@ function renderKpiCharts(summary, employees) {
     }
   }
 
-  const empCtx = document.getElementById('kpi-chart-employees');
-  const empList = (employees && employees.employees) || [];
-  const salesEmps = empList.filter(function(e) { return e.department === 'Ventas'; });
-  if (empCtx && salesEmps.length) {
-    kpiChartInstances.employees = new Chart(empCtx, {
-      type: 'bar',
-      data: {
-        labels: salesEmps.map(function(e) { return e.employee; }),
-        datasets: [{
-          label: 'Monto vendido (MXN)',
-          data: salesEmps.map(function(e) {
-            const v = e.kpis && e.kpis.sold_amount_mxn;
-            return typeof v === 'number' ? v : parsePlainAmount(v);
-          }),
-          backgroundColor: '#2563eb',
-        }],
-      },
-      options: {
-        indexAxis: 'y',
-        plugins: {
-          tooltip: {
-            callbacks: {
-              label: function(c) { return formatCurrencyMXN(c.parsed.x); },
-            },
-          },
-        },
-        scales: {
-          x: {
-            ticks: {
-              callback: function(v) { return formatCurrencyMXN(v); },
-            },
-          },
-        },
-      },
-    });
-  }
-
-  const recCtx = document.getElementById('kpi-chart-receivable');
   const buckets = charts.receivable_buckets || [];
-  if (recCtx && buckets.length) {
-    kpiChartInstances.receivable = new Chart(recCtx, {
-      type: 'bar',
-      data: {
-        labels: buckets.map(function(b) { return b.label; }),
-        datasets: [{
-          label: 'Monto MXN',
-          data: buckets.map(function(b) { return b.amount; }),
-          backgroundColor: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#7f1d1d'],
-        }],
-      },
-      options: {
-        plugins: {
-          tooltip: {
-            callbacks: {
-              label: function(c) { return formatCurrencyMXN(c.parsed.y); },
+  const recCanvas = ensureKpiChartCanvas('kpi-chart-receivable');
+  if (recCanvas) {
+    if (!buckets.length || buckets.every(function(b) { return !b.amount && !b.count; })) {
+      showKpiChartEmpty('kpi-chart-receivable', 'Sin cartera pendiente con los filtros actuales.');
+    } else {
+      kpiChartInstances.receivable = new Chart(recCanvas, {
+        type: 'bar',
+        data: {
+          labels: buckets.map(function(b) { return b.label; }),
+          datasets: [{
+            label: 'Monto MXN',
+            data: buckets.map(function(b) { return b.amount || 0; }),
+            backgroundColor: ['#22c55e', '#ef4444'],
+          }],
+        },
+        options: {
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: function(c) {
+                  const bucket = buckets[c.dataIndex];
+                  return formatCurrencyMXN(c.parsed.y) + ' (' + (bucket.count || 0) + ' proyectos)';
+                },
+              },
             },
           },
-        },
-        scales: {
-          y: {
-            ticks: {
-              callback: function(v) { return formatCurrencyMXN(v); },
-            },
+          scales: {
+            y: { ticks: { callback: function(v) { return formatCurrencyMXN(v); } } },
           },
         },
-      },
-    });
+      });
+    }
   }
 
-  const repCtx = document.getElementById('kpi-chart-reports');
-  const rep = charts.technical_reports || {};
-  if (repCtx) {
-    kpiChartInstances.reports = new Chart(repCtx, {
-      type: 'bar',
-      data: {
-        labels: ['Completos', 'Pendientes', 'Vencidos'],
-        datasets: [{
-          data: [rep.complete || 0, rep.pending || 0, rep.overdue || 0],
-          backgroundColor: ['#22c55e', '#eab308', '#ef4444'],
-        }],
-      },
-    });
+  const services = charts.services_by_month || { labels: [], series: [] };
+  const repCanvas = ensureKpiChartCanvas('kpi-chart-reports');
+  if (repCanvas) {
+    const series = services.series || [];
+    if (!series.length || !(services.labels || []).length) {
+      showKpiChartEmpty('kpi-chart-reports', 'Sin servicios/reportes ejecutados en el periodo.');
+    } else {
+      kpiChartInstances.reports = new Chart(repCanvas, {
+        type: 'bar',
+        data: {
+          labels: services.labels,
+          datasets: series.map(function(s, idx) {
+            return {
+              label: s.full_name,
+              data: s.data || [],
+              backgroundColor: KPI_CHART_COLORS[idx % KPI_CHART_COLORS.length],
+            };
+          }),
+        },
+        options: {
+          plugins: { tooltip: { mode: 'index', intersect: false } },
+          scales: { x: { stacked: false }, y: { beginAtZero: true, ticks: { precision: 0 } } },
+        },
+      });
+    }
   }
 }
 function populateKpiManualQuoteMonths() {
@@ -6701,6 +6781,12 @@ function renderKpiDashboard(summary, alerts, employees) {
     }).join('');
   } else if (unassignedEl) {
     unassignedEl.classList.add('hidden');
+  }
+
+  try {
+    renderKpiCharts(summary);
+  } catch (chartErr) {
+    console.error('Error al renderizar graficas KPI:', chartErr);
   }
 }
 
