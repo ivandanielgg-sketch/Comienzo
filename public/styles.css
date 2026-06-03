@@ -242,6 +242,30 @@ th {
   justify-content: flex-end;
 }
 
+#theme-selector {
+  width: auto;
+  max-width: 9.5rem;
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: 2px;
+  padding: 3px 24px 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.25;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--card) 88%, var(--bg));
+  color: var(--muted);
+  cursor: pointer;
+}
+
+#theme-selector:hover,
+#theme-selector:focus-visible {
+  border-color: var(--border);
+  color: var(--text);
+  outline: none;
+}
+
 button.active {
   background: var(--primary);
   color: #ffffff;
@@ -583,6 +607,11 @@ th.col-number {
     padding: 8px 12px;
   }
 
+  #theme-selector {
+    align-self: flex-end;
+    max-width: 9rem;
+  }
+
   .panel {
     padding: 18px;
   }
@@ -735,6 +764,12 @@ th.col-number {
     padding: 8px 10px;
   }
 
+  #theme-selector {
+    align-self: flex-end;
+    max-width: 8.5rem;
+    font-size: 0.7rem;
+  }
+
   .panel {
     padding: 14px;
     border-radius: 16px;
@@ -799,6 +834,10 @@ th.col-number {
 
   input, select, textarea {
     font-size: 16px;
+  }
+
+  #theme-selector {
+    font-size: 0.8rem;
   }
 
   .ecovis-subtabs {
