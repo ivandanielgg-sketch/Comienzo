@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reporte de falla - REVRAM</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 11pt;
+        color: #000;
+        background: #fff;
+        padding: 20px;
+      }
+      .print-actions {
+        text-align: center;
+        margin-bottom: 20px;
+      }
+      .print-actions button {
+        font-size: 14px;
+        padding: 10px 24px;
+        cursor: pointer;
+        border: 1px solid #333;
+        border-radius: 6px;
+        background: #1d4ed8;
+        color: #fff;
+        font-weight: bold;
+        margin: 0 6px;
+      }
+      .container { max-width: 720px; margin: 0 auto; }
+      .header {
+        text-align: center;
+        border-bottom: 2px solid #000;
+        padding-bottom: 12px;
+        margin-bottom: 16px;
+      }
+      .header h1 { font-size: 16pt; margin-bottom: 4px; }
+      .field { margin-bottom: 10px; }
+      .field strong { display: block; font-size: 9pt; text-transform: uppercase; color: #333; }
+      .field p { margin-top: 2px; white-space: pre-wrap; }
+      .muted { color: #555; font-size: 9pt; }
+      #loading, #error { text-align: center; padding: 40px; }
+      @media print {
+        .print-actions { display: none; }
+        body { padding: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="print-actions">
+      <button type="button" onclick="window.print()">Imprimir</button>
+      <button type="button" onclick="window.close()">Cerrar</button>
+    </div>
+    <div id="loading">Cargando reporte...</div>
+    <div id="error" class="hidden"></div>
+    <div id="report" class="container hidden">
+      <div class="header">
+        <h1>REPORTE DE FALLA</h1>
+        <p id="p-folio" class="muted"></p>
+      </div>
+      <div class="field"><strong>Proyecto</strong><p id="p-project"></p></div>
+      <div class="field"><strong>Cliente</strong><p id="p-client"></p></div>
+      <div class="field"><strong>Causa</strong><p id="p-cause"></p></div>
+      <div class="field"><strong>Descripcion del problema</strong><p id="p-problem"></p></div>
+      <div class="field"><strong>Responsable de la falla</strong><p id="p-failure-responsible"></p></div>
+      <div class="field"><strong>Responsable de solucionarlo</strong><p id="p-solution-responsible"></p></div>
+      <div class="field"><strong>Registrado</strong><p id="p-registered"></p></div>
+      <div class="field"><strong>Archivado</strong><p id="p-archived"></p></div>
+    </div>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const reportId = params.get('id');
+
+      function esc(val) {
+        return String(val ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      async function loadReport() {
+        if (!reportId) {
+          document.getElementById('loading').style.display = 'none';
+          const err = document.getElementById('error');
+          err.style.display = 'block';
+          err.textContent = 'No se especifico un ID de reporte.';
+          return;
+        }
+        try {
+          const res = await fetch('/api/failure-reports/' + reportId);
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.message || 'Reporte no encontrado.');
+          }
+          const data = await res.json();
+          document.getElementById('p-folio').textContent = 'FALLA-' + data.id;
+          const proj = data.project || {};
+          document.getElementById('p-project').textContent =
+            'Proyecto #' + (proj.id || data.project_id) + ' — ' + (proj.quote_number || '');
+          document.getElementById('p-client').textContent = proj.client_name || '';
+          document.getElementById('p-cause').textContent = data.cause_label || data.cause || '';
+          document.getElementById('p-problem').textContent = data.problem_description || '';
+          document.getElementById('p-failure-responsible').textContent =
+            data.cause === 'interna'
+              ? (data.failure_responsible_name || '—')
+              : 'Cliente (causa externa)';
+          document.getElementById('p-solution-responsible').textContent =
+            data.solution_responsible_name || '';
+          document.getElementById('p-registered').textContent =
+            data.registered_at_cdmx || data.registered_at || '';
+          document.getElementById('p-archived').textContent =
+            data.archived_at_cdmx || data.archived_at || 'No archivado';
+
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('report').classList.remove('hidden');
+        } catch (e) {
+          document.getElementById('loading').style.display = 'none';
+          const err = document.getElementById('error');
+          err.style.display = 'block';
+          err.textContent = e.message;
+        }
+      }
+      loadReport();
+    </script>
+  </body>
+</html>

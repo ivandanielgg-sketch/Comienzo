@@ -564,6 +564,26 @@ const ecovisMovementColumns = [
   { key: 'created_by', label: 'Usuario', type: 'text', sortable: true, render: (m) => escapeHtml(m.created_by || '') },
 ];
 
+function paginateMergedList(items, pageState) {
+  const totalRecords = items.length;
+  const limit = pageState.limit || 15;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / limit) || 1);
+  const page = Math.min(Math.max(1, pageState.page), totalPages);
+  const offset = (page - 1) * limit;
+  return {
+    data: items.slice(offset, offset + limit),
+    pagination: {
+      page,
+      limit,
+      totalRecords,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+      offset,
+    },
+  };
+}
+
 function renderPaginationControls(containerId, pagination, onPageChange, onLimitChange) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -3826,6 +3846,63 @@ function openReportPrintView(reportId, reportType) {
   window.open(url, '_blank');
 }
 
+function openFailureReportPrintView(reportId) {
+  window.open('/failure-report-print.html?id=' + reportId, '_blank');
+}
+
+let failureReportViewId = null;
+
+async function showFailureReportViewModal(reportId) {
+  const modal = document.getElementById('failure-report-view-modal');
+  const body = document.getElementById('failure-report-view-body');
+  const title = document.getElementById('failure-report-view-title');
+  if (!modal || !body) return;
+  try {
+    const report = await api('/api/failure-reports/' + reportId);
+    failureReportViewId = report.id;
+    if (title) title.textContent = `Reporte de falla FALLA-${report.id}`;
+    const failureResponsible = report.cause === 'interna'
+      ? (report.failure_responsible_name || '—')
+      : 'Cliente (causa externa)';
+    body.innerHTML = `
+      <p><strong>Proyecto:</strong> #${escapeHtml(report.project?.id || report.project_id)} — ${escapeHtml(report.project?.client_name || '')}</p>
+      <p><strong>Causa:</strong> ${escapeHtml(report.cause_label || report.cause || '')}</p>
+      <p><strong>Descripcion del problema:</strong><br>${escapeHtml(report.problem_description || '')}</p>
+      <p><strong>Responsable de la falla:</strong> ${escapeHtml(failureResponsible)}</p>
+      <p><strong>Responsable de solucionarlo:</strong> ${escapeHtml(report.solution_responsible_name || '')}</p>
+      <p><strong>Registrado:</strong> ${escapeHtml(report.registered_at_cdmx || report.registered_at || '')}</p>
+      <p><strong>Archivado:</strong> ${escapeHtml(report.archived_at_cdmx || report.archived_at || '—')}</p>
+    `;
+    modal.classList.remove('hidden');
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
+(function initFailureReportViewModal() {
+  const modal = document.getElementById('failure-report-view-modal');
+  if (!modal) return;
+  const closeBtn = document.getElementById('failure-report-view-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      modal.classList.add('hidden');
+      failureReportViewId = null;
+    });
+  }
+  const printBtn = document.getElementById('failure-report-view-print');
+  if (printBtn) {
+    printBtn.addEventListener('click', () => {
+      if (failureReportViewId) openFailureReportPrintView(failureReportViewId);
+    });
+  }
+  modal.addEventListener('mousedown', (event) => {
+    if (event.target === modal) {
+      modal.classList.add('hidden');
+      failureReportViewId = null;
+    }
+  });
+})();
+
 let pendingReportProjectId = null;
 
 function showReportTypeSelector(projectId) {
@@ -4308,8 +4385,8 @@ async function loadArchiveProjectReports(projectId) {
   if (!archiveReportListTable) return;
   try {
     const params = new URLSearchParams({
-      page: state.archiveProjReportsPag.page,
-      limit: state.archiveProjReportsPag.limit,
+      page: 1,
+      limit: 500,
       ...buildTableParams('archiveProjectReports'),
     });
     const [result, failures] = await Promise.all([
@@ -4327,12 +4404,13 @@ async function loadArchiveProjectReports(projectId) {
       executed_by_name: fr.solution_responsible_name,
     }));
     const merged = [...(result.data || []), ...failureRows];
+    const { data, pagination } = paginateMergedList(merged, state.archiveProjReportsPag);
     renderDataTable({
       tableBody: archiveReportListTable,
       tableKey: 'archiveProjectReports',
       columns: archiveReportListColumns,
-      data: merged,
-      pagination: result.pagination || defaultPagination,
+      data,
+      pagination,
       paginationContainerId: 'archive-project-reports-pagination',
       emptyMessage: 'No hay reportes archivados para este registro.',
       filteredEmptyMessage: 'No se encontraron reportes archivados con la busqueda actual.',
@@ -4340,10 +4418,15 @@ async function loadArchiveProjectReports(projectId) {
       pageState: state.archiveProjReportsPag,
       renderActions: (r) => {
         if (r._kind === 'failure') {
-          return '<span class="muted">—</span>';
+          return `
+            <div class="row-actions">
+              <button class="secondary" data-action="archive-view-failure" data-id="${r.id}" type="button">Consultar</button>
+              <button class="secondary" data-action="archive-print-failure" data-id="${r.id}" type="button">Imprimir</button>
+            </div>`;
         }
         return `
           <div class="row-actions">
+            <button class="secondary" data-action="archive-view-report" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Consultar</button>
             <button class="secondary" data-action="archive-print" data-id="${r.id}" data-type="${r.report_type || 'boiler_startup'}" type="button">Imprimir</button>
           </div>`;
       },
@@ -4375,6 +4458,21 @@ if (archiveReportListTable) {
     const archivePrintBtn = event.target.closest('[data-action="archive-print"]');
     if (archivePrintBtn) {
       openReportPrintView(archivePrintBtn.dataset.id, archivePrintBtn.dataset.type);
+      return;
+    }
+    const archiveViewReportBtn = event.target.closest('[data-action="archive-view-report"]');
+    if (archiveViewReportBtn) {
+      openReportPrintView(archiveViewReportBtn.dataset.id, archiveViewReportBtn.dataset.type);
+      return;
+    }
+    const archiveViewFailureBtn = event.target.closest('[data-action="archive-view-failure"]');
+    if (archiveViewFailureBtn) {
+      showFailureReportViewModal(archiveViewFailureBtn.dataset.id);
+      return;
+    }
+    const archivePrintFailureBtn = event.target.closest('[data-action="archive-print-failure"]');
+    if (archivePrintFailureBtn) {
+      openFailureReportPrintView(archivePrintFailureBtn.dataset.id);
     }
   });
 }

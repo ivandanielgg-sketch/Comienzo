@@ -1508,6 +1508,59 @@ function requireFailureReportView(req, res, next) {
   }
 }
 
+function assertCanViewFailureReport(req, reportRow) {
+  if (req.session.role === 'admin') {
+    return;
+  }
+  const perms = loadUserPermissions(db, req.session.userId, req.session.role);
+  if (reportRow.archived_at) {
+    if (!hasPermission(perms, 'reportsArchive', 'view')) {
+      const error = new Error('Acceso restringido al reporte de falla archivado.');
+      error.statusCode = 403;
+      throw error;
+    }
+    return;
+  }
+  if (hasPermission(perms, 'reports', 'view') || hasPermission(perms, 'reports', 'edit')) {
+    return;
+  }
+  const project = db.prepare('SELECT closed_at FROM projects WHERE id = ?').get(reportRow.project_id);
+  const module = project?.closed_at ? 'closedProjects' : 'projects';
+  if (hasPermission(perms, module, 'view')) {
+    return;
+  }
+  const error = new Error('Acceso restringido. No tienes permisos para consultar este reporte de falla.');
+  error.statusCode = 403;
+  throw error;
+}
+
+app.get('/api/failure-reports/:id', requireAuth, (req, res, next) => {
+  try {
+    const row = db.prepare(
+      `SELECT fr.*,
+        ef.full_name AS failure_responsible_name,
+        es.full_name AS solution_responsible_name
+      FROM project_failure_reports fr
+      LEFT JOIN employees ef ON ef.id = fr.failure_responsible_employee_id
+      LEFT JOIN employees es ON es.id = fr.solution_responsible_employee_id
+      WHERE fr.id = ?`,
+    ).get(req.params.id);
+    if (!row) {
+      const error = new Error('Reporte de falla no encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    getProjectOrFail(row.project_id);
+    assertCanViewFailureReport(req, row);
+    const project = db.prepare(
+      'SELECT id, quote_number, client_name, project_description FROM projects WHERE id = ?',
+    ).get(row.project_id);
+    res.json({ ...mapFailureReport(row), project });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/projects/:id/failure-reports', requireAuth, requireFailureReportView, (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
@@ -2253,7 +2306,9 @@ app.get('/api/reports/archive/projects/:id/failure-reports', requireAuth, requir
       `SELECT fr.*,
         ef.full_name AS failure_responsible_name,
         es.full_name AS solution_responsible_name
-      ${FAILURE_REPORT_FROM_SQL}
+      FROM project_failure_reports fr
+      LEFT JOIN employees ef ON ef.id = fr.failure_responsible_employee_id
+      LEFT JOIN employees es ON es.id = fr.solution_responsible_employee_id
       WHERE fr.project_id = ? AND fr.archived_at IS NOT NULL
       ORDER BY fr.archived_at DESC, fr.id DESC`,
     ).all(req.params.id);
