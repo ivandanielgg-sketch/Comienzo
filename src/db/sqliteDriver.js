@@ -1035,6 +1035,25 @@ function migrate(database) {
     );
   `);
   seedRolePermissions(database);
+  seedDefaultEmployees(database);
+
+  const { migrateProjectEmployeeAssignments } = require('./projectAssignmentsMigration');
+  migrateProjectEmployeeAssignments(database);
+}
+
+function seedDefaultEmployees(database) {
+  const row = database.prepare('SELECT COUNT(*) as count FROM employees').get();
+  if (row.count > 0) {
+    return;
+  }
+  const timestamp = new Date().toISOString();
+  database.prepare(
+    `INSERT INTO employees (
+      employee_number, full_name, hire_date, department, primary_department, active, created_at, updated_at
+    ) VALUES
+      ('EMP-TEC-001', 'Tecnico General', '2020-01-01', 'Tecnico', 'Tecnico', 1, ?, ?),
+      ('EMP-VEN-001', 'Vendedor General', '2020-01-01', 'Ventas', 'Ventas', 1, ?, ?)`,
+  ).run(timestamp, timestamp, timestamp, timestamp);
 }
 
 function ensureColumn(database, tableName, columnName, definition) {
@@ -1383,4 +1402,5 @@ module.exports = {
   seedServiceTypes,
   seedServiceQuoteSettings,
   seedRolePermissions,
+  seedDefaultEmployees,
 };

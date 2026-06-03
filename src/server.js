@@ -15,6 +15,7 @@ const {
   normalizeSort,
   addSqlFilters,
   buildListResponse,
+  isValidDate,
 } = require('./pagination');
 const {
   buildSearchCondition,
@@ -259,18 +260,86 @@ function badRequest(message) {
   return error;
 }
 
-function normalizeProject(body) {
+function addDaysToIsoDate(isoDate, days) {
+  const base = isoDate && isValidDate(isoDate) ? isoDate : new Date().toISOString().slice(0, 10);
+  const date = new Date(`${base}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function defaultFechaVencimiento(createdAtIso) {
+  const createdDate = createdAtIso ? String(createdAtIso).slice(0, 10) : new Date().toISOString().slice(0, 10);
+  return addDaysToIsoDate(createdDate, 30);
+}
+
+function getActiveEmployeeOrFail(employeeId, label) {
+  const id = Number(employeeId);
+  if (!Number.isFinite(id) || id < 1) {
+    throw badRequest(`Seleccione un ${label} activo.`);
+  }
+  const employee = db.prepare(
+    'SELECT id, full_name, employee_number FROM employees WHERE id = ? AND active = 1',
+  ).get(id);
+  if (!employee) {
+    throw badRequest(`${label} no encontrado o inactivo.`);
+  }
+  return employee;
+}
+
+function resolveProjectStaff(body) {
+  let tecnicoId = body.tecnico_id !== undefined && body.tecnico_id !== '' && body.tecnico_id !== null
+    ? Number(body.tecnico_id)
+    : null;
+  let vendedorId = body.vendedor_id !== undefined && body.vendedor_id !== '' && body.vendedor_id !== null
+    ? Number(body.vendedor_id)
+    : null;
+
+  const nameMatchSql = isPostgres()
+    ? 'SELECT id FROM employees WHERE active = 1 AND lower(full_name) = lower(?) LIMIT 1'
+    : "SELECT id FROM employees WHERE active = 1 AND full_name = ? COLLATE NOCASE LIMIT 1";
+  if (!tecnicoId && body.technician_name) {
+    const match = db.prepare(nameMatchSql).get(String(body.technician_name).trim());
+    if (match) tecnicoId = match.id;
+  }
+  if (!vendedorId && body.seller) {
+    const match = db.prepare(nameMatchSql).get(String(body.seller).trim());
+    if (match) vendedorId = match.id;
+  }
+
+  const tecnico = getActiveEmployeeOrFail(tecnicoId, 'tecnico');
+  const vendedor = getActiveEmployeeOrFail(vendedorId, 'vendedor');
+  return {
+    tecnico_id: tecnico.id,
+    vendedor_id: vendedor.id,
+    technician_name: tecnico.full_name,
+    seller: vendedor.full_name,
+  };
+}
+
+function resolveFechaVencimiento(body, { existingRow = null } = {}) {
+  const raw = optionalText(body, 'fecha_vencimiento');
+  if (raw && isValidDate(raw)) {
+    return raw;
+  }
+  if (existingRow?.fecha_vencimiento && isValidDate(existingRow.fecha_vencimiento)) {
+    return existingRow.fecha_vencimiento;
+  }
+  return defaultFechaVencimiento(existingRow?.created_at);
+}
+
+function normalizeProject(body, { existingRow = null } = {}) {
   const purchaseOrderNotApplicable = booleanValue(body, 'purchase_order_not_applicable');
   const purchaseOrderNumber = purchaseOrderNotApplicable
     ? null
     : requiredText(body, 'purchase_order_number', 'Numero de Orden de Compra');
+  const staff = resolveProjectStaff(body);
 
   return {
     quote_number: requiredText(body, 'quote_number', 'Numero de cotizacion'),
     order_number: requiredText(body, 'order_number', 'Numero de Pedido'),
     purchase_order_number: purchaseOrderNumber,
     purchase_order_not_applicable: purchaseOrderNotApplicable,
-    seller: requiredText(body, 'seller', 'Vendedor'),
+    seller: staff.seller,
     client_name: requiredText(body, 'client_name', 'Nombre del Cliente'),
     project_description: requiredText(body, 'project_description', 'Descripcion del proyecto'),
     expected_margin: numberValue(body, 'expected_margin', 'Margen esperado', {
@@ -287,7 +356,10 @@ function normalizeProject(body) {
       min: 0,
       max: 100,
     }),
-    technician_name: requiredText(body, 'technician_name', 'Tecnico Responsable'),
+    technician_name: staff.technician_name,
+    tecnico_id: staff.tecnico_id,
+    vendedor_id: staff.vendedor_id,
+    fecha_vencimiento: resolveFechaVencimiento(body, { existingRow }),
     promised_delivery_date: requiredText(
       body,
       'promised_delivery_date',
@@ -414,11 +486,25 @@ function mapProject(row, exchangeRates = getExchangeRateMap()) {
         : null,
   }));
 
+  const tecnico = row.tecnico_id
+    ? db.prepare('SELECT id, full_name, employee_number FROM employees WHERE id = ?').get(row.tecnico_id)
+    : null;
+  const vendedor = row.vendedor_id
+    ? db.prepare('SELECT id, full_name, employee_number FROM employees WHERE id = ?').get(row.vendedor_id)
+    : null;
+
   return {
     ...normalizedProject,
     purchase_order_display: row.purchase_order_not_applicable
       ? 'No Aplica'
       : row.purchase_order_number,
+    fecha_vencimiento: row.fecha_vencimiento || null,
+    tecnico_id: row.tecnico_id || null,
+    vendedor_id: row.vendedor_id || null,
+    tecnico_nombre: tecnico?.full_name || row.technician_name,
+    vendedor_nombre: vendedor?.full_name || row.seller,
+    tecnico_employee_number: tecnico?.employee_number || null,
+    vendedor_employee_number: vendedor?.employee_number || null,
     payments,
     costs: costsWithInvoicePercentage,
     ...totals,
@@ -614,6 +700,7 @@ const PROJECT_SORTS = {
   risk: 'p.risk',
   seller: 'p.seller',
   technician_name: 'p.technician_name',
+  fecha_vencimiento: 'p.fecha_vencimiento',
   promised_delivery_date: 'p.promised_delivery_date',
   closed_at: 'p.closed_at',
   total_invoiced_mxn: PROJECT_INVOICED_SQL,
@@ -633,6 +720,7 @@ const PROJECT_FILTERS = {
   risk: { type: 'select', column: 'p.risk', options: VALID_RISKS },
   seller: { type: 'text', column: 'p.seller' },
   technician_name: { type: 'text', column: 'p.technician_name' },
+  fecha_vencimiento: { type: 'date', column: 'p.fecha_vencimiento' },
   promised_delivery_date: { type: 'date', column: 'p.promised_delivery_date' },
   closed_at: { type: 'date', column: 'date(p.closed_at)' },
   total_invoiced_mxn: { type: 'currency', column: PROJECT_INVOICED_SQL },
@@ -654,6 +742,9 @@ function buildProjectListSearchColumns() {
     'p.risk',
     'p.seller',
     'p.technician_name',
+    'p.fecha_vencimiento',
+    '(SELECT full_name FROM employees WHERE id = p.tecnico_id)',
+    '(SELECT full_name FROM employees WHERE id = p.vendedor_id)',
     'CAST(p.promised_delivery_date AS TEXT)',
     'CAST(p.closed_at AS TEXT)',
     `CAST(${PROJECT_CHARGED_SQL} AS TEXT)`,
@@ -1020,6 +1111,16 @@ app.put('/api/exchange-rates', requireAuth, requirePermission('settings', 'edit'
   }
 });
 
+app.get('/api/projects/assignable-employees', requireAuth, requirePermission('projects', 'view'), (req, res) => {
+  const employees = db.prepare(
+    `SELECT id, employee_number, full_name, department, position
+     FROM employees
+     WHERE active = 1
+     ORDER BY full_name ASC`,
+  ).all();
+  res.json({ data: employees });
+});
+
 app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (req, res) => {
   const { page, limit, search } = parsePaginationParams(req.query);
   const exchangeRates = getExchangeRateMap();
@@ -1135,6 +1236,9 @@ app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), 
           total_invoiced_currency,
           progress_percent,
           technician_name,
+          tecnico_id,
+          vendedor_id,
+          fecha_vencimiento,
           promised_delivery_date,
           status,
           risk,
@@ -1156,6 +1260,9 @@ app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), 
           @total_invoiced_currency,
           @progress_percent,
           @technician_name,
+          @tecnico_id,
+          @vendedor_id,
+          @fecha_vencimiento,
           @promised_delivery_date,
           @status,
           @risk,
@@ -1178,7 +1285,7 @@ app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), 
 app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     const before = getProjectOrFail(req.params.id);
-    const project = normalizeProject(req.body);
+    const project = normalizeProject(req.body, { existingRow: before });
     const audit = updatedByFields(req);
     db.prepare(
       `UPDATE projects SET
@@ -1194,6 +1301,9 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
         total_invoiced_currency = @total_invoiced_currency,
         progress_percent = @progress_percent,
         technician_name = @technician_name,
+        tecnico_id = @tecnico_id,
+        vendedor_id = @vendedor_id,
+        fecha_vencimiento = @fecha_vencimiento,
         promised_delivery_date = @promised_delivery_date,
         status = @status,
         risk = @risk,

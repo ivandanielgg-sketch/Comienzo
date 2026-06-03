@@ -11,6 +11,7 @@ const {
   seedServiceTypes,
   seedServiceQuoteSettings,
   seedRolePermissions,
+  seedDefaultEmployees,
 } = require('./sqliteDriver');
 
 let pool;
@@ -45,6 +46,8 @@ function ensurePostgresColumns(database) {
       /* re-run safe */
     }
   }
+  const { migrateProjectEmployeeAssignments } = require('./projectAssignmentsMigration');
+  migrateProjectEmployeeAssignments(database, { postgres: true });
 }
 
 
@@ -75,6 +78,7 @@ function runPostgresSeeds(database) {
   seedServiceTypes(database);
   seedServiceQuoteSettings(database);
   seedRolePermissions(database);
+  seedDefaultEmployees(database);
 }
 
 function resolvePoolSsl(connectionString) {
