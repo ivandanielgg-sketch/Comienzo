@@ -4276,21 +4276,21 @@ function renderAttendanceTable(week, editable) {
       const bg = STATUS_COLORS[val] || '#fff';
       if (editable) {
         const options = ATTENDANCE_STATUS_OPTIONS.map((o) => `<option value="${o.code}" ${o.code === val ? 'selected' : ''}>${o.code}</option>`).join('');
-        return `<td style="background:${bg};padding:2px;"><select data-emp-id="${emp.id}" data-field="${field}" style="font-size:0.8rem;padding:2px;width:50px;background:transparent;border:1px solid #ccc;" onchange="onAttendanceCellChange(this)">${options}</select></td>`;
+        return `<td class="attendance-day-cell" style="background:${bg};"><select class="attendance-cell-select" data-emp-id="${emp.id}" data-field="${field}" onchange="onAttendanceCellChange(this)">${options}</select></td>`;
       }
       return `<td style="background:${bg};text-align:center;font-weight:bold;font-size:0.85rem;">${escapeHtml(val)}</td>`;
     }).join('');
 
     const projInput = editable
-      ? `<td><input type="text" data-emp-id="${emp.id}" data-field="project_location_text" value="${escapeHtml(emp.project_location_text || '')}" style="width:120px;font-size:0.8rem;" /></td>`
+      ? `<td><input type="text" class="attendance-cell-input" data-emp-id="${emp.id}" data-field="project_location_text" value="${escapeHtml(emp.project_location_text || '')}" /></td>`
       : `<td>${escapeHtml(emp.project_location_text || '')}</td>`;
 
     const extraInput = editable
-      ? `<td><input type="text" data-emp-id="${emp.id}" data-field="extra_payment_amount" value="${emp.extra_payment_amount || ''}" style="width:80px;font-size:0.8rem;" inputmode="decimal" /></td>`
+      ? `<td><input type="text" class="attendance-cell-input attendance-cell-input--narrow" data-emp-id="${emp.id}" data-field="extra_payment_amount" value="${emp.extra_payment_amount || ''}" inputmode="decimal" /></td>`
       : `<td>${emp.extra_payment_amount ? formatMoney(emp.extra_payment_amount) : ''}</td>`;
 
     const notesInput = editable
-      ? `<td><input type="text" data-emp-id="${emp.id}" data-field="notes" value="${escapeHtml(emp.notes || '')}" style="width:100px;font-size:0.8rem;" /></td>`
+      ? `<td><input type="text" class="attendance-cell-input" data-emp-id="${emp.id}" data-field="notes" value="${escapeHtml(emp.notes || '')}" /></td>`
       : `<td>${escapeHtml(emp.notes || '')}</td>`;
 
     return `<tr>
@@ -5202,6 +5202,20 @@ if (document.getElementById('fin-config-form')) {
 // ===================== END FINANCIAL STATEMENTS MODULE =====================
 
 // ===================== END NEW MODULES =====================
+
+// ===================== MOBILE FORM UX =====================
+function initMobileFormScrollIntoView() {
+  document.addEventListener('focusin', (event) => {
+    const el = event.target;
+    if (!el?.matches) return;
+    if (!el.matches('input, select, textarea, button')) return;
+    if (el.type === 'hidden' || el.disabled || el.closest('[aria-hidden="true"]')) return;
+    window.requestAnimationFrame(() => {
+      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    });
+  }, { passive: true });
+}
+initMobileFormScrollIntoView();
 
 api('/api/session')
   .then((session) => {
