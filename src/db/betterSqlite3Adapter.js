@@ -117,14 +117,16 @@ class BetterSqlite3CompatibleDatabase {
    * consultas van por la conexion transaccional.
    */
   transaction(fn) {
-    return () => {
+    return (...args) => {
       const client = waitPromise(this.pool.connect());
       const prev = this._txClient;
       this._txClient = client;
+      let result;
       try {
         querySync(client, 'BEGIN');
-        fn();
+        result = fn(...args);
         querySync(client, 'COMMIT');
+        return result;
       } catch (error) {
         try {
           querySync(client, 'ROLLBACK');

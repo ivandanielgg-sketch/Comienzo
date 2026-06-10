@@ -2855,6 +2855,8 @@ function resetEcovisProjectForm() {
   resetEcovisCurrencyField(ecovisProjectForm.elements.total_amount, 0);
   setEcovisProjectAmountLock(false);
   setMessage(ecovisProjectMessage, '');
+  const submitBtn = ecovisProjectForm.querySelector('button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = false;
 }
 
 function resetEcovisAllocationForm() {
@@ -3255,9 +3257,14 @@ document.getElementById('ecovis-new-project-btn').addEventListener('click', () =
 ecovisProjectForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   setMessage(ecovisProjectMessage, '');
+  const submitBtn = event.submitter || ecovisProjectForm.querySelector('button[type="submit"]');
   const payload = simpleFormPayload(ecovisProjectForm);
+  const id = ecovisProjectForm.elements.id.value;
+  if (!id) {
+    delete payload.id;
+  }
+  if (submitBtn) submitBtn.disabled = true;
   try {
-    const id = ecovisProjectForm.elements.id.value;
     await api(id ? '/api/ecovis/projects/' + id : '/api/ecovis/projects', {
       method: id ? 'PUT' : 'POST',
       body: JSON.stringify(payload),
@@ -3268,6 +3275,7 @@ ecovisProjectForm.addEventListener('submit', async (event) => {
     setTimeout(() => { closeEcovisModal(ecovisProjectModal, resetEcovisProjectForm); }, 600);
   } catch (error) {
     setMessage(ecovisProjectMessage, error.message);
+    if (submitBtn) submitBtn.disabled = false;
   }
 });
 
