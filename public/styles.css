@@ -1461,7 +1461,27 @@ th.col-number {
 }
 
 .kpi-ventas-cards {
-  margin-bottom: 12px;
+  margin-bottom: 0;
+}
+
+.kpi-ventas-card-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.kpi-ventas-group-title {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted, #64748b);
+}
+
+.kpi-ventas-charts-grid {
+  margin: 12px 0 16px;
 }
 
 .kpi-no-data {

@@ -544,6 +544,7 @@ describe('KPIs frontend markup', () => {
     assert.match(js, /renderDepartmentKpis/);
     assert.match(js, /Cotizaciones enviadas/);
     assert.match(js, /renderVentasSection/);
+    assert.match(js, /renderVentasCharts/);
     assert.match(js, /renderVentasSellersTable/);
   });
 });
@@ -693,7 +694,8 @@ describe('KPIs Fase 2', () => {
     assert.match(html, /id="kpi-btn-config"/);
     assert.match(html, /kpi-ventas-sellers-table/);
     assert.match(html, /KPIs por vendedor/);
-    assert.match(html, /kpi-btn-export-pdf/);
+    assert.match(html, /kpi-chart-ventas-funnel/);
+    assert.match(html, /Embudo comercial del periodo/);
     assert.match(html, /kpi-btn-export-pdf/);
   });
 
