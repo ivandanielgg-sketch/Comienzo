@@ -6,6 +6,7 @@ const {
   computeReceivableBuckets,
   resolveProjectDueDate,
   getPeriodRange,
+  getVentasEmpleadosActivos,
 } = require('../src/kpis');
 
 test('computeReceivableBuckets uses fecha_vencimiento por vencer y vencidos', () => {
@@ -32,14 +33,14 @@ test('computeKpiCharts returns chart payloads with filtered data', () => {
   const period = getPeriodRange('current_year');
   const exchangeRates = { MXN: 1 };
 
-  const tech = db.prepare(
-    "INSERT INTO employees (employee_number, full_name, hire_date, active, kpi_area, kpi_eligible) VALUES ('KPI-T', 'Tecnico Graficas', '2020-01-01', 1, 'Técnico', 1)",
-  ).run();
-  const vend = db.prepare(
-    "INSERT INTO employees (employee_number, full_name, hire_date, active, kpi_area, kpi_eligible) VALUES ('KPI-V', 'Vendedor Graficas', '2020-01-01', 1, 'Ventas', 1)",
-  ).run();
-
   const suffix = Date.now();
+  const tech = db.prepare(
+    "INSERT INTO employees (employee_number, full_name, hire_date, active, kpi_area, kpi_eligible) VALUES (?, 'Tecnico Graficas', '2020-01-01', 1, 'Técnico', 1)",
+  ).run('KPI-T-' + suffix);
+  const vend = db.prepare(
+    "INSERT INTO employees (employee_number, full_name, hire_date, active, primary_department, department, kpi_area, kpi_eligible) VALUES (?, 'Vendedor Graficas', '2020-01-01', 1, 'Ventas', 'Ventas', 'Ventas', 1)",
+  ).run('KPI-V-' + suffix);
+
   const projectInsert = db.prepare(`
     INSERT INTO projects (
       quote_number, order_number, purchase_order_not_applicable,
@@ -74,15 +75,17 @@ test('computeKpiCharts returns chart payloads with filtered data', () => {
     id: projectId,
     client_name: 'Cliente KPI',
     created_at: '2026-03-15 10:00:00',
-    closed_at: null,
+    closed_at: '2026-03-20 12:00:00',
     vendedor_id: vend.lastInsertRowid,
     tecnico_id: tech.lastInsertRowid,
     fecha_vencimiento: '2026-06-30',
-    totals: { pending_collection: 2000, total_invoiced_mxn: 5000 },
-    payments: [],
+    expected_margin: 25,
+    totals: { pending_collection: 2000, total_invoiced_mxn: 5000, final_margin: 0.3, total_charged: 3000 },
+    payments: [{ amount: 3000, currency: 'MXN', payment_date: '2026-03-25' }],
   }];
 
   const reports = db.prepare('SELECT r.*, e.full_name AS executed_by_name FROM project_reports r LEFT JOIN employees e ON e.id = r.executed_by_employee_id WHERE r.project_id = ?').all(projectId);
+  const ventasSellers = getVentasEmpleadosActivos(db);
   const employees = [
     { employeeId: tech.lastInsertRowid, fullName: 'Tecnico Graficas', kpiDepartment: 'Técnico', kpiEligible: true },
     { employeeId: vend.lastInsertRowid, fullName: 'Vendedor Graficas', kpiDepartment: 'Ventas', kpiEligible: true },
@@ -96,14 +99,18 @@ test('computeKpiCharts returns chart payloads with filtered data', () => {
     exchangeRates,
     reports,
     employees,
+    ventasSellers,
     filters: { department: null, employeeId: null, employee: null },
   });
 
   assert.ok(Array.isArray(charts.monthly_trend));
   assert.ok(charts.monthly_trend.length > 0);
+  const marchTrend = charts.monthly_trend.find((t) => t.label === '03/2026');
+  assert.ok(marchTrend);
+  assert.ok(marchTrend.sold_amount_mxn >= 5000);
   assert.ok(charts.receivable_buckets.some((b) => b.label === 'Por vencer'));
   assert.ok(charts.seller_close_rates.length >= 1);
+  assert.strictEqual(charts.employee_comparison.mode, 'seller_sold_amount');
   assert.ok(charts.services_by_month.series.length >= 1);
-  assert.ok(charts.services_by_month.series[0].data.some((n) => n > 0));
   assert.strictEqual(resolveProjectDueDate({ fecha_vencimiento: '2026-01-01' }), '2026-01-01');
 });

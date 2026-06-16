@@ -2071,7 +2071,31 @@
               <div id="kpi-loading" class="muted hidden">Cargando indicadores...</div>
               <div id="kpi-error" class="hidden" style="color:var(--danger);padding:8px 0;"></div>
               <div id="kpi-sections">
-                <div class="kpi-section panel" id="kpi-section-ventas"><h3>Ventas</h3><div id="kpi-ventas-content" class="kpi-metrics"></div></div>
+                <div class="kpi-section panel" id="kpi-section-ventas"><h3>Ventas</h3>
+                  <div id="kpi-ventas-cards" class="kpi-cards kpi-ventas-cards"></div>
+                  <div id="kpi-ventas-pending" class="kpi-pending-capture hidden"></div>
+                  <div id="kpi-ventas-content" class="kpi-metrics hidden"></div>
+                  <div id="kpi-ventas-sellers-wrap" class="table-wrapper" style="margin-top:12px;">
+                    <h4 style="margin:0 0 8px;">KPIs por vendedor</h4>
+                    <table class="data-table kpi-ventas-sellers-table">
+                      <thead>
+                        <tr>
+                          <th>Vendedor</th>
+                          <th>Cotizaciones (cant.)</th>
+                          <th>Monto cotizado</th>
+                          <th>Proyectos cerrados</th>
+                          <th>Monto vendido</th>
+                          <th>Tasa cierre (%)</th>
+                          <th>Margen real (%)</th>
+                          <th>Cobrado</th>
+                          <th>Semáforo</th>
+                        </tr>
+                      </thead>
+                      <tbody id="kpi-ventas-sellers-table"></tbody>
+                    </table>
+                  </div>
+                  <div id="kpi-ventas-alerts-wrap" class="kpi-ventas-alerts" style="margin-top:16px;"></div>
+                </div>
                 <div class="kpi-section panel" id="kpi-section-proyectos"><h3>Proyectos</h3><div id="kpi-proyectos-content" class="kpi-metrics"></div></div>
                 <div class="kpi-section panel" id="kpi-section-reportes"><h3>Reportes Tecnicos</h3><div id="kpi-reportes-content" class="kpi-metrics"></div></div>
                 <div class="kpi-section panel" id="kpi-section-facturacion"><h3>Facturacion</h3><div id="kpi-facturacion-content" class="kpi-metrics"></div></div>

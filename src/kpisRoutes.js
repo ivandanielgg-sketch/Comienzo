@@ -16,6 +16,7 @@ const {
   settingsToApi,
   getFormulaDefinitions,
   normalizeKpiArea,
+  getVentasEmpleadosActivos,
 } = require('./kpis');
 
 const KPI_REAUTH_MS = 15 * 60 * 1000;
@@ -178,22 +179,18 @@ function round2(n) {
 }
 
 function validateSalesEmployee(db, employeeId) {
-  const emp = db.prepare(`
-    SELECT id, full_name, kpi_area, primary_department, kpi_eligible, active
-    FROM employees WHERE id = ?
-  `).get(employeeId);
-  if (!emp || !emp.active) {
-    throw Object.assign(new Error('Vendedora no encontrada o inactiva.'), { statusCode: 400 });
+  const match = getVentasEmpleadosActivos(db).find((e) => e.employeeId === Number(employeeId));
+  if (!match) {
+    throw Object.assign(new Error('Vendedora no encontrada, inactiva o no habilitada para KPI Ventas.'), { statusCode: 400 });
   }
-  if (!isDbTruthy(emp.kpi_eligible)) {
-    throw Object.assign(new Error('La vendedora no esta habilitada para KPIs.'), { statusCode: 400 });
-  }
-  const area = emp.kpi_area || emp.primary_department || '';
-  const normalized = String(area).trim();
-  if (normalized !== 'Ventas') {
-    throw Object.assign(new Error('La vendedora debe tener area KPI Ventas.'), { statusCode: 400 });
-  }
-  return emp;
+  return {
+    id: match.employeeId,
+    full_name: match.fullName,
+    kpi_area: 'Ventas',
+    primary_department: match.primaryDepartment,
+    kpi_eligible: 1,
+    active: 1,
+  };
 }
 
 
@@ -552,18 +549,14 @@ function registerKpiRoutes(app, db, { requireAuth }) {
   });
 
   app.get('/api/kpis/sales-employees', requireAuth, requireKpiAdmin, (req, res) => {
-    const rows = db.prepare(`
-      SELECT id, full_name, position, kpi_area, primary_department, kpi_eligible, user_id
-      FROM employees
-      WHERE active = 1 AND kpi_eligible != 0 AND kpi_area = 'Ventas'
-      ORDER BY full_name
-    `).all();
+    const employees = getVentasEmpleadosActivos(db);
     res.json({
-      employees: rows.map((r) => ({
-        employee_id: r.id,
-        full_name: r.full_name,
+      employees: employees.map((r) => ({
+        employee_id: r.employeeId,
+        full_name: r.fullName,
         position: r.position,
-        kpi_area: r.kpi_area || r.primary_department || 'Ventas',
+        kpi_area: 'Ventas',
+        primary_department: r.primaryDepartment,
       })),
     });
   });

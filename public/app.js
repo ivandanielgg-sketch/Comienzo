@@ -6686,26 +6686,17 @@ function renderKpiCharts(summary) {
   const trend = charts.monthly_trend || [];
   const trendCanvas = ensureKpiChartCanvas('kpi-chart-trend');
   if (trendCanvas) {
-    if (!trend.length) {
-      showKpiChartEmpty('kpi-chart-trend', 'Sin datos de tendencia para el periodo.');
+    const hasTrendData = trend.some(function(t) {
+      return (t.quoted_amount_mxn || 0) > 0 || (t.sold_amount_mxn || 0) > 0 || (t.collected_amount_mxn || 0) > 0;
+    });
+    if (!trend.length || !hasTrendData) {
+      showKpiChartEmpty('kpi-chart-trend', 'Sin datos en el periodo.');
     } else {
-      const successData = trend.map(function(t) { return t.quote_success_percent; });
-      const hasSuccess = successData.some(function(v) { return v != null && Number.isFinite(v); });
       const datasets = [
         { label: 'Monto cotizado', data: trend.map(function(t) { return t.quoted_amount_mxn || 0; }), borderColor: '#2563eb', tension: 0.2, yAxisID: 'y' },
         { label: 'Monto vendido', data: trend.map(function(t) { return t.sold_amount_mxn || 0; }), borderColor: '#22c55e', tension: 0.2, yAxisID: 'y' },
         { label: 'Monto cobrado', data: trend.map(function(t) { return t.collected_amount_mxn || 0; }), borderColor: '#eab308', tension: 0.2, yAxisID: 'y' },
       ];
-      if (hasSuccess) {
-        datasets.push({
-          label: 'Exito cotizaciones (%)',
-          data: successData.map(function(v) { return v == null ? null : Number(v); }),
-          borderColor: '#8b5cf6',
-          backgroundColor: 'rgba(139, 92, 246, 0.12)',
-          tension: 0.2,
-          yAxisID: 'y1',
-        });
-      }
       kpiChartInstances.trend = new Chart(trendCanvas, {
         type: 'line',
         data: { labels: trend.map(function(t) { return t.label; }), datasets },
@@ -6714,9 +6705,6 @@ function renderKpiCharts(summary) {
             tooltip: {
               callbacks: {
                 label: function(ctx) {
-                  if (ctx.dataset.yAxisID === 'y1') {
-                    return ctx.dataset.label + ': ' + (ctx.parsed.y == null ? '—' : ctx.parsed.y + '%');
-                  }
                   return ctx.dataset.label + ': ' + formatCurrencyMXN(ctx.parsed.y);
                 },
               },
@@ -6724,25 +6712,19 @@ function renderKpiCharts(summary) {
           },
           scales: {
             y: { position: 'left', ticks: { callback: function(v) { return formatCurrencyMXN(v); } } },
-            y1: {
-              position: 'right',
-              grid: { drawOnChartArea: false },
-              min: 0,
-              max: 100,
-              ticks: { callback: function(v) { return v + '%'; } },
-            },
           },
         },
       });
     }
   }
 
-  const comparison = charts.employee_comparison || { mode: 'seller_success', items: [] };
+  const comparison = charts.employee_comparison || { mode: 'seller_sold_amount', items: [] };
   const empCanvas = ensureKpiChartCanvas('kpi-chart-employees');
   if (empCanvas) {
     const items = comparison.items || [];
-    if (!items.length) {
-      showKpiChartEmpty('kpi-chart-employees', 'Sin datos de empleados para los filtros seleccionados.');
+    const hasSoldData = items.some(function(i) { return (i.value || 0) > 0; });
+    if (!items.length || (comparison.mode === 'seller_sold_amount' && !hasSoldData)) {
+      showKpiChartEmpty('kpi-chart-employees', 'Sin datos en el periodo.');
     } else if (comparison.mode === 'technician_services') {
       kpiChartInstances.employees = new Chart(empCanvas, {
         type: 'bar',
@@ -6756,29 +6738,53 @@ function renderKpiCharts(summary) {
         },
         options: { indexAxis: 'y' },
       });
-    } else {
+    } else if (comparison.mode === 'seller_sold_amount') {
+      const closeRates = items.map(function(i) { return i.close_rate == null ? null : Number(i.close_rate); });
+      const hasCloseRate = closeRates.some(function(v) { return v != null && Number.isFinite(v); });
+      const datasets = [{
+        label: 'Monto vendido (MXN)',
+        data: items.map(function(i) { return i.value || 0; }),
+        backgroundColor: '#2563eb',
+        xAxisID: 'x',
+      }];
+      if (hasCloseRate) {
+        datasets.push({
+          label: 'Tasa de cierre (%)',
+          data: closeRates.map(function(v) { return v == null ? null : v; }),
+          type: 'line',
+          borderColor: '#8b5cf6',
+          backgroundColor: 'rgba(139, 92, 246, 0.15)',
+          tension: 0.2,
+          xAxisID: 'x1',
+        });
+      }
       kpiChartInstances.employees = new Chart(empCanvas, {
         type: 'bar',
         data: {
           labels: items.map(function(i) { return i.label; }),
-          datasets: [{
-            label: 'Exito cotizaciones (%)',
-            data: items.map(function(i) { return i.value == null ? 0 : i.value; }),
-            backgroundColor: '#2563eb',
-          }],
+          datasets: datasets,
         },
         options: {
           indexAxis: 'y',
           scales: {
-            x: { min: 0, max: 100, ticks: { callback: function(v) { return v + '%'; } } },
+            x: { ticks: { callback: function(v) { return formatCurrencyMXN(v); } } },
+            x1: hasCloseRate ? {
+              position: 'top',
+              grid: { drawOnChartArea: false },
+              min: 0,
+              max: 100,
+              ticks: { callback: function(v) { return v + '%'; } },
+            } : undefined,
           },
           plugins: {
             tooltip: {
               callbacks: {
                 label: function(ctx) {
-                  const item = items[ctx.dataIndex];
-                  const pct = item.value == null ? '—' : item.value + '%';
-                  return 'Exito: ' + pct + ' (' + (item.projects_won || 0) + ' / ' + (item.quotes_sent || 0) + ')';
+                  if (ctx.dataset.xAxisID === 'x1' || ctx.dataset.label.indexOf('Tasa') >= 0) {
+                    const val = ctx.parsed.x;
+                    return ctx.dataset.label + ': ' + (val == null ? '—' : val + '%');
+                  }
+                  return ctx.dataset.label + ': ' + formatCurrencyMXN(ctx.parsed.x);
                 },
               },
             },
@@ -7125,14 +7131,16 @@ function exportKpiExcel() {
 let kpiFiltersLoaded = false;
 
 const KPI_FIELD_LABELS = {
-  leads_by_channel: 'Leads por canal',
   quotes_sent: 'Cotizaciones enviadas',
   quoted_amount_mxn: 'Monto cotizado (MXN)',
+  projects_closed: 'Proyectos cerrados',
   sold_amount_mxn: 'Monto vendido (MXN)',
-  close_rate: 'Tasa de cierre (%)',
-  profitable_close_rate: 'Cierre rentable (%)',
-  quotes_without_follow_up: 'Cotizaciones sin seguimiento',
-  avg_estimated_margin: 'Margen estimado promedio (%)',
+  close_rate_count: 'Tasa de cierre por cantidad (%)',
+  close_rate_amount: 'Tasa de cierre por monto (%)',
+  avg_real_margin: 'Margen real promedio (%)',
+  avg_desired_margin: 'Margen deseado promedio (%)',
+  margin_gap_points: 'Brecha margen (pts)',
+  collected_amount_mxn: 'Monto cobrado (MXN)',
   active_projects: 'Proyectos activos',
   gross_margin_real: 'Margen bruto real (%)',
   red_margin_projects: 'Proyectos con margen rojo',
@@ -7183,13 +7191,132 @@ function renderDepartmentKpis(departments) {
   }
   return departments.map(function(d) {
     const metrics = Object.entries(d.kpis || {}).map(function(entry) {
+      const metric = entry[1];
+      if (d.department === 'Ventas' && metric && metric.has_data === false) return '';
       const label = getKpiFieldLabel(entry[0]);
       const display = formatKpiDisplayValue(entry[0], entry[1]);
-      const unavailable = entry[1] && entry[1].available === false;
-      return renderKpiMetric(label, unavailable ? entry[1] : { display: display, available: true });
+      const unavailable = metric && metric.available === false;
+      return renderKpiMetric(label, unavailable ? metric : { display: display, available: true });
     }).join('');
+    if (d.department === 'Ventas' && !metrics.trim()) {
+      return '<div class="kpi-dept-block"><h4>' + escapeHtml(d.department) + '</h4><p class="muted">Sin datos de ventas en el periodo seleccionado.</p></div>';
+    }
     return '<div class="kpi-dept-block"><h4>' + escapeHtml(d.department) + '</h4><div class="kpi-dept-metrics">' + metrics + '</div></div>';
   }).join('');
+}
+
+function formatVentasTableCell(value, type) {
+  if (value === null || value === undefined) {
+    return '<span class="kpi-no-data">—</span>';
+  }
+  if (type === 'currency') return escapeHtml(formatCurrencyMXN(value));
+  if (type === 'percent') return escapeHtml(Number.isFinite(Number(value)) ? Number(value) + '%' : '—');
+  return escapeHtml(String(value));
+}
+
+function renderVentasSellersTable(sellers) {
+  const tbody = document.getElementById('kpi-ventas-sellers-table');
+  if (!tbody) return;
+  if (!sellers || !sellers.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="muted">Sin vendedores activos de Ventas.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sellers.map(function(row) {
+    const closeRate = row.close_rate_count != null ? row.close_rate_count : null;
+    const margin = row.avg_real_margin != null ? row.avg_real_margin : null;
+    const sem = row.traffic_light && row.traffic_light !== 'gray'
+      ? renderTrafficLight(row.traffic_light)
+      : '<span class="kpi-no-data">—</span>';
+    return '<tr>'
+      + '<td>' + escapeHtml(row.full_name) + '</td>'
+      + '<td>' + formatVentasTableCell(row.has_quote_data ? row.quotes_sent : null) + '</td>'
+      + '<td>' + formatVentasTableCell(row.has_quote_data ? row.quoted_amount_mxn : null, 'currency') + '</td>'
+      + '<td>' + formatVentasTableCell(row.projects_closed > 0 ? row.projects_closed : (row.has_sold_data ? 0 : null)) + '</td>'
+      + '<td>' + formatVentasTableCell(row.has_sold_data || row.projects_closed > 0 ? row.sold_amount_mxn : null, 'currency') + '</td>'
+      + '<td>' + formatVentasTableCell(closeRate, 'percent') + '</td>'
+      + '<td>' + formatVentasTableCell(margin, 'percent') + '</td>'
+      + '<td>' + formatVentasTableCell(row.collected_amount_mxn, 'currency') + '</td>'
+      + '<td class="kpi-semaphore-cell">' + sem + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+function renderVentasAlertsGrouped(groups) {
+  const wrap = document.getElementById('kpi-ventas-alerts-wrap');
+  if (!wrap) return;
+  if (!groups || !groups.length) {
+    wrap.innerHTML = '';
+    return;
+  }
+  const initialLimit = 5;
+  let html = '<h4 style="margin:0 0 8px;">Cotizaciones sin seguimiento</h4>';
+  html += '<div class="kpi-ventas-alert-groups">';
+  groups.forEach(function(g, idx) {
+    const hiddenClass = idx >= initialLimit ? ' hidden kpi-alert-group-collapsed' : '';
+    html += '<details class="kpi-ventas-alert-group' + hiddenClass + '"' + (idx < initialLimit ? ' open' : '') + '>';
+    html += '<summary><strong>' + escapeHtml(g.seller_name) + '</strong> — ' + g.count + ' cotización' + (g.count === 1 ? '' : 'es') + ' sin seguimiento</summary>';
+    html += '<ul class="kpi-ventas-alert-list">';
+    g.alerts.forEach(function(a) {
+      html += '<li>' + escapeHtml(a.quote_number || ('Proyecto #' + a.project_id))
+        + (a.client_name ? ' · ' + escapeHtml(a.client_name) : '')
+        + (a.date ? ' · ' + escapeHtml(a.date) : '') + '</li>';
+    });
+    html += '</ul></details>';
+  });
+  html += '</div>';
+  if (groups.length > initialLimit) {
+    html += '<button type="button" class="secondary kpi-ventas-alerts-toggle" id="kpi-ventas-alerts-toggle">Ver todas (' + groups.length + ')</button>';
+  }
+  wrap.innerHTML = html;
+  const toggleBtn = document.getElementById('kpi-ventas-alerts-toggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', function() {
+      wrap.querySelectorAll('.kpi-alert-group-collapsed').forEach(function(el) {
+        el.classList.remove('hidden', 'kpi-alert-group-collapsed');
+      });
+      toggleBtn.remove();
+    });
+  }
+}
+
+function renderVentasSection(ventas) {
+  if (!ventas) return;
+  const cardsEl = document.getElementById('kpi-ventas-cards');
+  const cards = [
+    { label: 'Cotizaciones enviadas (cant.)', metric: ventas.quotes_sent },
+    { label: 'Monto cotizado (MXN)', metric: ventas.quoted_amount_mxn },
+    { label: 'Proyectos cerrados (cant.)', metric: ventas.projects_closed },
+    { label: 'Monto vendido (MXN)', metric: ventas.sold_amount_mxn },
+    { label: 'Tasa de cierre por cantidad (%)', metric: ventas.close_rate_count },
+    { label: 'Tasa de cierre por monto (%)', metric: ventas.close_rate_amount },
+    { label: 'Margen real promedio (%)', metric: ventas.avg_real_margin },
+    { label: 'Margen deseado promedio (%)', metric: ventas.avg_desired_margin },
+    { label: 'Brecha margen (pts)', metric: ventas.margin_gap_points },
+    { label: 'Monto cobrado (MXN)', metric: ventas.collected_amount_mxn },
+  ].filter(function(c) { return c.metric && c.metric.has_data; });
+
+  if (cardsEl) {
+    cardsEl.innerHTML = cards.length
+      ? cards.map(function(c) {
+        return '<div class="kpi-card"><span class="kpi-card-label">' + escapeHtml(c.label) + '</span><strong>' + escapeHtml(c.metric.display) + '</strong></div>';
+      }).join('')
+      : '<p class="muted kpi-chart-empty">Sin datos de ventas en el periodo seleccionado.</p>';
+  }
+
+  const pendingEl = document.getElementById('kpi-ventas-pending');
+  if (pendingEl) {
+    if (ventas.pending_capture && ventas.pending_capture.months && ventas.pending_capture.months.length) {
+      pendingEl.classList.remove('hidden');
+      pendingEl.innerHTML = '<p class="kpi-pending-capture-title"><strong>Pendiente de captura</strong></p>'
+        + '<p class="muted">' + escapeHtml(ventas.pending_capture.message) + '</p>';
+    } else {
+      pendingEl.classList.add('hidden');
+      pendingEl.innerHTML = '';
+    }
+  }
+
+  renderVentasSellersTable(ventas.sellers_table || []);
+  renderVentasAlertsGrouped(ventas.sales_alerts_by_seller || []);
 }
 
 function renderEmployeeKpiSummary(kpis) {
@@ -7270,7 +7397,10 @@ async function loadKpiFilters() {
 function renderKpiDashboard(summary, alerts, employees) {
   const cardsEl = document.getElementById('kpi-summary-cards');
   if (cardsEl && summary.summary_cards) {
-    cardsEl.innerHTML = summary.summary_cards.map(function(c) {
+    const visibleCards = summary.summary_cards.filter(function(c) {
+      return c.section !== 'ventas' || (c.value && c.value !== '—' && c.value !== 'Dato no capturado' && c.value !== 'Dato no disponible');
+    });
+    cardsEl.innerHTML = visibleCards.map(function(c) {
       let val = c.value;
       if (/MXN|cotizado|vendido|cobrado|facturado/i.test(c.label) && typeof val === 'number') {
         val = formatCurrencyMXN(val);
@@ -7283,16 +7413,7 @@ function renderKpiDashboard(summary, alerts, employees) {
     periodLabel.textContent = 'Periodo: ' + (summary.period.label || '') + ' (Hora CDMX)';
   }
 
-  renderKpiSectionMetrics('kpi-ventas-content', [
-    { label: 'Leads por canal', value: summary.ventas.leads_by_channel },
-    { label: 'Cotizaciones enviadas', value: summary.ventas.quotes_sent },
-    { label: 'Monto cotizado (MXN)', value: summary.ventas.quoted_amount_mxn },
-    { label: 'Monto vendido (MXN)', value: summary.ventas.sold_amount_mxn },
-    { label: 'Tasa de cierre (%)', value: summary.ventas.close_rate },
-    { label: 'Cierre rentable (%)', value: summary.ventas.profitable_close_rate },
-    { label: 'Cotiz. sin seguimiento', value: summary.ventas.quotes_without_follow_up },
-    { label: 'Margen estimado prom. (%)', value: summary.ventas.avg_estimated_margin },
-  ]);
+  renderVentasSection(summary.ventas);
 
   renderKpiSectionMetrics('kpi-proyectos-content', [
     { label: 'Proyectos activos', value: summary.proyectos.active_projects },
