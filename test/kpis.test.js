@@ -18,7 +18,9 @@ const {
   isReportComplete,
   computeSummary,
   KPI_DEPARTMENTS,
-  UNAVAILABLE,
+  getVentasEmpleadosActivos,
+  getVentasSellerTrafficLight,
+  VENTAS_SEMAPHORE_MARGIN_GAP_YELLOW,
 } = require('../src/kpis');
 
 describe('KPIs unit tests', () => {
@@ -153,6 +155,35 @@ describe('KPIs unit tests', () => {
     }));
   });
 
+  it('getVentasSellerTrafficLight uses margin gap thresholds', () => {
+    const closedWithSale = [{ totals: { final_margin: 0.35, total_invoiced_mxn: 1000 }, expected_margin: 30 }];
+    const compliance = closedWithSale;
+    assert.strictEqual(getVentasSellerTrafficLight(closedWithSale, compliance), 'green');
+    const yellowCase = [{ totals: { final_margin: 0.28, total_invoiced_mxn: 1000 }, expected_margin: 30 }];
+    assert.strictEqual(getVentasSellerTrafficLight(yellowCase, yellowCase), 'yellow');
+    const redCase = [{ totals: { final_margin: 0.20, total_invoiced_mxn: 1000 }, expected_margin: 30 }];
+    assert.strictEqual(getVentasSellerTrafficLight(redCase, redCase), 'red');
+    assert.strictEqual(getVentasSellerTrafficLight([], []), 'gray');
+  });
+
+  it('getVentasEmpleadosActivos filters active Ventas with kpi_eligible', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE employees (
+        id INTEGER PRIMARY KEY, employee_number TEXT, full_name TEXT, hire_date TEXT,
+        department TEXT, primary_department TEXT, position TEXT, active INTEGER, kpi_eligible INTEGER DEFAULT 1
+      );
+      INSERT INTO employees VALUES (1,'V1','Vendedor OK','2020-01-01','Ventas','Ventas','V',1,1);
+      INSERT INTO employees VALUES (2,'V2','Vendedor Inactivo','2020-01-01','Ventas','Ventas','V',0,1);
+      INSERT INTO employees VALUES (3,'V3','Sin KPI','2020-01-01','Ventas','Ventas','V',1,0);
+      INSERT INTO employees VALUES (4,'T1','Tecnico','2020-01-01','Técnico','Técnico','T',1,1);
+    `);
+    const list = getVentasEmpleadosActivos(db);
+    assert.strictEqual(list.length, 1);
+    assert.strictEqual(list[0].fullName, 'Vendedor OK');
+    db.close();
+  });
+
   it('computeSummary returns no NaN in sales KPIs', () => {
     const db = new Database(':memory:');
     db.exec(`
@@ -195,10 +226,10 @@ describe('KPIs unit tests', () => {
     `);
     const summary = computeSummary(db, { periodType: 'current_year' });
     assert.ok(summary.ventas);
-    assert.notStrictEqual(summary.ventas.close_rate.display, 'NaN');
+    assert.notStrictEqual(summary.ventas.close_rate_count.display, 'NaN');
     assert.strictEqual(summary.has_weighted_score, false);
     assert.strictEqual(summary.has_public_ranking, false);
-    assert.ok(summary.ventas.leads_by_channel.display === UNAVAILABLE || typeof summary.ventas.leads_by_channel.value === 'object');
+    assert.ok(Array.isArray(summary.ventas.sellers_table));
     db.close();
   });
 });
@@ -347,6 +378,11 @@ describe('KPIs integration - admin only', () => {
     assert.ok(Array.isArray(res.body.formulas));
   });
 
+  it('settings requires reauth', async () => {
+    const res = await request('GET', '/api/kpis/settings', null, adminCookie);
+    assert.strictEqual(res.status, 403);
+  });
+
   it('manual quote CRUD reflects in summary', async () => {
     const d = new Date();
     const year = d.getFullYear();
@@ -360,6 +396,11 @@ describe('KPIs integration - admin only', () => {
     }, adminCookie);
     assert.strictEqual(empRes.status, 201);
     const employeeId = empRes.body.id;
+    await request('POST', '/api/kpis/admin-reauth', { password: 'admin123' }, adminCookie);
+    await request('PUT', '/api/kpis/employee-config/' + employeeId, {
+      kpi_area: 'Ventas',
+      kpi_eligible: true,
+    }, adminCookie);
     const create = await request('POST', '/api/kpis/manual-quotes', {
       year,
       month,
@@ -381,11 +422,6 @@ describe('KPIs integration - admin only', () => {
     const summary = await request('GET', '/api/kpis/summary?periodType=current_year', null, adminCookie);
     assert.strictEqual(summary.status, 200);
     assert.ok(summary.body.facturacion.billing_admin_note);
-  });
-
-  it('settings requires reauth', async () => {
-    const res = await request('GET', '/api/kpis/settings', null, adminCookie);
-    assert.strictEqual(res.status, 403);
   });
 
   it('admin reauth accepts correct password', async () => {
@@ -507,7 +543,8 @@ describe('KPIs frontend markup', () => {
     assert.match(js, /KPI_FIELD_LABELS/);
     assert.match(js, /renderDepartmentKpis/);
     assert.match(js, /Cotizaciones enviadas/);
-    assert.match(js, /getKpiFieldLabel/);
+    assert.match(js, /renderVentasSection/);
+    assert.match(js, /renderVentasSellersTable/);
   });
 });
 
@@ -654,6 +691,9 @@ describe('KPIs Fase 2', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
     assert.match(html, /Captura Cotizaciones/);
     assert.match(html, /id="kpi-btn-config"/);
+    assert.match(html, /kpi-ventas-sellers-table/);
+    assert.match(html, /KPIs por vendedor/);
+    assert.match(html, /kpi-btn-export-pdf/);
     assert.match(html, /kpi-btn-export-pdf/);
   });
 

@@ -3,6 +3,7 @@
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { isDbTruthy } = require('./db/dialect');
 const { TIMEZONE } = require('./dateHelper');
+const { getEmpleadosActivos } = require('./vacations');
 
 const KPI_DEPARTMENTS = ['Ventas', 'Técnico', 'Cobranza', 'Facturación'];
 
@@ -20,6 +21,9 @@ const REWORK_CAUSES = [
 
 const MARGIN_MIN = 0.30;
 const MARGIN_TARGET = 0.40;
+
+/** Semáforo vendedor Ventas: brecha margen real − deseado (puntos %). Documentado aquí; sin kpi_settings aún. */
+const VENTAS_SEMAPHORE_MARGIN_GAP_YELLOW = -5;
 
 const UNAVAILABLE = 'Dato no disponible';
 const NOT_CAPTURED = 'Dato no capturado';
@@ -258,15 +262,167 @@ function kpiValue(value, options = {}) {
     notCaptured = false,
     type = null,
     key = null,
+    hasData = undefined,
   } = opts;
-  if (unavailable) return { value: null, display: UNAVAILABLE, available: false, not_captured: false };
-  if (notCaptured) return { value: null, display: NOT_CAPTURED, available: false, not_captured: true };
-  if (value === null || value === undefined) return { value: null, display: '—', available: true, not_captured: false };
+  if (unavailable) {
+    return { value: null, display: UNAVAILABLE, available: false, not_captured: false, has_data: false };
+  }
+  if (notCaptured) {
+    return { value: null, display: NOT_CAPTURED, available: false, not_captured: true, has_data: false };
+  }
+  if (value === null || value === undefined) {
+    return { value: null, display: '—', available: true, not_captured: false, has_data: false };
+  }
   let display = String(value);
   const resolvedType = type || (key && CURRENCY_KPI_KEYS.test(key) ? 'currency' : (key && PERCENT_KPI_KEYS.test(key) ? 'percent' : null));
   if (resolvedType === 'currency') display = formatCurrencyMXN(value);
   else if (resolvedType === 'percent') display = formatPercentDisplay(value);
-  return { value, display, available: true, not_captured: false };
+  else if (resolvedType === 'points') display = `${Number(value)} pts`;
+  const resolvedHasData = hasData !== undefined ? hasData : true;
+  return { value, display, available: true, not_captured: false, has_data: resolvedHasData };
+}
+
+function isVentasDepartment(dept) {
+  if (!dept) return false;
+  const d = normalizeText(dept);
+  return d === 'ventas';
+}
+
+/** Vendedores activos: getEmpleadosActivos (Vacaciones) ∩ departamento Ventas ∩ kpi_eligible. */
+function getVentasEmpleadosActivos(db) {
+  const activos = getEmpleadosActivos(db);
+  if (!activos.length) return [];
+  const placeholders = activos.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT id, full_name, department, primary_department, position, kpi_eligible, active
+     FROM employees WHERE id IN (${placeholders})`,
+  ).all(...activos.map((e) => e.id));
+  return rows
+    .filter((row) => {
+      const dept = row.primary_department || row.department || '';
+      return isVentasDepartment(dept) && isDbTruthy(row.kpi_eligible);
+    })
+    .map((row) => ({
+      employeeId: row.id,
+      fullName: row.full_name,
+      active: isDbTruthy(row.active),
+      department: row.department,
+      position: row.position,
+      primaryDepartment: row.primary_department || row.department,
+      kpiDepartment: 'Ventas',
+      kpiEligible: true,
+    }))
+    .sort((a, b) => a.fullName.localeCompare(b.fullName, 'es'));
+}
+
+function projectMatchesSeller(project, seller) {
+  const empId = seller.employeeId;
+  const name = normalizeText(seller.fullName);
+  return project.vendedor_id === empId
+    || (!project.vendedor_id && normalizeText(project.seller).includes(name));
+}
+
+function filterClosedInPeriod(projects, period) {
+  return projects.filter(
+    (p) => p.closed_at && isDateInRange(p.closed_at, period.startDate, period.endDate),
+  );
+}
+
+function countProjectsClosedForSeller(projects, employeeId, start, end) {
+  return projects.filter(
+    (p) => p.vendedor_id === employeeId
+      && p.closed_at
+      && isDateInRange(p.closed_at, start, end),
+  ).length;
+}
+
+function sumCollectedInPeriod(projects, period, exchangeRates, sellerFilter = null) {
+  let collected = 0;
+  for (const p of projects) {
+    if (sellerFilter && !projectMatchesSeller(p, sellerFilter)) continue;
+    for (const pay of p.payments || []) {
+      if (isDateInRange(pay.payment_date, period.startDate, period.endDate)) {
+        collected += convertAmountToMxn(pay.amount, pay.currency || 'MXN', exchangeRates);
+      }
+    }
+  }
+  return roundMoney(collected);
+}
+
+function getVentasSellerTrafficLight(closedWithSale, complianceProjects) {
+  if (!closedWithSale.length) return 'gray';
+  if (!complianceProjects.length) return 'gray';
+  const gaps = complianceProjects.map((p) => {
+    const realPct = (p.totals.final_margin ?? 0) * 100;
+    const desiredPct = Number(p.expected_margin);
+    return realPct - desiredPct;
+  });
+  const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  if (avgGap >= 0) return 'green';
+  if (avgGap >= VENTAS_SEMAPHORE_MARGIN_GAP_YELLOW) return 'yellow';
+  return 'red';
+}
+
+function computeMarginComplianceMetrics(closedProjects) {
+  const withSale = closedProjects.filter((p) => (p.totals?.total_invoiced_mxn ?? 0) > 0);
+  const realMargins = withSale
+    .map((p) => p.totals.final_margin)
+    .filter((m) => m !== null && Number.isFinite(m));
+  const avgRealMargin = realMargins.length
+    ? safePercent(realMargins.reduce((a, b) => a + b, 0) / realMargins.length)
+    : null;
+
+  const withDesired = withSale.filter((p) => Number(p.expected_margin) > 0);
+  const desiredMargins = withDesired.map((p) => Number(p.expected_margin));
+  const avgDesiredMargin = desiredMargins.length
+    ? roundMoney(desiredMargins.reduce((a, b) => a + b, 0) / desiredMargins.length)
+    : null;
+
+  const gapPoints = withDesired.map((p) => {
+    const realPct = (p.totals.final_margin ?? 0) * 100;
+    return roundMoney(realPct - Number(p.expected_margin));
+  });
+  const avgGapPoints = gapPoints.length
+    ? roundMoney(gapPoints.reduce((a, b) => a + b, 0) / gapPoints.length)
+    : null;
+
+  return {
+    avgRealMargin,
+    avgDesiredMargin,
+    avgGapPoints,
+    closedWithSale: withSale,
+    complianceProjects: withDesired,
+  };
+}
+
+function buildVentasAlertsGrouped(projects) {
+  const open = projects.filter(
+    (p) => !p.closed_at && !p.next_commercial_action && !p.next_commercial_action_date,
+  );
+  const byKey = {};
+  for (const p of open) {
+    const sellerId = p.vendedor_id || null;
+    const sellerName = p.seller || 'Sin vendedor';
+    const key = sellerId != null ? `id:${sellerId}` : `name:${normalizeText(sellerName)}`;
+    if (!byKey[key]) {
+      byKey[key] = {
+        seller_id: sellerId,
+        seller_name: sellerName,
+        count: 0,
+        alerts: [],
+      };
+    }
+    byKey[key].count += 1;
+    byKey[key].alerts.push({
+      type: 'cotizacion_sin_seguimiento',
+      project_id: p.id,
+      quote_number: p.quote_number,
+      client_name: p.client_name,
+      date: extractDate(p.created_at),
+      suggested_action: 'Registrar próxima acción comercial',
+    });
+  }
+  return Object.values(byKey).sort((a, b) => b.count - a.count);
 }
 
 function getMarginTrafficLight(margin) {
@@ -525,10 +681,12 @@ function aggregateManualQuotesForPeriod(captures, period) {
   let quotesSent = 0;
   let quotedAmountMxn = 0;
   let missingMonths = [];
+  let capturedMonths = 0;
   for (const mo of months) {
     const agg = aggregateManualQuotesForMonth(captures, mo.year, mo.month);
     if (!agg.hasCapture) missingMonths.push(`${mo.month}/${mo.year}`);
     else {
+      capturedMonths += 1;
       quotesSent += agg.quotesSent;
       quotedAmountMxn += agg.quotedAmountMxn;
     }
@@ -536,8 +694,10 @@ function aggregateManualQuotesForPeriod(captures, period) {
   return {
     quotesSent,
     quotedAmountMxn: roundMoney(quotedAmountMxn),
-    hasCapture: missingMonths.length === 0,
+    hasCapture: capturedMonths > 0,
+    hasFullCapture: missingMonths.length === 0,
     missingMonths,
+    capturedMonths,
   };
 }
 
@@ -635,69 +795,115 @@ function getFormulaDefinitions(settings) {
 }
 
 
-function computeSalesKpis(projects, period, hasLeadModule, manualQuotes, settings) {
+function computeVentasBySeller(projects, period, manualQuotes, sellers, exchangeRates) {
+  const closed = filterClosedInPeriod(projects, period);
+  return sellers.map((seller) => {
+    const sellerClosed = closed.filter((p) => projectMatchesSeller(p, seller));
+    const manualEmp = getManualQuotesForEmployee(manualQuotes || [], period, seller.employeeId);
+    const soldAmount = roundMoney(
+      sellerClosed.reduce((s, p) => s + (p.totals?.total_invoiced_mxn ?? 0), 0),
+    );
+    const closedCount = sellerClosed.length;
+    const quotesSent = manualEmp.hasCapture ? manualEmp.quotesSent : null;
+    const quotedAmount = manualEmp.hasCapture ? manualEmp.quotedAmountMxn : null;
+    const closeRateCount = quotesSent > 0 ? safePercent(safeRatio(closedCount, quotesSent)) : null;
+    const closeRateAmount = quotedAmount > 0 ? safePercent(safeRatio(soldAmount, quotedAmount)) : null;
+    const marginMetrics = computeMarginComplianceMetrics(sellerClosed);
+    const collected = sumCollectedInPeriod(projects, period, exchangeRates, seller);
+    const trafficLight = getVentasSellerTrafficLight(
+      marginMetrics.closedWithSale,
+      marginMetrics.complianceProjects,
+    );
+
+    return {
+      employee_id: seller.employeeId,
+      full_name: seller.fullName,
+      quotes_sent: quotesSent,
+      quoted_amount_mxn: quotedAmount,
+      projects_closed: closedCount,
+      sold_amount_mxn: soldAmount,
+      close_rate_count: closeRateCount,
+      close_rate_amount: closeRateAmount,
+      avg_real_margin: marginMetrics.avgRealMargin,
+      avg_desired_margin: marginMetrics.avgDesiredMargin,
+      margin_gap_points: marginMetrics.avgGapPoints,
+      collected_amount_mxn: collected > 0 ? collected : null,
+      traffic_light: trafficLight,
+      has_sold_data: closedCount > 0 && soldAmount > 0,
+      has_quote_data: manualEmp.hasCapture,
+    };
+  }).sort((a, b) => (b.sold_amount_mxn || 0) - (a.sold_amount_mxn || 0));
+}
+
+function computeSalesKpis(projects, period, manualQuotes, settings, exchangeRates, sellers) {
   const manualAgg = aggregateManualQuotesForPeriod(manualQuotes || [], period);
-  const requireCapture = settings?.require_manual_quote_capture !== 0;
-  const notCaptured = requireCapture && !manualAgg.hasCapture;
+  const closed = filterClosedInPeriod(projects, period);
+  const soldAmount = roundMoney(closed.reduce((s, p) => s + (p.totals?.total_invoiced_mxn ?? 0), 0));
+  const closedCount = closed.length;
+  const hasQuoteData = manualAgg.hasCapture;
 
-  const won = projects.filter(
-    (p) => p.closed_at && isDateInRange(p.closed_at, period.startDate, period.endDate),
-  );
-  const soldAmount = roundMoney(won.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0));
-  const wonCount = won.length;
+  const quotesSentVal = hasQuoteData ? manualAgg.quotesSent : null;
+  const quotedAmountVal = hasQuoteData ? manualAgg.quotedAmountMxn : null;
 
-  const quotesSentVal = notCaptured ? null : manualAgg.quotesSent;
-  const quotedAmountVal = notCaptured ? null : manualAgg.quotedAmountMxn;
+  const closeRateCount = quotesSentVal > 0 ? safePercent(safeRatio(closedCount, quotesSentVal)) : null;
+  const closeRateAmount = quotedAmountVal > 0 ? safePercent(safeRatio(soldAmount, quotedAmountVal)) : null;
 
-  const inPeriod = projects.filter((p) => isDateInRange(p.created_at, period.startDate, period.endDate));
+  const marginMetrics = computeMarginComplianceMetrics(closed);
+  const collectedAmount = sumCollectedInPeriod(projects, period, exchangeRates);
 
-  const closeRate = safeRatio(wonCount, quotesSentVal);
-  const profitableWon = won.filter((p) => {
-    const margin = p.expected_margin != null ? p.expected_margin / 100 : p.totals.final_margin;
-    return margin !== null && margin >= (settings?.margin_yellow_threshold ?? MARGIN_MIN);
-  }).length;
-  const profitableCloseRate = safeRatio(profitableWon, quotesSentVal);
-
-  const hasNextActionField = projects.some((p) => 'next_commercial_action' in p);
-  let quotesWithoutFollowUp = kpiValue(null, { unavailable: !hasNextActionField });
-  if (hasNextActionField) {
-    const noFollowUp = inPeriod.filter(
-      (p) => !p.next_commercial_action && !p.next_commercial_action_date && !p.closed_at,
-    ).length;
-    quotesWithoutFollowUp = kpiValue(noFollowUp);
-  }
-
-  const margins = inPeriod
-    .map((p) => (p.expected_margin != null ? p.expected_margin / 100 : p.totals.final_margin))
-    .filter((m) => m !== null && Number.isFinite(m));
-  const avgMargin = margins.length
-    ? roundMoney(margins.reduce((a, b) => a + b, 0) / margins.length)
+  const pendingCapture = (settings?.require_manual_quote_capture !== 0 && manualAgg.missingMonths.length)
+    ? {
+        months: manualAgg.missingMonths,
+        message: `Falta captura de cotizaciones para: ${manualAgg.missingMonths.join(', ')}`,
+      }
     : null;
 
-  let leadsByChannel = kpiValue(null, { unavailable: !hasLeadModule });
-  const withChannel = inPeriod.filter((p) => p.lead_channel).length;
-  if (withChannel > 0) {
-    const byChannel = {};
-    for (const ch of LEAD_CHANNELS) byChannel[ch] = 0;
-    inPeriod.forEach((p) => {
-      if (p.lead_channel) byChannel[p.lead_channel] = (byChannel[p.lead_channel] || 0) + 1;
-    });
-    leadsByChannel = kpiValue(byChannel);
-  }
+  const sellersTable = computeVentasBySeller(
+    projects,
+    period,
+    manualQuotes,
+    sellers || [],
+    exchangeRates,
+  );
+
+  const salesAlertsBySeller = buildVentasAlertsGrouped(projects);
 
   return {
-    leads_by_channel: leadsByChannel,
-    quotes_sent: kpiValue(quotesSentVal, { notCaptured, key: 'quotes_sent' }),
-    quoted_amount_mxn: kpiValue(quotedAmountVal, { notCaptured, type: 'currency', key: 'quoted_amount_mxn' }),
+    quotes_sent: kpiValue(quotesSentVal, { hasData: hasQuoteData, key: 'quotes_sent' }),
+    quoted_amount_mxn: kpiValue(quotedAmountVal, {
+      hasData: hasQuoteData,
+      type: 'currency',
+      key: 'quoted_amount_mxn',
+    }),
+    projects_closed: kpiValue(closedCount > 0 ? closedCount : null, { hasData: closedCount > 0 }),
+    sold_amount_mxn: kpiValue(closedCount > 0 ? soldAmount : null, {
+      hasData: closedCount > 0,
+      type: 'currency',
+      key: 'sold_amount_mxn',
+    }),
+    close_rate_count: kpiValue(closeRateCount, { hasData: closeRateCount !== null }),
+    close_rate_amount: kpiValue(closeRateAmount, { hasData: closeRateAmount !== null }),
+    avg_real_margin: kpiValue(marginMetrics.avgRealMargin, {
+      hasData: marginMetrics.avgRealMargin !== null,
+    }),
+    avg_desired_margin: kpiValue(marginMetrics.avgDesiredMargin, {
+      hasData: marginMetrics.avgDesiredMargin !== null,
+    }),
+    margin_gap_points: kpiValue(marginMetrics.avgGapPoints, {
+      hasData: marginMetrics.avgGapPoints !== null,
+      type: 'points',
+    }),
+    collected_amount_mxn: kpiValue(collectedAmount > 0 ? collectedAmount : null, {
+      hasData: collectedAmount > 0,
+      type: 'currency',
+      key: 'collected_amount_mxn',
+    }),
     manual_capture_missing_months: manualAgg.missingMonths,
-    sold_amount_mxn: kpiValue(soldAmount, { type: 'currency', key: 'sold_amount_mxn' }),
-    close_rate: kpiValue(closeRate !== null ? safePercent(closeRate) : null),
-    profitable_close_rate: kpiValue(profitableCloseRate !== null ? safePercent(profitableCloseRate) : null),
-    quotes_without_follow_up: quotesWithoutFollowUp,
-    avg_estimated_margin: kpiValue(avgMargin !== null ? safePercent(avgMargin) : null),
+    pending_capture: pendingCapture,
+    sellers_table: sellersTable,
+    sales_alerts_by_seller: salesAlertsBySeller,
     margin_min_percent: MARGIN_MIN * 100,
     margin_target_percent: MARGIN_TARGET * 100,
-    lead_channels_catalog: LEAD_CHANNELS,
   };
 }
 
@@ -896,10 +1102,13 @@ function computeDepartmentKpis(department, sales, projectsKpi, reports, billing,
     Ventas: {
       quotes_sent: sales.quotes_sent,
       quoted_amount_mxn: sales.quoted_amount_mxn,
+      projects_closed: sales.projects_closed,
       sold_amount_mxn: sales.sold_amount_mxn,
-      close_rate: sales.close_rate,
-      avg_estimated_margin: sales.avg_estimated_margin,
-      quotes_without_follow_up: sales.quotes_without_follow_up,
+      close_rate_count: sales.close_rate_count,
+      close_rate_amount: sales.close_rate_amount,
+      avg_real_margin: sales.avg_real_margin,
+      margin_gap_points: sales.margin_gap_points,
+      collected_amount_mxn: sales.collected_amount_mxn,
     },
     Técnico: {
       complete_reports: reports.complete_reports,
@@ -946,20 +1155,7 @@ function computeEmployeeKpis(employee, projects, reports, period, manualQuotes) 
   let trafficLight = 'gray';
 
   if (dept === 'Ventas') {
-    const won = related.filter((p) => p.closed_at && isDateInRange(p.closed_at, period.startDate, period.endDate));
-    const manualEmp = getManualQuotesForEmployee(manualQuotes || [], period, employee.employeeId);
-    const noFollowUp = related.filter((p) => !p.next_commercial_action && !p.next_commercial_action_date && !p.closed_at
-      && isDateInRange(p.created_at, period.startDate, period.endDate)).length;
-    const inPeriod = related.filter((p) => isDateInRange(p.created_at, period.startDate, period.endDate));
-    const margins = inPeriod.map((p) => p.expected_margin).filter((m) => m != null && Number.isFinite(m));
-    kpis = {
-      quotes_sent: manualEmp.hasCapture ? manualEmp.quotesSent : NOT_CAPTURED,
-      sold_amount_mxn: roundMoney(won.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0)),
-      close_rate: safePercent(safeRatio(won.length, manualEmp.hasCapture ? manualEmp.quotesSent : null)),
-      avg_margin: margins.length ? safePercent(margins.reduce((s, p) => s + p, 0) / margins.length / 100) : null,
-      quotes_without_follow_up: noFollowUp,
-    };
-    trafficLight = noFollowUp > 0 ? 'red' : 'green';
+    return null;
   } else if (dept === 'Técnico') {
     const assigned = related.filter(
       (p) => p.tecnico_id === employee.employeeId
@@ -1032,17 +1228,6 @@ function generateAlerts(projects, reports, settings, sales) {
   reports.forEach((r) => { reportsByProject[r.project_id] = r; });
 
   for (const p of projects) {
-    if (!p.next_commercial_action && !p.next_commercial_action_date && !p.closed_at) {
-      alerts.push({
-        type: 'cotizacion_sin_seguimiento',
-        severity: 'medium',
-        responsible: p.seller || 'Ventas',
-        date: extractDate(p.created_at),
-        suggested_action: 'Registrar próxima acción comercial',
-        link: { module: 'projects', project_id: p.id, quote_number: p.quote_number },
-      });
-    }
-
     const sale = p.totals.total_invoiced_mxn;
     const margin = sale > 0 ? (sale - p.totals.spent) / sale : null;
     if (margin !== null && margin < MARGIN_MIN) {
@@ -1112,14 +1297,7 @@ function generateAlerts(projects, reports, settings, sales) {
   }
 
   if (settings?.require_manual_quote_capture && sales?.manual_capture_missing_months?.length) {
-    alerts.push({
-      type: 'falta_captura_cotizaciones',
-      severity: 'high',
-      responsible: 'Ventas',
-      date: extractDate(new Date().toISOString()),
-      suggested_action: 'Falta captura mensual de cotizaciones para este periodo.',
-      link: { module: 'kpis', action: 'manual_quotes' },
-    });
+    // Captura pendiente: ver bloque Ventas (pending_capture), no alerta operativa.
   }
 
   const sev = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -1149,21 +1327,15 @@ function computeReceivableBuckets(projects, settings) {
   return Object.values(buckets);
 }
 
-function countProjectsWonForSeller(projects, employeeId, start, end) {
-  return projects.filter(
-    (p) => p.vendedor_id === employeeId && isDateInRange(p.created_at, start, end),
-  ).length;
-}
-
-function computeSellerSuccessForPeriod(projects, manualQuotes, period, employees, filters) {
-  let sellers = employees.filter((e) => e.kpiDepartment === 'Ventas');
+function computeSellerSuccessForPeriod(projects, manualQuotes, period, sellers, filters) {
+  let ventasSellers = sellers;
   if (filters.department) {
     const dept = normalizeDepartment(filters.department) || filters.department;
-    if (dept !== 'Ventas') sellers = [];
-    else sellers = employees.filter((e) => e.kpiDepartment === 'Ventas');
+    if (dept !== 'Ventas') ventasSellers = [];
+    else ventasSellers = sellers;
   }
   if (filters.employeeId && filters.employee?.kpiDepartment === 'Ventas') {
-    sellers = sellers.filter((e) => e.employeeId === filters.employee.employeeId);
+    ventasSellers = ventasSellers.filter((e) => e.employeeId === filters.employee.employeeId);
   }
 
   const months = getMonthsInPeriod(period).slice(-12);
@@ -1173,43 +1345,65 @@ function computeSellerSuccessForPeriod(projects, manualQuotes, period, employees
     const end = formatDate(mo.year, mo.month, lastDayOfMonth(mo.year, mo.month));
     const monthCaptures = manualQuotes.filter((c) => c.year === mo.year && c.month === mo.month);
     let quotes = 0;
-    let won = 0;
-    if (sellers.length) {
-      for (const seller of sellers) {
+    let closed = 0;
+    let quotedAmount = 0;
+    let soldAmount = 0;
+    if (ventasSellers.length) {
+      for (const seller of ventasSellers) {
         quotes += monthCaptures
           .filter((c) => c.employee_id === seller.employeeId)
           .reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
-        won += countProjectsWonForSeller(projects, seller.employeeId, start, end);
+        quotedAmount += monthCaptures
+          .filter((c) => c.employee_id === seller.employeeId)
+          .reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0);
+        closed += countProjectsClosedForSeller(projects, seller.employeeId, start, end);
       }
+      const monthClosed = projects.filter(
+        (p) => p.closed_at && isDateInRange(p.closed_at, start, end)
+          && ventasSellers.some((s) => projectMatchesSeller(p, s)),
+      );
+      soldAmount = roundMoney(
+        monthClosed.reduce((s, p) => s + (p.totals?.total_invoiced_mxn ?? 0), 0),
+      );
     } else {
       quotes = monthCaptures.reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
-      won = projects.filter((p) => isDateInRange(p.created_at, start, end)).length;
+      quotedAmount = roundMoney(monthCaptures.reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0));
+      const monthClosed = projects.filter((p) => p.closed_at && isDateInRange(p.closed_at, start, end));
+      closed = monthClosed.length;
+      soldAmount = roundMoney(
+        monthClosed.reduce((s, p) => s + (p.totals?.total_invoiced_mxn ?? 0), 0),
+      );
     }
     monthlySuccess.push({
       label: `${pad2(mo.month)}/${mo.year}`,
       quotes_sent: quotes,
-      projects_won: won,
-      success_percent: safePercent(safeRatio(won, quotes)),
+      projects_closed: closed,
+      quoted_amount_mxn: roundMoney(quotedAmount),
+      sold_amount_mxn: soldAmount,
+      success_percent: safePercent(safeRatio(closed, quotes)),
     });
   }
 
-  const sellerRates = sellers.map((seller) => {
+  const sellerRates = ventasSellers.map((seller) => {
     const { quotesSent, quotedAmountMxn, hasCapture } = getManualQuotesForEmployee(
       manualQuotes,
       period,
       seller.employeeId,
     );
-    const won = projects.filter(
-      (p) => p.vendedor_id === seller.employeeId
-        && isDateInRange(p.created_at, period.startDate, period.endDate),
-    ).length;
+    const sellerClosed = filterClosedInPeriod(projects, period)
+      .filter((p) => projectMatchesSeller(p, seller));
+    const won = sellerClosed.length;
+    const sold = roundMoney(
+      sellerClosed.reduce((s, p) => s + (p.totals?.total_invoiced_mxn ?? 0), 0),
+    );
     return {
       employee_id: seller.employeeId,
       full_name: seller.fullName,
       quotes_sent: hasCapture ? quotesSent : 0,
-      projects_won: won,
+      projects_closed: won,
       quoted_amount_mxn: quotedAmountMxn,
-      success_percent: hasCapture ? safePercent(safeRatio(won, quotesSent)) : null,
+      sold_amount_mxn: sold,
+      success_percent: hasCapture && quotesSent > 0 ? safePercent(safeRatio(won, quotesSent)) : null,
     };
   });
 
@@ -1274,11 +1468,12 @@ function computeEmployeeComparisonChart(sellerRates, servicesByMonth, filters) {
     };
   }
   return {
-    mode: 'seller_success',
+    mode: 'seller_sold_amount',
     items: sellerRates.map((s) => ({
       label: s.full_name,
-      value: s.success_percent,
-      projects_won: s.projects_won,
+      value: s.sold_amount_mxn || 0,
+      close_rate: s.success_percent,
+      projects_closed: s.projects_closed,
       quotes_sent: s.quotes_sent,
     })),
   };
@@ -1291,6 +1486,7 @@ function computeKpiCharts(db, {
   exchangeRates,
   reports,
   employees,
+  ventasSellers,
   filters,
 }) {
   const months = getMonthsInPeriod(period).slice(-12);
@@ -1299,7 +1495,7 @@ function computeKpiCharts(db, {
     projects,
     manualQuotes,
     period,
-    employees,
+    ventasSellers || [],
     filters,
   );
   const servicesByMonth = computeServicesByMonth(filteredReports, period, employees, filters);
@@ -1309,15 +1505,28 @@ function computeKpiCharts(db, {
     const start = formatDate(mo.year, mo.month, 1);
     const end = formatDate(mo.year, mo.month, lastDayOfMonth(mo.year, mo.month));
     const subPeriod = { startDate: start, endDate: end, label: `${pad2(mo.month)}/${mo.year}` };
-    const monthProjects = projects.filter((p) => isDateInRange(p.created_at, start, end));
     const monthQuoteRows = manualQuotes.filter((c) => c.year === mo.year && c.month === mo.month);
     let quotesSent = monthQuoteRows.reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
+    let quotedAmount = roundMoney(monthQuoteRows.reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0));
     if (filters.employeeId && filters.employee?.kpiDepartment === 'Ventas') {
       quotesSent = monthQuoteRows
         .filter((c) => c.employee_id === filters.employee.employeeId)
         .reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
+      quotedAmount = roundMoney(
+        monthQuoteRows
+          .filter((c) => c.employee_id === filters.employee.employeeId)
+          .reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0),
+      );
+    } else if (ventasSellers?.length) {
+      const sellerIds = new Set(ventasSellers.map((s) => s.employeeId));
+      const sellerRows = monthQuoteRows.filter((c) => sellerIds.has(c.employee_id));
+      quotesSent = sellerRows.reduce((s, c) => s + (c.quotes_sent_count || 0), 0);
+      quotedAmount = roundMoney(sellerRows.reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0));
     }
-    const sold = monthProjects.filter((p) => p.closed_at && isDateInRange(p.closed_at, start, end));
+    const monthClosed = projects.filter((p) => p.closed_at && isDateInRange(p.closed_at, start, end));
+    const sold = roundMoney(
+      monthClosed.reduce((s, p) => s + (p.totals?.total_invoiced_mxn ?? 0), 0),
+    );
     let collected = 0;
     for (const p of projects) {
       for (const pay of p.payments || []) {
@@ -1329,11 +1538,11 @@ function computeKpiCharts(db, {
     const successRow = monthlySuccess.find((r) => r.label === subPeriod.label);
     trend.push({
       label: subPeriod.label,
-      quoted_amount_mxn: roundMoney(monthQuoteRows.reduce((s, c) => s + (c.quoted_amount_mxn || 0), 0)),
-      sold_amount_mxn: roundMoney(sold.reduce((s, p) => s + p.totals.total_invoiced_mxn, 0)),
+      quoted_amount_mxn: quotedAmount,
+      sold_amount_mxn: sold,
       collected_amount_mxn: roundMoney(collected),
       quotes_sent: quotesSent,
-      projects_won: successRow?.projects_won ?? monthProjects.length,
+      projects_closed: successRow?.projects_closed ?? monthClosed.length,
       quote_success_percent: successRow?.success_percent ?? null,
     });
   }
@@ -1349,6 +1558,29 @@ function computeKpiCharts(db, {
     services_by_month: servicesByMonth,
     employee_comparison,
   };
+}
+
+
+function buildVentasSummaryCards(sales) {
+  const defs = [
+    { key: 'quotes_sent', label: 'Cotizaciones enviadas (cant.)' },
+    { key: 'quoted_amount_mxn', label: 'Monto cotizado (MXN)' },
+    { key: 'projects_closed', label: 'Proyectos cerrados (cant.)' },
+    { key: 'sold_amount_mxn', label: 'Monto vendido (MXN)' },
+    { key: 'close_rate_count', label: 'Tasa de cierre por cantidad (%)' },
+    { key: 'close_rate_amount', label: 'Tasa de cierre por monto (%)' },
+    { key: 'avg_real_margin', label: 'Margen real promedio (%)' },
+    { key: 'avg_desired_margin', label: 'Margen deseado promedio (%)' },
+    { key: 'margin_gap_points', label: 'Brecha margen (pts)' },
+    { key: 'collected_amount_mxn', label: 'Monto cobrado (MXN)' },
+  ];
+  return defs
+    .map(({ key, label }) => {
+      const metric = sales[key];
+      if (!metric?.has_data) return null;
+      return { label, value: metric.display, section: 'ventas', key };
+    })
+    .filter(Boolean);
 }
 
 
@@ -1385,8 +1617,12 @@ function buildKpiContext(db, query) {
 
   const settings = loadKpiSettings(db);
   const manualQuotes = loadManualQuoteCapturesForPeriod(db, period);
-  const hasLeadModule = false;
-  const sales = computeSalesKpis(projects, period, hasLeadModule, manualQuotes, settings);
+  let ventasSellers = getVentasEmpleadosActivos(db);
+  if (query.employeeId) {
+    const empId = Number(query.employeeId);
+    ventasSellers = ventasSellers.filter((s) => s.employeeId === empId);
+  }
+  const sales = computeSalesKpis(projects, period, manualQuotes, settings, exchangeRates, ventasSellers);
   const projectsKpi = computeProjectsKpis(projects, reportsByProject, settings);
   const reportsKpi = computeReportsKpis(projects, reports);
   const billing = computeBillingKpis(projects, period);
@@ -1398,6 +1634,7 @@ function buildKpiContext(db, query) {
     exchangeRates,
     reports,
     employees,
+    ventasSellers,
     filters: {
       department: query.department || null,
       employeeId: query.employeeId ? Number(query.employeeId) : null,
@@ -1407,7 +1644,7 @@ function buildKpiContext(db, query) {
   const unassigned = loadActiveKpiEmployees(db).filter((e) => !e.kpiDepartment);
 
   return {
-    period, periodType, employees, unassignedEmployees: unassigned,
+    period, periodType, employees, unassignedEmployees: unassigned, ventasSellers,
     projects, reports, sales, projectsKpi, reportsKpi, billing, collection, settings, manualQuotes, charts,
     filters: {
       department: query.department || null,
@@ -1425,6 +1662,7 @@ function computeSummary(db, query) {
     computeDepartmentKpis(d, ctx.sales, ctx.projectsKpi, ctx.reportsKpi, ctx.billing, ctx.collection),
   );
   const alerts = generateAlerts(ctx.projects, ctx.reports, ctx.settings, ctx.sales);
+  const ventasSummaryCards = buildVentasSummaryCards(ctx.sales);
 
   return {
     period: ctx.period,
@@ -1432,15 +1670,14 @@ function computeSummary(db, query) {
     filters: ctx.filters,
     timezone: TIMEZONE,
     summary_cards: [
-      { label: 'Cotizaciones enviadas', value: ctx.sales.quotes_sent.display, section: 'ventas' },
-      { label: 'Monto cotizado', value: ctx.sales.quoted_amount_mxn.display, section: 'ventas' },
-      { label: 'Monto vendido', value: ctx.sales.sold_amount_mxn.display, section: 'ventas' },
+      ...ventasSummaryCards,
       { label: 'Margen real', value: ctx.projectsKpi.gross_margin_real.display, section: 'proyectos' },
       { label: 'CxC vencida', value: ctx.collection.overdue_portfolio.display, section: 'cobranza' },
       { label: 'Reportes completos', value: ctx.reportsKpi.complete_reports.display, section: 'reportes' },
       { label: 'Facturas emitidas', value: ctx.billing.invoices_issued.display, section: 'facturacion' },
       { label: 'Alertas activas', value: String(alerts.length), section: 'alertas' },
     ],
+    ventas_summary_cards: ventasSummaryCards,
     ventas: ctx.sales,
     proyectos: ctx.projectsKpi,
     reportes: ctx.reportsKpi,
@@ -1470,14 +1707,16 @@ function computeDepartments(db, query) {
 
 function computeEmployees(db, query) {
   const ctx = buildKpiContext(db, query);
-  const allEmployees = loadActiveKpiEmployees(db);
+  const allEmployees = loadActiveKpiEmployees(db).filter((e) => e.kpiDepartment !== 'Ventas');
   const filtered = query.department
     ? allEmployees.filter((e) => e.kpiDepartment === (normalizeDepartment(query.department) || query.department))
     : allEmployees;
 
   return {
     period: ctx.period,
-    employees: filtered.map((e) => computeEmployeeKpis(e, ctx.projects, ctx.reports, ctx.period, ctx.manualQuotes)),
+    employees: filtered
+      .map((e) => computeEmployeeKpis(e, ctx.projects, ctx.reports, ctx.period, ctx.manualQuotes))
+      .filter(Boolean),
     has_weighted_score: false,
     has_public_ranking: false,
   };
@@ -1556,4 +1795,9 @@ module.exports = {
   computeKpiCharts,
   computeReceivableBuckets,
   resolveProjectDueDate,
+  getVentasEmpleadosActivos,
+  VENTAS_SEMAPHORE_MARGIN_GAP_YELLOW,
+  buildVentasSummaryCards,
+  computeVentasBySeller,
+  getVentasSellerTrafficLight,
 };

@@ -1459,3 +1459,67 @@ th.col-number {
     grid-template-columns: 1fr;
   }
 }
+
+.kpi-ventas-cards {
+  margin-bottom: 12px;
+}
+
+.kpi-no-data {
+  color: var(--muted, #9ca3af);
+}
+
+.kpi-pending-capture {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--border, #d1d5db);
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: 4px;
+}
+
+.kpi-pending-capture-title {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+}
+
+.kpi-ventas-sellers-table th,
+.kpi-ventas-sellers-table td {
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+
+.kpi-semaphore-cell {
+  text-align: center;
+  width: 3rem;
+}
+
+.kpi-ventas-alert-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kpi-ventas-alert-group {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--panel-bg, #fff);
+}
+
+.kpi-ventas-alert-group summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.kpi-ventas-alert-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.kpi-ventas-alert-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.88rem;
+}
+
+.kpi-ventas-alerts-toggle {
+  margin-top: 8px;
+}
