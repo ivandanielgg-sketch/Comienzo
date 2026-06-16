@@ -7505,6 +7505,12 @@ function renderKpiDashboard(summary, alerts, employees) {
     periodLabel.textContent = 'Periodo: ' + (summary.period.label || '') + ' (Hora CDMX)';
   }
 
+  try {
+    renderKpiCharts(summary);
+  } catch (chartErr) {
+    console.error('Error al renderizar graficas KPI:', chartErr);
+  }
+
   renderVentasSection(summary.ventas);
 
   renderKpiSectionMetrics('kpi-proyectos-content', [
@@ -7572,12 +7578,6 @@ function renderKpiDashboard(summary, alerts, employees) {
     }).join('');
   } else if (unassignedEl) {
     unassignedEl.classList.add('hidden');
-  }
-
-  try {
-    renderKpiCharts(summary);
-  } catch (chartErr) {
-    console.error('Error al renderizar graficas KPI:', chartErr);
   }
 }
 

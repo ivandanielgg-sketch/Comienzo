@@ -12,6 +12,11 @@
     .kpi-print-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; }
     .kpi-print-card { border: 1px solid #ccc; padding: 10px; border-radius: 6px; }
     .kpi-print-card span { display: block; font-size: 0.75rem; color: #666; }
+    .kpi-print-charts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin: 16px 0; }
+    .kpi-print-chart-panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px; break-inside: avoid; page-break-inside: avoid; }
+    .kpi-print-chart-panel h3 { margin: 0 0 8px; font-size: 0.95rem; }
+    .kpi-print-chart-panel canvas { width: 100% !important; max-height: 280px; }
+    .kpi-chart-empty { margin: 8px 0; font-size: 0.85rem; }
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 12px 0; }
     th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
     th { background: #f3f4f6; }
@@ -23,23 +28,22 @@
 </head>
 <body>
   <div class="no-print" style="margin-bottom:16px;">
-    <button type="button" onclick="window.print()">Imprimir / Guardar PDF</button>
+    <button type="button" id="kpi-print-btn">Imprimir / Guardar PDF</button>
     <button type="button" onclick="window.close()" class="secondary">Cerrar</button>
   </div>
   <div id="kpi-print-root">Cargando reporte...</div>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="/kpi-print-charts.js"></script>
   <script>
-    const money = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' });
-    function formatCurrencyMXN(value) {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return '$0.00';
-      return money.format(n);
-    }
     function escapeHtml(s) {
       return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
     function cellDisplay(v) {
       if (v && typeof v === 'object' && v.display != null) return v.display;
       return v == null ? '—' : String(v);
+    }
+    function chartPanel(id, title) {
+      return '<div class="kpi-print-chart-panel"><h3>' + escapeHtml(title) + '</h3><div id="' + id + '"></div></div>';
     }
     async function load() {
       const params = new URLSearchParams(window.location.search);
@@ -65,12 +69,27 @@
         '<p><strong>Generado:</strong> ' + escapeHtml(generated) + ' (Hora CDMX)</p>' +
         '<p><strong>Filtros:</strong> ' + escapeHtml(JSON.stringify(data.filters || {})) + '</p></div>' +
         '<h2>Resumen</h2><div class="kpi-print-cards">' + cards + '</div>' +
+        '<h2>Gráficas generales</h2><div class="kpi-print-charts">' +
+        chartPanel('kpi-print-chart-receivable', 'Cartera por vencimiento') +
+        chartPanel('kpi-print-chart-reports', 'Servicios realizados por mes (técnicos)') +
+        '</div>' +
         '<h2>Ventas</h2><p>Cotizaciones: ' + cellDisplay(data.ventas && data.ventas.quotes_sent) +
         ' · Monto cotizado: ' + cellDisplay(data.ventas && data.ventas.quoted_amount_mxn) +
         ' · Monto vendido: ' + cellDisplay(data.ventas && data.ventas.sold_amount_mxn) + '</p>' +
+        '<div class="kpi-print-charts">' +
+        chartPanel('kpi-print-chart-ventas-trend', 'Tendencia mensual') +
+        chartPanel('kpi-print-chart-ventas-funnel', 'Embudo comercial del periodo') +
+        chartPanel('kpi-print-chart-ventas-ranking', 'Ranking por monto vendido') +
+        chartPanel('kpi-print-chart-ventas-margin', 'Brecha de margen: real vs deseado') +
+        '</div>' +
         '<h2>Alertas operativas</h2><table><thead><tr><th>Severidad</th><th>Tipo</th><th>Responsable</th><th>Accion</th></tr></thead><tbody>' +
         (alertRows || '<tr><td colspan="4">Sin alertas</td></tr>') + '</tbody></table>' +
         '<p class="print-note"><em>Reporte administrativo interno. Los montos en MXN usan formato de moneda. Criterio de facturacion: todos los proyectos del periodo se consideran facturados para efectos del tablero (no contabilidad fiscal).</em></p>';
+
+      renderPrintKpiCharts(data);
+      document.getElementById('kpi-print-btn').addEventListener('click', function() {
+        window.print();
+      });
     }
     load();
   </script>
