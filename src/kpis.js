@@ -865,7 +865,6 @@ function computeSalesKpis(projects, period, manualQuotes, settings, exchangeRate
     sellers || [],
     exchangeRates,
   );
-
   const salesAlertsBySeller = buildVentasAlertsGrouped(projects);
 
   return {
@@ -904,6 +903,42 @@ function computeSalesKpis(projects, period, manualQuotes, settings, exchangeRate
     sales_alerts_by_seller: salesAlertsBySeller,
     margin_min_percent: MARGIN_MIN * 100,
     margin_target_percent: MARGIN_TARGET * 100,
+  };
+}
+
+function computeVentasChartData(sales, chartsPayload) {
+  const quoted = sales.quoted_amount_mxn?.value ?? 0;
+  const sold = sales.sold_amount_mxn?.value ?? 0;
+  const collected = sales.collected_amount_mxn?.value ?? 0;
+
+  const funnelStages = [
+    { key: 'quoted', label: 'Cotizado', amount: quoted, color: '#2563eb' },
+    { key: 'sold', label: 'Vendido', amount: sold, color: '#0d9488' },
+    { key: 'collected', label: 'Cobrado', amount: collected, color: '#eab308' },
+  ].filter((s) => s.amount > 0);
+
+  const sellerRanking = (sales.sellers_table || [])
+    .filter((s) => (s.sold_amount_mxn || 0) > 0)
+    .sort((a, b) => (b.sold_amount_mxn || 0) - (a.sold_amount_mxn || 0))
+    .map((s) => ({
+      label: s.full_name,
+      sold_amount_mxn: roundMoney(s.sold_amount_mxn || 0),
+      quoted_amount_mxn: roundMoney(s.quoted_amount_mxn || 0),
+    }));
+
+  const marginGapBySeller = (sales.sellers_table || [])
+    .filter((s) => s.margin_gap_points != null && s.has_sold_data && s.avg_desired_margin != null)
+    .sort((a, b) => (b.margin_gap_points || 0) - (a.margin_gap_points || 0))
+    .map((s) => ({
+      label: s.full_name,
+      gap_points: s.margin_gap_points,
+    }));
+
+  return {
+    monthly_trend: chartsPayload?.monthly_trend || [],
+    sales_funnel: { stages: funnelStages },
+    seller_ranking: sellerRanking,
+    margin_gap_by_seller: marginGapBySeller,
   };
 }
 
@@ -1562,25 +1597,36 @@ function computeKpiCharts(db, {
 
 
 function buildVentasSummaryCards(sales) {
-  const defs = [
-    { key: 'quotes_sent', label: 'Cotizaciones enviadas (cant.)' },
-    { key: 'quoted_amount_mxn', label: 'Monto cotizado (MXN)' },
-    { key: 'projects_closed', label: 'Proyectos cerrados (cant.)' },
-    { key: 'sold_amount_mxn', label: 'Monto vendido (MXN)' },
-    { key: 'close_rate_count', label: 'Tasa de cierre por cantidad (%)' },
-    { key: 'close_rate_amount', label: 'Tasa de cierre por monto (%)' },
-    { key: 'avg_real_margin', label: 'Margen real promedio (%)' },
-    { key: 'avg_desired_margin', label: 'Margen deseado promedio (%)' },
-    { key: 'margin_gap_points', label: 'Brecha margen (pts)' },
-    { key: 'collected_amount_mxn', label: 'Monto cobrado (MXN)' },
-  ];
-  return defs
-    .map(({ key, label }) => {
-      const metric = sales[key];
-      if (!metric?.has_data) return null;
-      return { label, value: metric.display, section: 'ventas', key };
-    })
-    .filter(Boolean);
+  const metricMap = {
+    quotes_sent: { label: 'Cotizaciones enviadas (cant.)', group: 'captacion' },
+    quoted_amount_mxn: { label: 'Monto cotizado (MXN)', group: 'captacion' },
+    projects_closed: { label: 'Proyectos cerrados (cant.)', group: 'cierre' },
+    sold_amount_mxn: { label: 'Monto vendido (MXN)', group: 'cierre' },
+    close_rate_count: { label: 'Tasa de cierre por cantidad (%)', group: 'cierre' },
+    close_rate_amount: { label: 'Tasa de cierre por monto (%)', group: 'cierre' },
+    avg_real_margin: { label: 'Margen real promedio (%)', group: 'rentabilidad' },
+    avg_desired_margin: { label: 'Margen deseado promedio (%)', group: 'rentabilidad' },
+    margin_gap_points: { label: 'Brecha margen (pts)', group: 'rentabilidad' },
+    collected_amount_mxn: { label: 'Monto cobrado (MXN)', group: 'cobro' },
+  };
+  const groups = {
+    captacion: { title: 'Captación', cards: [] },
+    cierre: { title: 'Cierre', cards: [] },
+    rentabilidad: { title: 'Rentabilidad', cards: [] },
+    cobro: { title: 'Cobro', cards: [] },
+  };
+  Object.entries(metricMap).forEach(([key, meta]) => {
+    const metric = sales[key];
+    if (!metric?.has_data) return;
+    groups[meta.group].cards.push({
+      label: meta.label,
+      value: metric.display,
+      section: 'ventas',
+      key,
+      group: meta.group,
+    });
+  });
+  return Object.values(groups).filter((g) => g.cards.length > 0);
 }
 
 
@@ -1641,6 +1687,7 @@ function buildKpiContext(db, query) {
       employee,
     },
   });
+  sales.charts = computeVentasChartData(sales, charts);
   const unassigned = loadActiveKpiEmployees(db).filter((e) => !e.kpiDepartment);
 
   return {
@@ -1662,7 +1709,8 @@ function computeSummary(db, query) {
     computeDepartmentKpis(d, ctx.sales, ctx.projectsKpi, ctx.reportsKpi, ctx.billing, ctx.collection),
   );
   const alerts = generateAlerts(ctx.projects, ctx.reports, ctx.settings, ctx.sales);
-  const ventasSummaryCards = buildVentasSummaryCards(ctx.sales);
+  const ventasSummaryGroups = buildVentasSummaryCards(ctx.sales);
+  const ventasSummaryCards = ventasSummaryGroups.flatMap((g) => g.cards);
 
   return {
     period: ctx.period,
@@ -1678,6 +1726,7 @@ function computeSummary(db, query) {
       { label: 'Alertas activas', value: String(alerts.length), section: 'alertas' },
     ],
     ventas_summary_cards: ventasSummaryCards,
+    ventas_summary_groups: ventasSummaryGroups,
     ventas: ctx.sales,
     proyectos: ctx.projectsKpi,
     reportes: ctx.reportsKpi,
@@ -1800,4 +1849,5 @@ module.exports = {
   buildVentasSummaryCards,
   computeVentasBySeller,
   getVentasSellerTrafficLight,
+  computeVentasChartData,
 };

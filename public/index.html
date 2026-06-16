@@ -2059,9 +2059,7 @@
                 <button type="button" id="kpi-btn-export-pdf" class="secondary">Exportar PDF</button>
                 <button type="button" id="kpi-btn-export-excel" class="secondary">Exportar Excel</button>
               </div>
-              <div id="kpi-charts-section" class="kpi-charts-grid">
-                <div class="panel kpi-chart-panel"><h3>Tendencia mensual</h3><canvas id="kpi-chart-trend" height="200"></canvas></div>
-                <div class="panel kpi-chart-panel"><h3>Comparativo por empleado</h3><canvas id="kpi-chart-employees" height="200"></canvas></div>
+              <div id="kpi-charts-section" class="kpi-charts-grid kpi-charts-global">
                 <div class="panel kpi-chart-panel"><h3>Cartera por vencimiento</h3><canvas id="kpi-chart-receivable" height="200"></canvas></div>
                 <div class="panel kpi-chart-panel"><h3>Servicios realizados por mes (tecnicos)</h3><canvas id="kpi-chart-reports" height="200"></canvas></div>
               </div>
@@ -2072,8 +2070,14 @@
               <div id="kpi-error" class="hidden" style="color:var(--danger);padding:8px 0;"></div>
               <div id="kpi-sections">
                 <div class="kpi-section panel" id="kpi-section-ventas"><h3>Ventas</h3>
-                  <div id="kpi-ventas-cards" class="kpi-cards kpi-ventas-cards"></div>
+                  <div id="kpi-ventas-cards" class="kpi-ventas-card-groups"></div>
                   <div id="kpi-ventas-pending" class="kpi-pending-capture hidden"></div>
+                  <div id="kpi-ventas-charts" class="kpi-charts-grid kpi-ventas-charts-grid">
+                    <div class="panel kpi-chart-panel"><h3>Tendencia mensual</h3><canvas id="kpi-chart-ventas-trend" height="220"></canvas></div>
+                    <div class="panel kpi-chart-panel"><h3>Embudo comercial del periodo</h3><canvas id="kpi-chart-ventas-funnel" height="180"></canvas></div>
+                    <div class="panel kpi-chart-panel"><h3>Ranking por monto vendido</h3><canvas id="kpi-chart-ventas-ranking" height="220"></canvas></div>
+                    <div class="panel kpi-chart-panel"><h3>Brecha de margen: real vs deseado</h3><canvas id="kpi-chart-ventas-margin" height="220"></canvas></div>
+                  </div>
                   <div id="kpi-ventas-content" class="kpi-metrics hidden"></div>
                   <div id="kpi-ventas-sellers-wrap" class="table-wrapper" style="margin-top:12px;">
                     <h4 style="margin:0 0 8px;">KPIs por vendedor</h4>

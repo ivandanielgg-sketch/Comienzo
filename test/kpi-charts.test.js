@@ -7,6 +7,7 @@ const {
   resolveProjectDueDate,
   getPeriodRange,
   getVentasEmpleadosActivos,
+  computeVentasChartData,
 } = require('../src/kpis');
 
 test('computeReceivableBuckets uses fecha_vencimiento por vencer y vencidos', () => {
@@ -111,6 +112,25 @@ test('computeKpiCharts returns chart payloads with filtered data', () => {
   assert.ok(charts.receivable_buckets.some((b) => b.label === 'Por vencer'));
   assert.ok(charts.seller_close_rates.length >= 1);
   assert.strictEqual(charts.employee_comparison.mode, 'seller_sold_amount');
-  assert.ok(charts.services_by_month.series.length >= 1);
+  assert.ok(Array.isArray(ventasSellers));
+  assert.ok(ventasSellers.length >= 1);
+
+  const ventasCharts = computeVentasChartData({
+    quoted_amount_mxn: { value: 100000 },
+    sold_amount_mxn: { value: 50000 },
+    collected_amount_mxn: { value: 30000 },
+    sellers_table: [{
+      full_name: 'Vendedor Graficas',
+      sold_amount_mxn: 5000,
+      quoted_amount_mxn: 100000,
+      margin_gap_points: 2,
+      has_sold_data: true,
+      avg_desired_margin: 25,
+    }],
+  }, charts);
+  assert.ok(ventasCharts.sales_funnel.stages.length >= 2);
+  assert.ok(ventasCharts.seller_ranking.length >= 1);
+  assert.ok(ventasCharts.margin_gap_by_seller.length >= 1);
+  assert.ok(ventasCharts.monthly_trend.length > 0);
   assert.strictEqual(resolveProjectDueDate({ fecha_vencimiento: '2026-01-01' }), '2026-01-01');
 });
