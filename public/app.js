@@ -94,6 +94,7 @@ const state = {
   exchangeRates: { MXN: 1, USD: 17, EUR: 19 },
   exchangeUpdatedAt: null,
   selectedProjectId: null,
+  projectDrawerOpen: false,
   selectedClosedProjectId: null,
   selectedUserId: null,
   selectedEmployeeId: null,
@@ -148,17 +149,17 @@ const newProjectButton = document.querySelector('#new-project-button');
 const projectsTable = document.querySelector('#projects-table');
 const closedProjectsTable = document.querySelector('#closed-projects-table');
 const detailPanel = document.querySelector('#detail-panel');
+const projectDetailDrawer = document.querySelector('#project-detail-drawer');
+const projectDetailBackdrop = document.querySelector('#project-detail-backdrop');
+const detailPanelClose = document.querySelector('#detail-panel-close');
 const closedDetailPanel = document.querySelector('#closed-detail-panel');
 const paymentForm = document.querySelector('#payment-form');
 const costForm = document.querySelector('#cost-form');
-const failureReportForm = document.querySelector('#failure-report-form');
-const failureReportMessage = document.querySelector('#failure-report-message');
 const reportsFailurePanel = document.querySelector('#reports-failure-panel');
 const reportsFailureForm = document.querySelector('#reports-failure-form');
 const reportsFailureMessage = document.querySelector('#reports-failure-message');
 const reportsFailureSubtitle = document.querySelector('#reports-failure-subtitle');
 const reportsFailureBack = document.querySelector('#reports-failure-back');
-const detailFailureReportsList = document.querySelector('#detail-failure-reports-list');
 const closedDetailFailureReportsList = document.querySelector('#closed-detail-failure-reports-list');
 const paymentsList = document.querySelector('#payments-list');
 const costsList = document.querySelector('#costs-list');
@@ -931,7 +932,14 @@ async function loadProjects() {
 
   if (state.selectedProjectId) {
     const current = state.projects.find((project) => project.id === state.selectedProjectId);
-    current ? selectProject(current.id) : clearSelection();
+    if (current) {
+      fillProjectForm(current);
+      if (state.projectDrawerOpen) {
+        renderDetail(current);
+      }
+    } else {
+      clearSelection();
+    }
   }
 }
 
@@ -977,6 +985,9 @@ function renderProjects() {
         <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Eliminar</button>
         <button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button>
       </div>`,
+    rowClass: (project) => (
+      state.projectDrawerOpen && state.selectedProjectId === project.id ? 'row-selected' : ''
+    ),
   });
 }
 
@@ -1083,15 +1094,131 @@ function formatPercent(value) {
   return `${Number(value || 0).toFixed(2)}%`;
 }
 
-function selectProject(projectId) {
+let projectDrawerFocusReturn = null;
+let projectDrawerReleaseFocusTrap = null;
+let projectDrawerEscapeHandler = null;
+
+const PROJECT_DRAWER_FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function lockProjectDrawerBodyScroll() {
+  if (document.body.classList.contains('scroll-lock')) {
+    return;
+  }
+  const scrollY = window.scrollY;
+  document.body.dataset.projectDrawerScrollY = String(scrollY);
+  document.body.style.position = 'fixed';
+  document.body.style.top = `-${scrollY}px`;
+  document.body.style.width = '100%';
+  document.body.classList.add('scroll-lock');
+}
+
+function unlockProjectDrawerBodyScroll() {
+  if (!document.body.classList.contains('scroll-lock')) {
+    return;
+  }
+  const scrollY = Number(document.body.dataset.projectDrawerScrollY || 0);
+  document.body.classList.remove('scroll-lock');
+  document.body.style.position = '';
+  document.body.style.top = '';
+  document.body.style.width = '';
+  delete document.body.dataset.projectDrawerScrollY;
+  window.scrollTo(0, scrollY);
+}
+
+function trapProjectDrawerFocus(container) {
+  function onKeyDown(event) {
+    if (event.key !== 'Tab') {
+      return;
+    }
+    const focusables = Array.from(container.querySelectorAll(PROJECT_DRAWER_FOCUSABLE))
+      .filter((el) => !el.disabled && el.offsetParent !== null);
+    if (!focusables.length) {
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+  container.addEventListener('keydown', onKeyDown);
+  return () => container.removeEventListener('keydown', onKeyDown);
+}
+
+function openProjectDrawer() {
+  if (!projectDetailDrawer) {
+    return;
+  }
+  state.projectDrawerOpen = true;
+  projectDetailDrawer.classList.remove('hidden');
+  projectDetailDrawer.setAttribute('aria-hidden', 'false');
+  lockProjectDrawerBodyScroll();
+  renderProjects();
+
+  if (projectDrawerReleaseFocusTrap) {
+    projectDrawerReleaseFocusTrap();
+  }
+  projectDrawerReleaseFocusTrap = detailPanel ? trapProjectDrawerFocus(detailPanel) : null;
+
+  if (projectDrawerEscapeHandler) {
+    document.removeEventListener('keydown', projectDrawerEscapeHandler);
+  }
+  projectDrawerEscapeHandler = (event) => {
+    if (event.key === 'Escape') {
+      closeProjectDrawer();
+    }
+  };
+  document.addEventListener('keydown', projectDrawerEscapeHandler);
+
+  window.requestAnimationFrame(() => {
+    detailPanel?.focus();
+  });
+}
+
+function closeProjectDrawer() {
+  if (!projectDetailDrawer || projectDetailDrawer.classList.contains('hidden')) {
+    return;
+  }
+  state.projectDrawerOpen = false;
+  projectDetailDrawer.classList.add('hidden');
+  projectDetailDrawer.setAttribute('aria-hidden', 'true');
+  unlockProjectDrawerBodyScroll();
+  renderProjects();
+
+  if (projectDrawerReleaseFocusTrap) {
+    projectDrawerReleaseFocusTrap();
+    projectDrawerReleaseFocusTrap = null;
+  }
+  if (projectDrawerEscapeHandler) {
+    document.removeEventListener('keydown', projectDrawerEscapeHandler);
+    projectDrawerEscapeHandler = null;
+  }
+
+  const returnTarget = projectDrawerFocusReturn;
+  projectDrawerFocusReturn = null;
+  if (returnTarget && typeof returnTarget.focus === 'function') {
+    returnTarget.focus();
+  }
+}
+
+function selectProject(projectId, focusReturnEl) {
   const project = state.projects.find((item) => item.id === Number(projectId));
   if (!project) {
     return;
   }
 
   state.selectedProjectId = project.id;
+  if (focusReturnEl) {
+    projectDrawerFocusReturn = focusReturnEl;
+  }
   fillProjectForm(project);
   renderDetail(project);
+  openProjectDrawer();
 }
 
 function addDaysToDateInput(baseDate, days) {
@@ -1126,7 +1253,6 @@ async function loadProjectAssignableEmployees() {
       projectForm?.elements?.id?.value ? projectForm.elements.tecnico_id?.value : null,
       projectForm?.elements?.id?.value ? projectForm.elements.vendedor_id?.value : null,
     );
-    populateFailureReportEmployeeSelects();
     populateReportsFailureEmployeeSelects();
   } catch (_error) {
     state.projectAssignableEmployees = [];
@@ -1160,17 +1286,17 @@ function populateReportExecutedBySelect(selectedId) {
 }
 
 function populateReportsFailureEmployeeSelects() {
+  if (!reportsFailureForm) {
+    return;
+  }
   const employees = state.reportsAssignableEmployees || state.projectAssignableEmployees || [];
   const options = employees.map((emp) => (
     `<option value="${emp.id}">${escapeHtml(emp.full_name)} (${escapeHtml(emp.employee_number)})</option>`
   )).join('');
-  const forms = [reportsFailureForm, failureReportForm].filter(Boolean);
-  forms.forEach((form) => {
-    const failureSelect = form.elements.failure_responsible_employee_id;
-    const solutionSelect = form.elements.solution_responsible_employee_id;
-    if (failureSelect) failureSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
-    if (solutionSelect) solutionSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
-  });
+  const failureSelect = reportsFailureForm.elements.failure_responsible_employee_id;
+  const solutionSelect = reportsFailureForm.elements.solution_responsible_employee_id;
+  if (failureSelect) failureSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
+  if (solutionSelect) solutionSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
 }
 
 function syncReportsFailureResponsibleVisibility() {
@@ -1202,42 +1328,6 @@ function openReportsFailureForm(projectId) {
   populateReportsFailureEmployeeSelects();
   syncReportsFailureResponsibleVisibility();
   setMessage(reportsFailureMessage, '');
-}
-
-function populateFailureReportEmployeeSelects() {
-  if (!failureReportForm) {
-    return;
-  }
-  const options = (state.projectAssignableEmployees || []).map((emp) => (
-    `<option value="${emp.id}">${escapeHtml(emp.full_name)} (${escapeHtml(emp.employee_number)})</option>`
-  )).join('');
-  const failureSelect = failureReportForm.elements.failure_responsible_employee_id;
-  const solutionSelect = failureReportForm.elements.solution_responsible_employee_id;
-  if (failureSelect) {
-    failureSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
-  }
-  if (solutionSelect) {
-    solutionSelect.innerHTML = `<option value="">Seleccione empleado...</option>${options}`;
-  }
-}
-
-function syncFailureResponsibleVisibility() {
-  if (!failureReportForm) {
-    return;
-  }
-  const cause = failureReportForm.elements.cause?.value || 'interna';
-  const wrap = document.querySelector('#failure-responsible-wrap');
-  const failureSelect = failureReportForm.elements.failure_responsible_employee_id;
-  const isInterna = cause === 'interna';
-  if (wrap) {
-    wrap.classList.toggle('hidden', !isInterna);
-  }
-  if (failureSelect) {
-    failureSelect.required = isInterna;
-    if (!isInterna) {
-      failureSelect.value = '';
-    }
-  }
 }
 
 function renderFailureReportEntry(report) {
@@ -1320,7 +1410,7 @@ function resetProjectForm() {
 
 function clearSelection() {
   state.selectedProjectId = null;
-  detailPanel.classList.add('hidden');
+  closeProjectDrawer();
   resetProjectForm();
 }
 
@@ -1470,7 +1560,6 @@ function resetUserForm() {
 }
 
 function renderDetail(project) {
-  detailPanel.classList.remove('hidden');
   document.querySelector('#detail-title').textContent = `#${project.id} - ${project.client_name}`;
   document.querySelector('#detail-subtitle').textContent =
     `Cotizacion ${project.quote_number} | Pedido ${project.order_number} | Tecnico ${project.technician_name}`;
@@ -1488,8 +1577,6 @@ function renderDetail(project) {
   if (drl && typeof renderDetailReports === 'function') {
     renderDetailReports(project.id, drl);
   }
-  loadFailureReports(project.id, detailFailureReportsList);
-  syncFailureResponsibleVisibility();
 
   paymentsList.innerHTML = renderEntries(
     project.payments,
@@ -1649,8 +1736,19 @@ newUserButton.addEventListener('click', resetUserForm);
 projectsTable.addEventListener('click', (event) => {
   const selectButton = event.target.closest('button[data-action="select"]');
   if (selectButton) {
-    selectProject(selectButton.dataset.id);
+    selectProject(selectButton.dataset.id, selectButton);
     return;
+  }
+
+  const row = event.target.closest('tr');
+  if (row && !event.target.closest('button') && !row.querySelector('.muted')) {
+    const idCell = row.querySelector('td.col-number') || row.cells[0];
+    const projectId = idCell?.textContent?.trim();
+    if (projectId) {
+      const openButton = row.querySelector('button[data-action="select"]');
+      selectProject(projectId, openButton || row);
+      return;
+    }
   }
 
   const deleteButton = event.target.closest('button[data-action="delete-project"]');
@@ -1728,40 +1826,23 @@ costForm.addEventListener('submit', async (event) => {
   await loadProjects();
 });
 
-if (failureReportForm) {
-  failureReportForm.elements.cause?.addEventListener('change', syncFailureResponsibleVisibility);
-  syncFailureResponsibleVisibility();
+if (detailPanelClose) {
+  detailPanelClose.addEventListener('click', closeProjectDrawer);
+}
 
-  failureReportForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    if (!state.selectedProjectId) {
-      return;
+if (projectDetailBackdrop && detailPanel) {
+  let projectDrawerBackdropDown = false;
+  projectDetailBackdrop.addEventListener('mousedown', () => {
+    projectDrawerBackdropDown = true;
+  });
+  projectDetailBackdrop.addEventListener('click', () => {
+    if (projectDrawerBackdropDown) {
+      closeProjectDrawer();
     }
-
-    syncFailureResponsibleVisibility();
-    const payload = {
-      cause: failureReportForm.elements.cause.value,
-      problem_description: failureReportForm.elements.problem_description.value.trim(),
-      solution_responsible_employee_id: failureReportForm.elements.solution_responsible_employee_id.value,
-    };
-    if (payload.cause === 'interna') {
-      payload.failure_responsible_employee_id =
-        failureReportForm.elements.failure_responsible_employee_id.value;
-    }
-
-    try {
-      await api(`/api/projects/${state.selectedProjectId}/failure-reports`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      failureReportForm.elements.problem_description.value = '';
-      failureReportForm.elements.failure_responsible_employee_id.value = '';
-      failureReportForm.elements.solution_responsible_employee_id.value = '';
-      setMessage(failureReportMessage, 'Reporte de falla registrado.');
-      await loadFailureReports(state.selectedProjectId, detailFailureReportsList);
-    } catch (error) {
-      setMessage(failureReportMessage, error.message, true);
-    }
+    projectDrawerBackdropDown = false;
+  });
+  detailPanel.addEventListener('mousedown', () => {
+    projectDrawerBackdropDown = false;
   });
 }
 

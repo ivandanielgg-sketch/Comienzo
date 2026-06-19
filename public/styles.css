@@ -1543,3 +1543,113 @@ th.col-number {
 .kpi-ventas-alerts-toggle {
   margin-top: 8px;
 }
+
+/* Project detail drawer (Proyectos) */
+body.scroll-lock {
+  overflow: hidden;
+}
+
+.project-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  pointer-events: none;
+}
+
+.project-drawer:not(.hidden) {
+  pointer-events: auto;
+}
+
+.project-drawer.hidden {
+  display: none;
+}
+
+.project-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.project-drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(520px, 92vw);
+  max-width: 100%;
+  margin: 0;
+  border-radius: 0;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: -8px 0 32px rgba(15, 23, 42, 0.18);
+  transform: translateX(0);
+  animation: project-drawer-in 0.22s ease-out;
+}
+
+@keyframes project-drawer-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.project-drawer-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px 0;
+}
+
+.project-drawer-close {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 14px;
+}
+
+.project-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 16px 24px;
+}
+
+#projects-table tbody tr:not(:has(.muted)) {
+  cursor: pointer;
+}
+
+#projects-table tbody tr.row-selected {
+  background: #e8efff;
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+[data-theme="dark"] #projects-table tbody tr.row-selected {
+  background: rgba(79, 140, 255, 0.15);
+}
+
+@media (max-width: 768px) {
+  .project-drawer-panel {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .project-drawer-body input,
+  .project-drawer-body select,
+  .project-drawer-body textarea {
+    font-size: 16px;
+  }
+
+  .project-drawer-body button {
+    min-height: 44px;
+  }
+
+  .project-drawer-body .layout.two-columns {
+    grid-template-columns: 1fr;
+  }
+}
