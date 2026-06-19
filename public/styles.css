@@ -1637,18 +1637,18 @@ body.scroll-lock {
   padding-top: 20px;
 }
 
-.project-drawer-body .layout.two-columns {
-  display: grid;
-  grid-template-columns: 1fr;
+.project-drawer-body .project-drawer-sections {
+  display: flex;
+  flex-direction: column;
   gap: 28px;
 }
 
-.project-drawer-body .layout.two-columns > div {
+.project-drawer-body .project-drawer-sections > div {
   min-width: 0;
   width: 100%;
 }
 
-.project-drawer-body .layout.two-columns h3 {
+.project-drawer-body .project-drawer-sections h3 {
   margin-top: 0;
   margin-bottom: 12px;
 }
