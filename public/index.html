@@ -247,62 +247,45 @@
             </div>
           </section>
 
-          <section id="detail-panel" class="panel hidden">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow">Proyecto seleccionado</p>
-                <h2 id="detail-title"></h2>
-                <p id="detail-subtitle" class="muted"></p>
-                <p id="detail-description" class="project-description"></p>
+          <div id="project-detail-drawer" class="project-drawer hidden" aria-hidden="true">
+            <div id="project-detail-backdrop" class="project-drawer-backdrop" tabindex="-1"></div>
+            <aside
+              id="detail-panel"
+              class="project-drawer-panel panel"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="detail-title"
+              tabindex="-1"
+            >
+              <div class="project-drawer-toolbar">
+                <button type="button" id="detail-panel-close" class="secondary project-drawer-close" aria-label="Cerrar panel">
+                  ✕ Cerrar
+                </button>
               </div>
-            </div>
+              <div class="project-drawer-body">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">Proyecto seleccionado</p>
+                    <h2 id="detail-title"></h2>
+                    <p id="detail-subtitle" class="muted"></p>
+                    <p id="detail-description" class="project-description"></p>
+                  </div>
+                </div>
 
-            <div class="detail-grid">
-              <article><span>Orden de compra</span><strong id="detail-po"></strong></article>
-              <article><span>Total facturado</span><strong id="detail-invoiced"></strong></article>
-              <article><span>Pendiente de cobro</span><strong id="detail-pending"></strong></article>
-              <article><span>Avance</span><strong id="detail-progress"></strong></article>
-            </div>
+                <div class="detail-grid">
+                  <article><span>Orden de compra</span><strong id="detail-po"></strong></article>
+                  <article><span>Total facturado</span><strong id="detail-invoiced"></strong></article>
+                  <article><span>Pendiente de cobro</span><strong id="detail-pending"></strong></article>
+                  <article><span>Avance</span><strong id="detail-progress"></strong></article>
+                </div>
 
-            <div class="detail-reports-section" style="margin-bottom:16px;">
-              <h3>Reportes generados</h3>
-              <ul id="detail-reports-list" class="entry-list"></ul>
-              <button class="secondary" id="detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
-            </div>
+                <div class="detail-reports-section" style="margin-bottom:16px;">
+                  <h3>Reportes generados</h3>
+                  <ul id="detail-reports-list" class="entry-list"></ul>
+                  <button class="secondary" id="detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
+                </div>
 
-            <div class="detail-reports-section detail-failure-reports-section" style="margin-bottom:16px;">
-              <h3>Reportes de falla</h3>
-              <ul id="detail-failure-reports-list" class="entry-list"></ul>
-              <form id="failure-report-form" class="stack" style="margin-top:12px;">
-                <label>
-                  Causa
-                  <select name="cause" required>
-                    <option value="interna">Interna (REVRAM)</option>
-                    <option value="externa">Externa (cliente)</option>
-                  </select>
-                </label>
-                <label>
-                  Descripcion del problema
-                  <textarea name="problem_description" rows="3" required></textarea>
-                </label>
-                <label id="failure-responsible-wrap">
-                  Responsable de la falla
-                  <select name="failure_responsible_employee_id" id="failure-responsible-select">
-                    <option value="">Seleccione empleado...</option>
-                  </select>
-                </label>
-                <label>
-                  Responsable de solucionarlo
-                  <select name="solution_responsible_employee_id" id="solution-responsible-select" required>
-                    <option value="">Seleccione empleado...</option>
-                  </select>
-                </label>
-                <button type="submit">Registrar reporte de falla</button>
-                <p id="failure-report-message" class="message"></p>
-              </form>
-            </div>
-
-            <div class="layout two-columns">
+                <div class="layout two-columns">
               <div>
                 <h3>Agregar pago</h3>
                 <form id="payment-form" class="stack">
@@ -369,8 +352,10 @@
                 </form>
                 <ul id="costs-list" class="entry-list"></ul>
               </div>
-            </div>
-          </section>
+                </div>
+              </div>
+            </aside>
+          </div>
         </section>
 
         <section id="closed-projects-view" class="hidden">
