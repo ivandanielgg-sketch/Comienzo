@@ -14,8 +14,24 @@
     th, td { border: 1px solid #d1d5db; padding: 5px 8px; text-align: right; }
     th { background: #f0f4ff; color: #1d4ed8; text-align: center; }
     td:first-child, th:first-child { text-align: left; }
+    .ec-print-table { width: 100%; border-collapse: collapse; min-width: 640px; }
+    .ec-print-table th.ec-num-cell,
+    .ec-print-table td.ec-num-cell {
+      white-space: nowrap;
+      text-align: right;
+    }
+    .ec-print-table th:first-child,
+    .ec-print-table td:first-child { text-align: left; }
+    .ec-table-scroll {
+      overflow-x: auto;
+      width: 100%;
+      max-width: 100%;
+      -webkit-overflow-scrolling: touch;
+      margin: 8px 0;
+    }
+    .print-block { position: static; margin-bottom: 16px; width: 100%; }
     .section-title { font-size: 1rem; color: #1d4ed8; margin: 20px 0 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
-    .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 12px 0; }
     .summary-card { border: 1px solid #d1d5db; padding: 10px; border-radius: 6px; }
     .summary-card span { display: block; font-size: 0.72rem; color: #666; }
     .summary-card strong { font-size: 1rem; }
@@ -24,7 +40,6 @@
     .ec-print-bar { height: 14px; border-radius: 3px; }
     .ec-print-bar.exist { background: #f59e0b; }
     .ec-print-bar.proj { background: #10b981; }
-    .ec-table-scroll { overflow-x: auto; width: 100%; }
     @media print {
       .no-print { display: none !important; }
       @page { size: letter; margin: 0.6in; }
@@ -72,18 +87,18 @@
       const emRows = gases.map(function(g) {
         const e = result.existing.emissions[g] || {};
         const p = result.projected.emissions[g] || {};
-        return '<tr><td>' + g + '</td><td>' + fmt(e.masa_kg) + '</td><td>' + fmt(e.volumen_m3) + '</td><td>' + fmt(p.masa_kg) + '</td><td>' + fmt(p.volumen_m3) + '</td></tr>';
+        return '<tr><td>' + g + '</td><td class="ec-num-cell">' + fmt(e.masa_kg) + '</td><td class="ec-num-cell">' + fmt(e.volumen_m3) + '</td><td class="ec-num-cell">' + fmt(p.masa_kg) + '</td><td class="ec-num-cell">' + fmt(p.volumen_m3) + '</td></tr>';
       }).join('');
 
       const periodRows = P.ecBuildPeriodSavings(result, input);
       const opEnabled = Boolean(input.operation?.enabled);
       const periodHeader = opEnabled
-        ? '<tr><th>Periodo</th><th>Combustible ahorrado</th><th>Ahorro de costo</th><th>Ahorro CO2 (ton)</th><th>Ahorro total</th></tr>'
-        : '<tr><th>Periodo</th><th>Combustible ahorrado</th><th>Ahorro de costo</th><th>Ahorro CO2 (ton)</th></tr>';
+        ? '<tr><th>Periodo</th><th class="ec-num-cell">Combustible ahorrado</th><th class="ec-num-cell">Ahorro de costo</th><th class="ec-num-cell">Ahorro CO2 (ton)</th><th class="ec-num-cell">Ahorro total</th></tr>'
+        : '<tr><th>Periodo</th><th class="ec-num-cell">Combustible ahorrado</th><th class="ec-num-cell">Ahorro de costo</th><th class="ec-num-cell">Ahorro CO2 (ton)</th></tr>';
       const periodBody = periodRows.map(function(r) {
         const vol = Number(r.fuelVolume).toLocaleString('es-MX', { maximumFractionDigits: 4 }) + ' ' + r.fuelUnitLabel;
-        const row = '<tr><td>' + r.labelEs + '</td><td>' + vol + '</td><td>' + money(r.fuelCost) + '</td><td>' + fmt(r.co2Ton, 4) + '</td>';
-        return opEnabled ? row + '<td><strong>' + money(r.totalCost) + '</strong></td></tr>' : row + '</tr>';
+        const row = '<tr><td>' + r.labelEs + '</td><td class="ec-num-cell">' + vol + '</td><td class="ec-num-cell">' + money(r.fuelCost) + '</td><td class="ec-num-cell">' + fmt(r.co2Ton, 4) + '</td>';
+        return opEnabled ? row + '<td class="ec-num-cell"><strong>' + money(r.totalCost) + '</strong></td></tr>' : row + '</tr>';
       }).join('');
 
       const op = P.ecOperationAnnual(input);
@@ -123,12 +138,12 @@
         '<div class="summary-card"><span>Stack Heat Loss Savings</span><strong>' + fmt(result.savings.stack_heat_loss_savings_MW, 3) + ' MW</strong></div>' +
         '</div>' +
         opSection +
-        '<div class="section-title">Ahorros por periodo</div>' +
-        '<div class="ec-table-scroll"><table><thead>' + periodHeader + '</thead><tbody>' + periodBody + '</tbody></table></div>' +
+        '<div class="section-title print-block">Ahorros por periodo</div>' +
+        '<div class="ec-table-scroll print-block"><table class="ec-print-table"><thead>' + periodHeader + '</thead><tbody>' + periodBody + '</tbody></table></div>' +
         (opEnabled ? '<p style="font-size:0.78rem;color:#666;">Ahorro total = ahorro combustible + operación (mantenimiento/paros) escalado al periodo.</p>' : '') +
-        '<div class="section-title">Emissions — Existing vs Projected</div>' +
-        '<table><thead><tr><th>Gas</th><th>Mass exist. (kg)</th><th>Vol exist. (m³)</th><th>Mass proj. (kg)</th><th>Vol proj. (m³)</th></tr></thead><tbody>' + emRows + '</tbody></table>' +
-        '<div class="section-title">Charts — Existing vs Projected</div>' +
+        '<div class="section-title print-block">Emissions — Existing vs Projected</div>' +
+        '<div class="ec-table-scroll print-block"><table class="ec-print-table"><thead><tr><th>Gas</th><th class="ec-num-cell">Mass exist. (kg)</th><th class="ec-num-cell">Vol exist. (m³)</th><th class="ec-num-cell">Mass proj. (kg)</th><th class="ec-num-cell">Vol proj. (m³)</th></tr></thead><tbody>' + emRows + '</tbody></table></div>' +
+        '<div class="section-title print-block">Charts — Existing vs Projected</div>' +
         '<div class="ec-print-bars">' +
         barRow('CO2 vol', result.existing.emissions.CO2.volumen_m3, result.projected.emissions.CO2.volumen_m3) +
         barRow('Total vol', result.existing.emissions.total.volumen_m3, result.projected.emissions.total.volumen_m3) +

@@ -1769,6 +1769,82 @@ body.scroll-lock {
   font-variant-numeric: tabular-nums;
 }
 
+/* Resultados apilados — ancho completo, sin encimado */
+.ec-results-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.ec-results-stack > * {
+  min-width: 0;
+  position: static;
+  z-index: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ec-results-block {
+  position: static;
+  z-index: auto;
+  margin-bottom: 16px;
+  background: var(--surface, #fff);
+}
+
+.ec-results-block.panel {
+  overflow: visible;
+}
+
+.ec-kpi-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ec-emissions-panel,
+.ec-savings-panel {
+  clear: both;
+}
+
+.ec-emissions-footnote {
+  margin: 10px 0 0;
+  padding: 0 4px;
+}
+
+.ec-emissions-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ec-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+
+.ec-results-table th.ec-num-cell,
+.ec-results-table td.ec-num-cell,
+.ec-results-table td.calc-cell {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.ec-results-table th:first-child,
+.ec-results-table td:first-child {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ec-bar-chart {
+  width: 100%;
+  min-width: 0;
+}
+
 .ec-bar-chart .ec-bar-row {
   display: grid;
   grid-template-columns: 120px 1fr 1fr;
@@ -1825,4 +1901,19 @@ body.scroll-lock {
 
 .ec-operation-panel .ec-operation-field.hidden {
   display: none;
+}
+
+@media (max-width: 640px) {
+  .ec-kpi-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .ec-page {
+    padding: 12px 12px 32px;
+  }
+
+  .ec-bar-chart .ec-bar-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
 }

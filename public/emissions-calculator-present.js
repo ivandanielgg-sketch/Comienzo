@@ -132,17 +132,17 @@ function ecRenderPeriodSavingsTable(result, input, lang) {
   const header = lang === 'en'
     ? `<tr>
         <th>Period</th>
-        <th>Fuel saved</th>
-        <th>Cost saving</th>
-        <th>CO2 saving (ton)</th>
-        ${opEnabled ? '<th>Total saving</th>' : ''}
+        <th class="ec-num-cell">Fuel saved</th>
+        <th class="ec-num-cell">Cost saving</th>
+        <th class="ec-num-cell">CO2 saving (ton)</th>
+        ${opEnabled ? '<th class="ec-num-cell">Total saving</th>' : ''}
       </tr>`
     : `<tr>
         <th>Periodo</th>
-        <th>Combustible ahorrado</th>
-        <th>Ahorro de costo</th>
-        <th>Ahorro de CO2 (ton)</th>
-        ${opEnabled ? '<th>Ahorro total</th>' : ''}
+        <th class="ec-num-cell">Combustible ahorrado</th>
+        <th class="ec-num-cell">Ahorro de costo</th>
+        <th class="ec-num-cell">Ahorro de CO2 (ton)</th>
+        ${opEnabled ? '<th class="ec-num-cell">Ahorro total</th>' : ''}
       </tr>`;
 
   const body = rows.map((r) => {
@@ -156,10 +156,10 @@ function ecRenderPeriodSavingsTable(result, input, lang) {
     const totalCell = opEnabled ? ecFormatMoney(r.totalCost, currency, lang) : '';
     return `<tr>
       <td>${periodLabel}</td>
-      <td class="calc-cell">${volCell}</td>
-      <td class="calc-cell">${costCell}</td>
-      <td class="calc-cell">${co2Cell}</td>
-      ${opEnabled ? `<td class="calc-cell"><strong>${totalCell}</strong></td>` : ''}
+      <td class="calc-cell ec-num-cell">${volCell}</td>
+      <td class="calc-cell ec-num-cell">${costCell}</td>
+      <td class="calc-cell ec-num-cell">${co2Cell}</td>
+      ${opEnabled ? `<td class="calc-cell ec-num-cell"><strong>${totalCell}</strong></td>` : ''}
     </tr>`;
   }).join('');
 
@@ -171,10 +171,10 @@ function ecRenderPeriodSavingsTable(result, input, lang) {
     : '';
 
   return `
-    <div class="panel ec-period-table-panel" style="margin-top:16px;">
+    <div class="panel ec-period-table-panel ec-results-block">
       <div class="panel-header"><h3>${title}</h3></div>
-      <div class="ec-table-scroll">
-        <table class="emissions-table ec-period-savings-table">
+      <div class="ec-table-scroll ec-emissions-table-wrap">
+        <table class="emissions-table ec-period-savings-table ec-results-table">
           <thead>${header}</thead>
           <tbody>${body}</tbody>
         </table>

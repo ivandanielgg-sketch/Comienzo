@@ -224,37 +224,49 @@ function renderEmissionsTable(result) {
       const p = result.projected.emissions[gas] || {};
       return `<tr>
         <td>${gas}</td>
-        <td class="calc-cell">${fmt(e.masa_kg)}</td>
-        <td class="calc-cell">${fmt(e.volumen_m3)}</td>
-        <td class="calc-cell">${fmt(p.masa_kg)}</td>
-        <td class="calc-cell">${fmt(p.volumen_m3)}</td>
+        <td class="calc-cell ec-num-cell">${fmt(e.masa_kg)}</td>
+        <td class="calc-cell ec-num-cell">${fmt(e.volumen_m3)}</td>
+        <td class="calc-cell ec-num-cell">${fmt(p.masa_kg)}</td>
+        <td class="calc-cell ec-num-cell">${fmt(p.volumen_m3)}</td>
       </tr>`;
     })
     .join('');
 
-  return `<table class="emissions-table ec-results-table">
-    <thead><tr>
-      <th>${t('gas')}</th>
-      <th colspan="2">${t('existing')} — ${t('mass')} / ${t('volume')}</th>
-      <th colspan="2">${t('projected')} — ${t('mass')} / ${t('volume')}</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  const lang = state.lang;
+  const hMassE = lang === 'en' ? 'Mass exist. (kg)' : 'Masa exist. (kg)';
+  const hVolE = lang === 'en' ? 'Vol exist. (m³)' : 'Vol exist. (m³)';
+  const hMassP = lang === 'en' ? 'Mass proj. (kg)' : 'Masa proy. (kg)';
+  const hVolP = lang === 'en' ? 'Vol proj. (m³)' : 'Vol proy. (m³)';
+
+  return `<div class="ec-table-scroll ec-emissions-table-wrap">
+    <table class="emissions-table ec-results-table">
+      <thead><tr>
+        <th>${t('gas')}</th>
+        <th class="ec-num-cell">${hMassE}</th>
+        <th class="ec-num-cell">${hVolE}</th>
+        <th class="ec-num-cell">${hMassP}</th>
+        <th class="ec-num-cell">${hVolP}</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
 }
 
 function renderOperationSummary(input) {
   if (!input.operation?.enabled) return '';
   const op = P().ecOperationAnnual(input);
   const lang = state.lang;
-  return `<div class="panel" style="margin-top:16px;">
+  return `<div class="panel ec-results-block ec-operation-summary">
     <div class="panel-header"><h3>${t('operationSavings')}</h3></div>
-    <table class="emissions-table">
+    <div class="ec-table-scroll">
+    <table class="emissions-table ec-results-table">
       <tbody>
         <tr><td>${t('maintenanceAnnual')}</td><td class="calc-cell">${fmtMoney(op.maintenance)}</td></tr>
         ${input.operation.downtime_enabled ? `<tr><td>${t('downtimeAnnual')}</td><td class="calc-cell">${fmtMoney(op.downtime)}</td></tr>` : ''}
         <tr><td><strong>${lang === 'en' ? 'Total operation (annual)' : 'Total operación (anual)'}</strong></td><td class="calc-cell"><strong>${fmtMoney(op.annual)}</strong></td></tr>
       </tbody>
     </table>
+    </div>
   </div>`;
 }
 
@@ -268,37 +280,42 @@ function renderResults(result, input) {
   const currencyLabel = state.currency === 'USD' ? 'USD' : 'MXN';
 
   el.innerHTML = `
-    <p class="muted ec-currency-badge">${state.lang === 'en' ? 'Currency' : 'Moneda'}: <strong>${currencyLabel}</strong></p>
-    <section class="cards">
-      <article><span>${t('co2Max')}</span><strong>${fmt(result.fuel.CO2_max_pct)} %</strong></article>
-      <article><span>${t('existing')} — Net/Gross</span><strong>${fmt(result.existing.efficiency.net_pct)} / ${fmt(result.existing.efficiency.gross_pct)} %</strong></article>
-      <article><span>${t('projected')} — Net/Gross</span><strong>${fmt(result.projected.efficiency.net_pct)} / ${fmt(result.projected.efficiency.gross_pct)} %</strong></article>
-      <article><span>${t('savings')} combustible</span><strong>${fmt(result.savings.fuel_savings_pct)} %</strong></article>
-    </section>
+    <div class="ec-results-stack">
+      <p class="muted ec-currency-badge ec-results-block">${state.lang === 'en' ? 'Currency' : 'Moneda'}: <strong>${currencyLabel}</strong></p>
 
-    <div class="layout" style="margin-top:16px;">
-      <div class="panel">
+      <section class="cards ec-kpi-cards ec-results-block">
+        <article><span>${t('co2Max')}</span><strong>${fmt(result.fuel.CO2_max_pct)} %</strong></article>
+        <article><span>${t('existing')} — Net/Gross</span><strong>${fmt(result.existing.efficiency.net_pct)} / ${fmt(result.existing.efficiency.gross_pct)} %</strong></article>
+        <article><span>${t('projected')} — Net/Gross</span><strong>${fmt(result.projected.efficiency.net_pct)} / ${fmt(result.projected.efficiency.gross_pct)} %</strong></article>
+        <article><span>${t('savings')} combustible</span><strong>${fmt(result.savings.fuel_savings_pct)} %</strong></article>
+      </section>
+
+      <div class="panel ec-results-block ec-emissions-panel">
         <div class="panel-header"><h3>${t('emissions')}</h3></div>
         ${renderEmissionsTable(result)}
-        <p class="muted">${t('savings')} emisiones (volumétrica): <strong>${fmt(result.savings.emissions_savings_pct)} %</strong></p>
+        <p class="muted ec-emissions-footnote">${t('savings')} emisiones (volumétrica): <strong>${fmt(result.savings.emissions_savings_pct)} %</strong></p>
       </div>
-      <div class="panel">
+
+      <div class="panel ec-results-block ec-savings-panel">
         <div class="panel-header"><h3>${t('savings')}</h3></div>
-        <table class="emissions-table">
-          <tbody>
-            <tr><td>${state.lang === 'en' ? 'Fuel saved' : 'Combustible ahorrado'}</td><td class="calc-cell">${fmt(result.savings.fuel_savings_volume, 3)} m³</td></tr>
-            <tr><td>${state.lang === 'en' ? 'Fuel cost saving' : 'Ahorro costo combustible'}</td><td class="calc-cell">${fmtMoney(result.savings.fuel_cost_savings)}</td></tr>
-            <tr><td>${state.lang === 'en' ? 'Net efficiency gain' : 'Mejora eficiencia neta'}</td><td class="calc-cell">${fmt(result.savings.efficiency_improvement_net)} %</td></tr>
-            <tr><td>${state.lang === 'en' ? 'Gross efficiency gain' : 'Mejora eficiencia bruta'}</td><td class="calc-cell">${fmt(result.savings.efficiency_improvement_gross)} %</td></tr>
-            <tr><td>${state.lang === 'en' ? 'Exhaust ΔT improvement' : 'Mejora ΔT escape'}</td><td class="calc-cell">${fmt(result.savings.exhaust_delta_improvement_c, 1)} °C</td></tr>
-            <tr><td>${state.lang === 'en' ? 'Stack heat loss saving' : 'Ahorro pérdida chimenea'}</td><td class="calc-cell">${fmt(result.savings.stack_heat_loss_savings_MW, 3)} MW</td></tr>
-          </tbody>
-        </table>
+        <div class="ec-table-scroll">
+          <table class="emissions-table ec-results-table">
+            <tbody>
+              <tr><td>${state.lang === 'en' ? 'Fuel saved' : 'Combustible ahorrado'}</td><td class="calc-cell ec-num-cell">${fmt(result.savings.fuel_savings_volume, 3)} m³</td></tr>
+              <tr><td>${state.lang === 'en' ? 'Fuel cost saving' : 'Ahorro costo combustible'}</td><td class="calc-cell ec-num-cell">${fmtMoney(result.savings.fuel_cost_savings)}</td></tr>
+              <tr><td>${state.lang === 'en' ? 'Net efficiency gain' : 'Mejora eficiencia neta'}</td><td class="calc-cell ec-num-cell">${fmt(result.savings.efficiency_improvement_net)} %</td></tr>
+              <tr><td>${state.lang === 'en' ? 'Gross efficiency gain' : 'Mejora eficiencia bruta'}</td><td class="calc-cell ec-num-cell">${fmt(result.savings.efficiency_improvement_gross)} %</td></tr>
+              <tr><td>${state.lang === 'en' ? 'Exhaust ΔT improvement' : 'Mejora ΔT escape'}</td><td class="calc-cell ec-num-cell">${fmt(result.savings.exhaust_delta_improvement_c, 1)} °C</td></tr>
+              <tr><td>${state.lang === 'en' ? 'Stack heat loss saving' : 'Ahorro pérdida chimenea'}</td><td class="calc-cell ec-num-cell">${fmt(result.savings.stack_heat_loss_savings_MW, 3)} MW</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      ${P().ecRenderPeriodSavingsTable(result, input, state.lang)}
+      ${renderOperationSummary(input)}
+      <div id="ec-chart-bars" class="ec-bar-chart panel ec-results-block"></div>
     </div>
-    ${P().ecRenderPeriodSavingsTable(result, input, state.lang)}
-    ${renderOperationSummary(input)}
-    <div id="ec-chart-bars" class="ec-bar-chart panel" style="margin-top:16px;"></div>
   `;
 
   renderBarChart(result);
