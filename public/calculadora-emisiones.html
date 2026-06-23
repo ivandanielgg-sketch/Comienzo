@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Calculadora de Emisiones — REVRAM</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="ec-page">
+      <header class="topbar ec-topbar">
+        <div>
+          <p class="eyebrow" data-i18n="subtitle">Combustion Performance Data — Autoflame 2020</p>
+          <h1 data-i18n="title">Calculadora de Emisiones y Ahorro de Combustible</h1>
+        </div>
+        <div class="topbar-actions">
+          <select id="ec-lang" aria-label="Idioma">
+            <option value="es">ES</option>
+            <option value="en">EN</option>
+          </select>
+          <a href="/" class="secondary button-link" data-i18n="back">Volver al panel</a>
+        </div>
+      </header>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2 data-i18n="fuel">Combustible</h2>
+        </div>
+        <form id="ec-form" class="grid-form ec-form" onsubmit="return false;">
+          <label>
+            <span data-i18n="fuel">Combustible</span>
+            <select id="ec-fuel-select"></select>
+          </label>
+          <label>
+            <span data-i18n="cv">Poder Calorífico (MJ/kg)</span>
+            <input id="ec-cv" type="number" step="0.01" value="58.13" />
+          </label>
+          <label>
+            <span data-i18n="sg">Gravedad Específica</span>
+            <input id="ec-sg" type="number" step="0.001" value="0.63" />
+          </label>
+          <label class="ec-custom-comp hidden"><span>C (%)</span><input id="ec-C" type="number" step="0.001" value="75.7" /></label>
+          <label class="ec-custom-comp hidden"><span>H (%)</span><input id="ec-H" type="number" step="0.001" value="23.5" /></label>
+          <label class="ec-custom-comp hidden"><span>S (%)</span><input id="ec-S" type="number" step="0.001" value="0" /></label>
+          <label class="ec-custom-comp hidden"><span>N (%)</span><input id="ec-N" type="number" step="0.001" value="0.8" /></label>
+          <label class="ec-custom-comp hidden"><span>O (%)</span><input id="ec-O" type="number" step="0.001" value="0" /></label>
+          <label class="ec-custom-comp hidden"><span>W (%)</span><input id="ec-W" type="number" step="0.001" value="0" /></label>
+        </form>
+      </section>
+
+      <div class="layout ec-layout">
+        <section class="panel">
+          <div class="panel-header"><h2 data-i18n="ambient">Condiciones ambiente</h2></div>
+          <div class="grid-form">
+            <label><span data-i18n="temp">Temperatura (°C)</span><input id="ec-temp" type="number" step="0.1" value="25" /></label>
+            <label><span data-i18n="pressure">Presión (kPa)</span><input id="ec-pressure" type="number" step="0.01" value="101.33" /></label>
+          </div>
+          <div class="panel-header" style="margin-top:12px;"><h2 data-i18n="consumption">Combustible usado</h2></div>
+          <div class="grid-form">
+            <label>Consumo<input id="ec-consumption" type="number" step="0.01" value="35910" /></label>
+            <label>Unidad<select id="ec-consumption-unit"><option value="m3">m³</option><option value="kWh">kWh</option></select></label>
+            <label>Periodo<select id="ec-consumption-period">
+              <option value="hour">Hora</option><option value="day">Día</option><option value="week">Semana</option>
+              <option value="month" selected>Mes</option><option value="quarter">Trimestre</option><option value="year">Año</option>
+            </select></label>
+            <label><span data-i18n="unitCost">Costo unitario</span><input id="ec-unit-cost" type="number" step="0.01" value="4.57" /></label>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header"><h2>Reporte</h2></div>
+          <div class="grid-form">
+            <label>Company<input id="ec-company" type="text" placeholder="Empresa" /></label>
+            <label>Site<input id="ec-site" type="text" placeholder="Planta / Sitio" /></label>
+            <label>Engineer<input id="ec-engineer" type="text" placeholder="Ingeniero" /></label>
+          </div>
+        </section>
+      </div>
+
+      <div class="layout ec-layout">
+        <section class="panel">
+          <div class="panel-header"><h2 data-i18n="existing">Desempeño existente</h2></div>
+          <div class="grid-form">
+            <label class="ec-o2-field"><span data-i18n="o2">O2 (%)</span><input id="ec-o2-exist" type="number" step="0.01" value="7" /></label>
+            <label class="ec-co2-field hidden"><span data-i18n="co2">CO2 (%)</span><input id="ec-co2-exist" type="number" step="0.01" value="8.06" /></label>
+            <label><span data-i18n="flueTemp">Temp. gases escape (°C)</span><input id="ec-flue-exist" type="number" step="1" value="169" /></label>
+            <label class="checkbox-row"><input id="ec-use-co2" type="checkbox" /><span data-i18n="useCo2">Usar CO2 en lugar de O2</span></label>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><h2 data-i18n="projected">Desempeño proyectado</h2></div>
+          <div class="grid-form">
+            <label class="ec-o2-field"><span data-i18n="o2">O2 (%)</span><input id="ec-o2-proj" type="number" step="0.01" value="3" /></label>
+            <label class="ec-co2-field hidden"><span data-i18n="co2">CO2 (%)</span><input id="ec-co2-proj" type="number" step="0.01" value="10.36" /></label>
+            <label><span data-i18n="flueTemp">Temp. gases escape (°C)</span><input id="ec-flue-proj" type="number" step="1" value="142" /></label>
+          </div>
+          <div class="grid-form" style="margin-top:8px;">
+            <label class="checkbox-row"><input id="ec-mm-enabled" type="checkbox" checked /><span data-i18n="mm">Ahorro MM (%)</span><input id="ec-mm" type="number" step="0.1" value="3" style="max-width:80px;" /></label>
+            <label class="checkbox-row"><input id="ec-ega-enabled" type="checkbox" /><span data-i18n="ega">Ahorro EGA (%)</span><input id="ec-ega" type="number" step="0.1" value="0" style="max-width:80px;" /></label>
+          </div>
+        </section>
+      </div>
+
+      <div class="ec-actions">
+        <button id="ec-calculate-btn" type="button" data-i18n="calculate">Calcular</button>
+        <button id="ec-export-btn" class="secondary" type="button" data-i18n="export">Exportar reporte</button>
+        <p id="ec-message" class="message"></p>
+      </div>
+
+      <section id="ec-results" class="ec-results"></section>
+    </main>
+    <script src="/emissions-calculator.js"></script>
+  </body>
+</html>

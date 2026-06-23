@@ -66,6 +66,7 @@ function applyPermissionVisibility() {
     'projects-tab': canAccess('projects', 'view'),
     'closed-projects-tab': canAccess('closedProjects', 'view'),
     'reports-tab': canAccess('reports', 'view'),
+    'emissions-calc-link': canAccess('reports', 'view'),
     'report-archive-tab': canAccess('reportsArchive', 'view'),
     'vacations-tab': canAccess('vacations', 'view'),
     'ecovis-tab': canAccess('ecovisAccount', 'view'),
@@ -3912,6 +3913,8 @@ function applyRoleVisibility() {
   if (archiveTab) archiveTab.classList.toggle('hidden', !canAccess('reportsArchive', 'view'));
   const reportsTab = document.getElementById('reports-tab');
   if (reportsTab) reportsTab.classList.toggle('hidden', !canAccess('reports', 'view'));
+  const emissionsLink = document.getElementById('emissions-calc-link');
+  if (emissionsLink) emissionsLink.classList.toggle('hidden', !canAccess('reports', 'view'));
   const backupCreateBtn = document.getElementById('backup-create-btn');
   const backupImportBtn = document.getElementById('backup-import-btn');
   if (backupCreateBtn) backupCreateBtn.classList.toggle('hidden', !canAccess('backups', 'backup'));

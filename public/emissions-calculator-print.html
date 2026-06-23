@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Emissions Calculator Report — REVRAM</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    body { padding: 24px; background: #fff; color: #111; max-width: 900px; margin: 0 auto; }
+    .print-header { border-bottom: 2px solid #1d4ed8; margin-bottom: 20px; padding-bottom: 12px; }
+    .print-header h1 { color: #1d4ed8; margin: 0 0 8px; font-size: 1.4rem; }
+    .print-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 0.9rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin: 12px 0; }
+    th, td { border: 1px solid #d1d5db; padding: 5px 8px; text-align: right; }
+    th { background: #f0f4ff; color: #1d4ed8; text-align: center; }
+    td:first-child, th:first-child { text-align: left; }
+    .section-title { font-size: 1rem; color: #1d4ed8; margin: 20px 0 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+    .summary-card { border: 1px solid #d1d5db; padding: 10px; border-radius: 6px; }
+    .summary-card span { display: block; font-size: 0.72rem; color: #666; }
+    .summary-card strong { font-size: 1rem; }
+    .ec-print-bars { margin: 16px 0; }
+    .ec-print-bar-row { display: grid; grid-template-columns: 100px 1fr 1fr; gap: 8px; align-items: center; margin: 6px 0; font-size: 0.78rem; }
+    .ec-print-bar { height: 14px; border-radius: 3px; }
+    .ec-print-bar.exist { background: #f59e0b; }
+    .ec-print-bar.proj { background: #10b981; }
+    @media print {
+      .no-print { display: none !important; }
+      @page { size: letter; margin: 0.6in; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print" style="margin-bottom:16px;">
+    <button type="button" id="print-btn">Imprimir / Guardar PDF</button>
+    <button type="button" onclick="window.close()" class="secondary">Cerrar</button>
+  </div>
+  <div id="print-root">Cargando reporte...</div>
+  <script>
+    function escapeHtml(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    function fmt(n, d) {
+      if (n == null) return '—';
+      return Number(n).toLocaleString('es-MX', { minimumFractionDigits: d||2, maximumFractionDigits: d||2 });
+    }
+    function render() {
+      let payload;
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const fromQuery = params.get('data');
+        payload = fromQuery
+          ? JSON.parse(decodeURIComponent(fromQuery))
+          : JSON.parse(sessionStorage.getItem('ec-report-payload') || '{}');
+      } catch {
+        document.getElementById('print-root').textContent = 'Datos de reporte inválidos.';
+        return;
+      }
+      const { input, result } = payload;
+      if (!result || !result.ok) {
+        document.getElementById('print-root').textContent = 'Sin resultados válidos.';
+        return;
+      }
+      const date = new Date().toLocaleDateString('es-MX');
+      const gases = ['O2','CO2','CO','SO2','NO','H2O','N2','total'];
+      const emRows = gases.map(function(g) {
+        const e = result.existing.emissions[g] || {};
+        const p = result.projected.emissions[g] || {};
+        return '<tr><td>' + g + '</td><td>' + fmt(e.masa_kg) + '</td><td>' + fmt(e.volumen_m3) + '</td><td>' + fmt(p.masa_kg) + '</td><td>' + fmt(p.volumen_m3) + '</td></tr>';
+      }).join('');
+
+      const maxBar = Math.max(result.existing.emissions.total.volumen_m3, result.projected.emissions.total.volumen_m3);
+      function barRow(label, exist, proj) {
+        const wE = maxBar ? (exist / maxBar * 100) : 0;
+        const wP = maxBar ? (proj / maxBar * 100) : 0;
+        return '<div class="ec-print-bar-row"><span>' + label + '</span><div><div class="ec-print-bar exist" style="width:' + wE + '%"></div> ' + fmt(exist,0) + '</div><div><div class="ec-print-bar proj" style="width:' + wP + '%"></div> ' + fmt(proj,0) + '</div></div>';
+      }
+
+      document.getElementById('print-root').innerHTML =
+        '<div class="print-header"><h1>Emissions Calculator 2020</h1><p>Combustion Performance Data — Autoflame</p></div>' +
+        '<div class="print-meta">' +
+        '<p><strong>Company:</strong> ' + escapeHtml(input.report?.company) + '</p>' +
+        '<p><strong>Site:</strong> ' + escapeHtml(input.report?.site) + '</p>' +
+        '<p><strong>Engineer:</strong> ' + escapeHtml(input.report?.engineer) + '</p>' +
+        '<p><strong>Date:</strong> ' + escapeHtml(date) + '</p></div>' +
+        '<div class="section-title">Fuel &amp; Ambient</div>' +
+        '<p>CV: ' + fmt(result.fuel.CV_MJ_kg) + ' MJ/kg · SG: ' + fmt(result.fuel.SG, 3) + ' · Max CO2: ' + fmt(result.fuel.CO2_max_pct) + ' %</p>' +
+        '<p>Ambiente: ' + fmt(result.ambient.temperature_c, 1) + ' °C, ' + fmt(result.ambient.pressure_kpa, 2) + ' kPa</p>' +
+        '<div class="section-title">Performance Summary</div>' +
+        '<div class="summary-grid">' +
+        '<div class="summary-card"><span>Existing Net/Gross Eff.</span><strong>' + fmt(result.existing.efficiency.net_pct) + ' / ' + fmt(result.existing.efficiency.gross_pct) + ' %</strong></div>' +
+        '<div class="summary-card"><span>Projected Net/Gross Eff.</span><strong>' + fmt(result.projected.efficiency.net_pct) + ' / ' + fmt(result.projected.efficiency.gross_pct) + ' %</strong></div>' +
+        '<div class="summary-card"><span>Fuel Savings</span><strong>' + fmt(result.savings.fuel_savings_pct) + ' %</strong></div>' +
+        '<div class="summary-card"><span>Emissions Savings (vol.)</span><strong>' + fmt(result.savings.emissions_savings_pct) + ' %</strong></div>' +
+        '<div class="summary-card"><span>Cost Savings</span><strong>$' + fmt(result.savings.fuel_cost_savings) + '</strong></div>' +
+        '<div class="summary-card"><span>Stack Heat Loss Savings</span><strong>' + fmt(result.savings.stack_heat_loss_savings_MW, 3) + ' MW</strong></div>' +
+        '</div>' +
+        '<div class="section-title">Emissions — Existing vs Projected</div>' +
+        '<table><thead><tr><th>Gas</th><th>Mass exist. (kg)</th><th>Vol exist. (m³)</th><th>Mass proj. (kg)</th><th>Vol proj. (m³)</th></tr></thead><tbody>' + emRows + '</tbody></table>' +
+        '<div class="section-title">Charts — Existing vs Projected</div>' +
+        '<div class="ec-print-bars">' +
+        barRow('CO2 vol', result.existing.emissions.CO2.volumen_m3, result.projected.emissions.CO2.volumen_m3) +
+        barRow('Total vol', result.existing.emissions.total.volumen_m3, result.projected.emissions.total.volumen_m3) +
+        barRow('Fuel m³', result.existing.consumption, result.projected.consumption) +
+        '</div>' +
+        '<p style="font-size:0.75rem;color:#666;margin-top:24px;"><em>Reporte generado por Control de Proyectos REVRAM — Calculadora de Emisiones Autoflame.</em></p>';
+    }
+    render();
+    document.getElementById('print-btn').addEventListener('click', function() { window.print(); });
+  </script>
+</body>
+</html>
