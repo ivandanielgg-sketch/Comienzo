@@ -1729,3 +1729,100 @@ body.scroll-lock {
     transform: translateX(0);
   }
 }
+
+/* Emissions calculator */
+.ec-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px 20px 40px;
+}
+
+.ec-topbar {
+  margin-bottom: 20px;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  padding: 0.55rem 1rem;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.ec-layout {
+  margin-top: 16px;
+}
+
+.ec-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 20px 0;
+}
+
+.ec-results .calc-cell,
+.ec-results-table .calc-cell {
+  background: var(--surface-muted, #f3f4f6);
+  font-variant-numeric: tabular-nums;
+}
+
+.ec-bar-chart .ec-bar-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 1fr;
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+  font-size: 0.85rem;
+}
+
+.ec-bar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ec-bar {
+  height: 16px;
+  border-radius: 4px;
+  min-width: 2px;
+}
+
+.ec-bar.exist {
+  background: #f59e0b;
+}
+
+.ec-bar.proj {
+  background: #10b981;
+}
+
+.message.error {
+  color: #b91c1c;
+  background: #fef2f2;
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.ec-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ec-period-savings-table {
+  min-width: 520px;
+}
+
+.ec-period-table-panel {
+  width: 100%;
+}
+
+.ec-currency-badge {
+  margin-bottom: 8px;
+}
+
+.ec-operation-panel .ec-operation-field.hidden {
+  display: none;
+}

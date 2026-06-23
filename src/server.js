@@ -29,6 +29,7 @@ const { formatDateTimeCDMX } = require('./dateHelper');
 const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES, isAdminOnlyModule } = require('./permissions');
 const { registerNewModules, updateSessionActivity, closeSessionActivity } = require("./newModules");
 const { registerKpiRoutes } = require('./kpisRoutes');
+const { calculate: calculateEmissions, validateInput: validateEmissionsInput, FUEL_LIBRARY } = require('./lib/combustion');
 const { ATTENDANCE_STATUSES, VALID_STATUS_CODES, VALID_WEEK_STATUSES, DAY_COLUMNS, calculateWeekRange, calculateAttendanceSummary, generateDefaultAttendance, validateStatusCode, employeeHasOutsideWork } = require('./attendance');
 
 const app = express();
@@ -128,6 +129,10 @@ app.use(
     },
   }),
 );
+
+app.get('/calculadora-emisiones', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'calculadora-emisiones.html'));
+});
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -5062,6 +5067,22 @@ app.put('/api/service-quoter/settings', requireAuth, requirePermission('serviceQ
 });
 
 // ===================== END SERVICE QUOTER MODULE =====================
+
+// ===================== EMISSIONS CALCULATOR MODULE =====================
+
+app.get('/api/emissions/fuels', requireAuth, requirePermission('reports', 'view'), (req, res) => {
+  res.json(Object.values(FUEL_LIBRARY));
+});
+
+app.post('/api/emissions/calculate', requireAuth, requirePermission('reports', 'view'), (req, res) => {
+  const result = calculateEmissions(req.body || {});
+  if (!result.ok) {
+    return res.status(400).json({ ok: false, errors: result.errors });
+  }
+  res.json(result);
+});
+
+// ===================== END EMISSIONS CALCULATOR MODULE =====================
 
 // ===================== BACKUP MODULE =====================
 
