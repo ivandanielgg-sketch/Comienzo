@@ -3,3 +3,4 @@ data/*.db
 data/*.db-*
 .env
 npm-debug.log*
+docs/CODIGO_COMPLETO_PARA_ANALISIS.txt
