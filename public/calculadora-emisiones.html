@@ -63,7 +63,15 @@
               <option value="hour">Hora</option><option value="day">Día</option><option value="week">Semana</option>
               <option value="month" selected>Mes</option><option value="quarter">Trimestre</option><option value="year">Año</option>
             </select></label>
+            <label>
+              <span data-i18n="currency">Moneda</span>
+              <select id="ec-currency">
+                <option value="MXN" selected>$ MXN</option>
+                <option value="USD">$ USD</option>
+              </select>
+            </label>
             <label><span data-i18n="unitCost">Costo unitario</span><input id="ec-unit-cost" type="number" step="0.01" value="4.57" /></label>
+            <p id="ec-currency-hint" class="muted" style="grid-column:1/-1;font-size:0.85rem;margin:0;"></p>
           </div>
         </section>
 
@@ -101,6 +109,30 @@
         </section>
       </div>
 
+      <section class="panel ec-operation-panel">
+        <div class="panel-header">
+          <h2 data-i18n="operationSavings">Ahorros adicionales de operación</h2>
+        </div>
+        <div class="grid-form">
+          <label class="checkbox-row" style="grid-column:1/-1;">
+            <input id="ec-operation-enabled" type="checkbox" />
+            <span data-i18n="operationEnable">Incluir ahorros de mantenimiento y paros</span>
+          </label>
+          <label class="ec-operation-field hidden">
+            <span data-i18n="maintenanceAnnual">Ahorro mantenimiento ($/año)</span>
+            <input id="ec-maintenance-annual" type="number" step="0.01" min="0" value="0" />
+          </label>
+          <label class="checkbox-row ec-operation-field hidden">
+            <input id="ec-downtime-enabled" type="checkbox" />
+            <span data-i18n="downtimeEnable">Incluir ahorro por paros/downtime</span>
+          </label>
+          <label class="ec-operation-field hidden" id="ec-downtime-annual-wrap">
+            <span data-i18n="downtimeAnnual">Ahorro por reducción de paros ($/año)</span>
+            <input id="ec-downtime-annual" type="number" step="0.01" min="0" value="0" />
+          </label>
+        </div>
+      </section>
+
       <div class="ec-actions">
         <button id="ec-calculate-btn" type="button" data-i18n="calculate">Calcular</button>
         <button id="ec-export-btn" class="secondary" type="button" data-i18n="export">Exportar reporte</button>
@@ -109,6 +141,7 @@
 
       <section id="ec-results" class="ec-results"></section>
     </main>
+    <script src="/emissions-calculator-present.js"></script>
     <script src="/emissions-calculator.js"></script>
   </body>
 </html>

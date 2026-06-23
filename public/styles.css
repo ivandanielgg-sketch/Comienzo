@@ -1804,3 +1804,25 @@ body.scroll-lock {
   padding: 10px 12px;
   border-radius: 8px;
 }
+
+.ec-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ec-period-savings-table {
+  min-width: 520px;
+}
+
+.ec-period-table-panel {
+  width: 100%;
+}
+
+.ec-currency-badge {
+  margin-bottom: 8px;
+}
+
+.ec-operation-panel .ec-operation-field.hidden {
+  display: none;
+}

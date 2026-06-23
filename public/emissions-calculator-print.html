@@ -24,6 +24,7 @@
     .ec-print-bar { height: 14px; border-radius: 3px; }
     .ec-print-bar.exist { background: #f59e0b; }
     .ec-print-bar.proj { background: #10b981; }
+    .ec-table-scroll { overflow-x: auto; width: 100%; }
     @media print {
       .no-print { display: none !important; }
       @page { size: letter; margin: 0.6in; }
@@ -36,6 +37,7 @@
     <button type="button" onclick="window.close()" class="secondary">Cerrar</button>
   </div>
   <div id="print-root">Cargando reporte...</div>
+  <script src="/emissions-calculator-present.js"></script>
   <script>
     function escapeHtml(s) {
       return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -45,6 +47,7 @@
       return Number(n).toLocaleString('es-MX', { minimumFractionDigits: d||2, maximumFractionDigits: d||2 });
     }
     function render() {
+      const P = window.EmissionsCalculatorPresent;
       let payload;
       try {
         const params = new URLSearchParams(window.location.search);
@@ -61,6 +64,9 @@
         document.getElementById('print-root').textContent = 'Sin resultados válidos.';
         return;
       }
+      const lang = 'es';
+      const currency = input.currency || 'MXN';
+      const money = (n) => P.ecFormatMoney(n, currency, lang);
       const date = new Date().toLocaleDateString('es-MX');
       const gases = ['O2','CO2','CO','SO2','NO','H2O','N2','total'];
       const emRows = gases.map(function(g) {
@@ -68,6 +74,26 @@
         const p = result.projected.emissions[g] || {};
         return '<tr><td>' + g + '</td><td>' + fmt(e.masa_kg) + '</td><td>' + fmt(e.volumen_m3) + '</td><td>' + fmt(p.masa_kg) + '</td><td>' + fmt(p.volumen_m3) + '</td></tr>';
       }).join('');
+
+      const periodRows = P.ecBuildPeriodSavings(result, input);
+      const opEnabled = Boolean(input.operation?.enabled);
+      const periodHeader = opEnabled
+        ? '<tr><th>Periodo</th><th>Combustible ahorrado</th><th>Ahorro de costo</th><th>Ahorro CO2 (ton)</th><th>Ahorro total</th></tr>'
+        : '<tr><th>Periodo</th><th>Combustible ahorrado</th><th>Ahorro de costo</th><th>Ahorro CO2 (ton)</th></tr>';
+      const periodBody = periodRows.map(function(r) {
+        const vol = Number(r.fuelVolume).toLocaleString('es-MX', { maximumFractionDigits: 4 }) + ' ' + r.fuelUnitLabel;
+        const row = '<tr><td>' + r.labelEs + '</td><td>' + vol + '</td><td>' + money(r.fuelCost) + '</td><td>' + fmt(r.co2Ton, 4) + '</td>';
+        return opEnabled ? row + '<td><strong>' + money(r.totalCost) + '</strong></td></tr>' : row + '</tr>';
+      }).join('');
+
+      const op = P.ecOperationAnnual(input);
+      let opSection = '';
+      if (opEnabled) {
+        opSection = '<div class="section-title">Ahorros adicionales de operación (anual)</div><p>' +
+          'Mantenimiento: ' + money(op.maintenance) +
+          (input.operation.downtime_enabled ? ' · Paros/downtime: ' + money(op.downtime) : '') +
+          ' · <strong>Total: ' + money(op.annual) + '</strong></p>';
+      }
 
       const maxBar = Math.max(result.existing.emissions.total.volumen_m3, result.projected.emissions.total.volumen_m3);
       function barRow(label, exist, proj) {
@@ -82,7 +108,8 @@
         '<p><strong>Company:</strong> ' + escapeHtml(input.report?.company) + '</p>' +
         '<p><strong>Site:</strong> ' + escapeHtml(input.report?.site) + '</p>' +
         '<p><strong>Engineer:</strong> ' + escapeHtml(input.report?.engineer) + '</p>' +
-        '<p><strong>Date:</strong> ' + escapeHtml(date) + '</p></div>' +
+        '<p><strong>Date:</strong> ' + escapeHtml(date) + '</p>' +
+        '<p><strong>Moneda / Currency:</strong> ' + escapeHtml(currency) + '</p></div>' +
         '<div class="section-title">Fuel &amp; Ambient</div>' +
         '<p>CV: ' + fmt(result.fuel.CV_MJ_kg) + ' MJ/kg · SG: ' + fmt(result.fuel.SG, 3) + ' · Max CO2: ' + fmt(result.fuel.CO2_max_pct) + ' %</p>' +
         '<p>Ambiente: ' + fmt(result.ambient.temperature_c, 1) + ' °C, ' + fmt(result.ambient.pressure_kpa, 2) + ' kPa</p>' +
@@ -92,9 +119,13 @@
         '<div class="summary-card"><span>Projected Net/Gross Eff.</span><strong>' + fmt(result.projected.efficiency.net_pct) + ' / ' + fmt(result.projected.efficiency.gross_pct) + ' %</strong></div>' +
         '<div class="summary-card"><span>Fuel Savings</span><strong>' + fmt(result.savings.fuel_savings_pct) + ' %</strong></div>' +
         '<div class="summary-card"><span>Emissions Savings (vol.)</span><strong>' + fmt(result.savings.emissions_savings_pct) + ' %</strong></div>' +
-        '<div class="summary-card"><span>Cost Savings</span><strong>$' + fmt(result.savings.fuel_cost_savings) + '</strong></div>' +
+        '<div class="summary-card"><span>Cost Savings (fuel)</span><strong>' + money(result.savings.fuel_cost_savings) + '</strong></div>' +
         '<div class="summary-card"><span>Stack Heat Loss Savings</span><strong>' + fmt(result.savings.stack_heat_loss_savings_MW, 3) + ' MW</strong></div>' +
         '</div>' +
+        opSection +
+        '<div class="section-title">Ahorros por periodo</div>' +
+        '<div class="ec-table-scroll"><table><thead>' + periodHeader + '</thead><tbody>' + periodBody + '</tbody></table></div>' +
+        (opEnabled ? '<p style="font-size:0.78rem;color:#666;">Ahorro total = ahorro combustible + operación (mantenimiento/paros) escalado al periodo.</p>' : '') +
         '<div class="section-title">Emissions — Existing vs Projected</div>' +
         '<table><thead><tr><th>Gas</th><th>Mass exist. (kg)</th><th>Vol exist. (m³)</th><th>Mass proj. (kg)</th><th>Vol proj. (m³)</th></tr></thead><tbody>' + emRows + '</tbody></table>' +
         '<div class="section-title">Charts — Existing vs Projected</div>' +
@@ -103,7 +134,7 @@
         barRow('Total vol', result.existing.emissions.total.volumen_m3, result.projected.emissions.total.volumen_m3) +
         barRow('Fuel m³', result.existing.consumption, result.projected.consumption) +
         '</div>' +
-        '<p style="font-size:0.75rem;color:#666;margin-top:24px;"><em>Reporte generado por Control de Proyectos REVRAM — Calculadora de Emisiones Autoflame.</em></p>';
+        '<p style="font-size:0.75rem;color:#666;margin-top:24px;"><em>Reporte generado por Control de Proyectos REVRAM — Calculadora de Emisiones Autoflame. Montos en ' + escapeHtml(currency) + ' (sin conversión FX).</em></p>';
     }
     render();
     document.getElementById('print-btn').addEventListener('click', function() { window.print(); });
