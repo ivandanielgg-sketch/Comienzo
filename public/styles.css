@@ -1167,6 +1167,141 @@ th.col-number {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.ecovis-cards article small {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--muted, #667085);
+}
+
+.ecovis-account-header {
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border-radius: 12px;
+  border: 1px solid #d0d5dd;
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2f6 100%);
+}
+
+.ecovis-account-header.is-ecovis-owes {
+  border-color: #abefc6;
+  background: linear-gradient(135deg, #f6fef9 0%, #dcfae6 100%);
+}
+
+.ecovis-account-header.is-revram-owes {
+  border-color: #f9dbaf;
+  background: linear-gradient(135deg, #fffcf5 0%, #fef0c7 100%);
+}
+
+.ecovis-account-header.is-settled {
+  border-color: #d0d5dd;
+}
+
+.ecovis-account-status {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.ecovis-account-amount {
+  margin: 4px 0 14px;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.ecovis-account-header.is-ecovis-owes .ecovis-account-status,
+.ecovis-account-header.is-ecovis-owes .ecovis-account-amount {
+  color: #087443;
+}
+
+.ecovis-account-header.is-revram-owes .ecovis-account-status,
+.ecovis-account-header.is-revram-owes .ecovis-account-amount {
+  color: #b54708;
+}
+
+.ecovis-equation {
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+  font-size: 0.9rem;
+}
+
+.ecovis-equation-row,
+.ecovis-equation-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: help;
+}
+
+.ecovis-equation-total {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(16, 24, 40, 0.15);
+  font-weight: 700;
+}
+
+.ecovis-equation-total em {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--muted, #667085);
+}
+
+.ecovis-card-warn {
+  border-color: #f9dbaf !important;
+  box-shadow: inset 3px 0 0 #f79009;
+}
+
+.ecovis-card-warn.is-ok {
+  border-color: transparent !important;
+  box-shadow: none;
+}
+
+.ecovis-statement-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--muted, #667085);
+}
+
+.ecovis-statement-meta {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.ecovis-ledger-wrapper {
+  overflow-x: auto;
+}
+
+.ecovis-ledger-table {
+  min-width: 720px;
+}
+
+.ecovis-ledger-table .num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ecovis-ledger-row-cancelled td {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.ecovis-ledger-row-memo td {
+  opacity: 0.85;
+  font-style: italic;
+}
+
+.ecovis-ledger-reason {
+  display: block;
+  font-size: 0.75rem;
+  color: #b42318;
+  text-decoration: none;
+  font-style: normal;
+}
+
 .ecovis-balance-card {
   grid-column: 1 / -1;
 }
@@ -1182,6 +1317,16 @@ th.col-number {
 .ecovis-status-parcialmente_pagado { background: #e0f2fe; color: #075985; }
 .ecovis-status-pagado { background: #dcfae6; color: #087443; }
 .ecovis-status-cancelado { background: #fee4e2; color: #b42318; }
+
+@media (max-width: 720px) {
+  .ecovis-account-amount {
+    font-size: 1.3rem;
+  }
+
+  .ecovis-equation {
+    max-width: none;
+  }
+}
 
 .search-row {
   display: flex;

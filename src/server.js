@@ -23,7 +23,25 @@ const {
   matchesSearchText,
   matchesAnySearchField,
 } = require('./search');
-const { calculateEcovisAccountSummary, calculateProjectPaidAmountMXN, calculateProjectStatus, calculatePaymentUnallocated, calculatePurchaseOrderBalance, convertToMXN, roundMoney: roundMoneyEcovis, calculateEcovisProjectPaymentStatus, normalizePurchaseOrderNumber, amountsDiffer, calculateEcovisProjectBalance, calculateEcovisPurchaseOrderBalance, calculateEcovisPaymentUnallocatedAmount } = require('./ecovis');
+const {
+  calculateEcovisAccountSummary,
+  calculateProjectPaidAmountMXN,
+  calculateProjectStatus,
+  calculatePaymentUnallocated,
+  calculatePurchaseOrderBalance,
+  convertToMXN,
+  roundMoney: roundMoneyEcovis,
+  calculateEcovisProjectPaymentStatus,
+  normalizePurchaseOrderNumber,
+  amountsDiffer,
+  calculateEcovisProjectBalance,
+  calculateEcovisPurchaseOrderBalance,
+  calculateEcovisPaymentUnallocatedAmount,
+  buildEcovisStatementLedger,
+  buildEcovisAccountHeader,
+  STATEMENT_TYPE_LABELS,
+} = require('./ecovis');
+const { buildEcovisStatementExcel } = require('./ecovisStatementExport');
 const { createdByFields, updatedByFields, deletedByFields, logAuditEvent, nowUtc } = require('./audit');
 const { formatDateTimeCDMX } = require('./dateHelper');
 const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES, isAdminOnlyModule } = require('./permissions');
@@ -3572,7 +3590,146 @@ app.get('/api/ecovis/summary', requireAuth, requirePermission('ecovisAccount', '
   const allocations = db.prepare('SELECT * FROM ecovis_payment_allocations').all();
   const movements = db.prepare('SELECT * FROM ecovis_movements').all();
   const summary = calculateEcovisAccountSummary(projects, payments, allocations, movements);
-  res.json(summary);
+  res.json({
+    ...summary,
+    header: buildEcovisAccountHeader(summary),
+  });
+});
+
+function loadEcovisStatementPayload(query) {
+  const { page, limit, search } = parsePaginationParams(query);
+  const from = typeof query.from === 'string' && isValidDate(query.from) ? query.from : null;
+  const to = typeof query.to === 'string' && isValidDate(query.to) ? query.to : null;
+  if (query.from && !from) {
+    const err = badRequest('Parametro from invalido. Usa YYYY-MM-DD.');
+    throw err;
+  }
+  if (query.to && !to) {
+    const err = badRequest('Parametro to invalido. Usa YYYY-MM-DD.');
+    throw err;
+  }
+  if (from && to && from > to) {
+    throw badRequest('El rango de fechas es invalido (from > to).');
+  }
+
+  const movementType = typeof query.movement_type === 'string' ? query.movement_type.trim() : '';
+  const validTypes = Object.keys(STATEMENT_TYPE_LABELS);
+  if (movementType && !validTypes.includes(movementType)) {
+    throw badRequest('Tipo de movimiento no valido.');
+  }
+
+  const projects = db.prepare('SELECT id, is_cancelled FROM ecovis_projects').all();
+  const cancelledProjectIds = new Set(
+    projects.filter((p) => p.is_cancelled).map((p) => Number(p.id)),
+  );
+
+  const allProjects = db.prepare('SELECT * FROM ecovis_projects').all();
+  const payments = db.prepare('SELECT * FROM ecovis_payments').all();
+  const allocations = db.prepare('SELECT * FROM ecovis_payment_allocations').all();
+  const movements = db.prepare('SELECT * FROM ecovis_movements ORDER BY movement_date ASC, id ASC').all();
+
+  const summary = calculateEcovisAccountSummary(allProjects, payments, allocations, movements);
+  const header = buildEcovisAccountHeader(summary);
+  const ledger = buildEcovisStatementLedger(movements, { from, to, cancelledProjectIds });
+
+  let filtered = ledger.rows;
+  if (movementType) {
+    filtered = filtered.filter((row) => row.movement_type === movementType);
+  }
+  if (search) {
+    filtered = filtered.filter((row) => matchesAnySearchField([
+      row.concept,
+      row.concept_label,
+      row.reference,
+      row.movement_type,
+      row.currency,
+      row.created_by,
+      row.cancellation_reason,
+      String(row.amount_mxn),
+      String(row.original_amount),
+      String(row.id),
+    ], search));
+  }
+
+  const sortOrder = String(query.sort_order || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+  const sorted = sortOrder === 'asc' ? filtered : [...filtered].reverse();
+  const pag = buildPaginationMeta(page, limit, sorted.length);
+  const pageRows = sorted.slice(pag.offset, pag.offset + pag.limit);
+
+  return {
+    summary,
+    header,
+    statement: {
+      from,
+      to,
+      opening_balance: ledger.opening_balance,
+      closing_balance: ledger.closing_balance,
+      movement_type: movementType || null,
+      search: search || '',
+      sort_order: sortOrder,
+      data: pageRows,
+      rows: pageRows,
+      pagination: pag,
+      total_rows: filtered.length,
+    },
+  };
+}
+
+app.get('/api/ecovis/statement', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res, next) => {
+  try {
+    const payload = loadEcovisStatementPayload(req.query);
+    res.json({
+      summary: payload.summary,
+      header: payload.header,
+      statement: {
+        from: payload.statement.from,
+        to: payload.statement.to,
+        opening_balance: payload.statement.opening_balance,
+        closing_balance: payload.statement.closing_balance,
+        movement_type: payload.statement.movement_type,
+        search: payload.statement.search,
+        sort_order: payload.statement.sort_order,
+        data: payload.statement.data,
+        pagination: payload.statement.pagination,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/ecovis/statement/export', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res, next) => {
+  try {
+    const exportQuery = { ...req.query, page: 1, limit: 100000 };
+    const payload = loadEcovisStatementPayload(exportQuery);
+    const xml = buildEcovisStatementExcel({
+      header: payload.header,
+      statement: {
+        opening_balance: payload.statement.opening_balance,
+        closing_balance: payload.statement.closing_balance,
+        rows: payload.statement.data,
+      },
+      meta: {
+        from: payload.statement.from,
+        to: payload.statement.to,
+        generated_at: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
+        generated_by: req.session.userName || req.session.username,
+      },
+    });
+    logAuditEvent(db, {
+      req,
+      action: 'export',
+      module: 'ecovis',
+      entityType: 'ecovis_statement',
+      entityLabel: 'Estado de cuenta ECOVIS',
+      metadata: { format: 'excel', from: payload.statement.from, to: payload.statement.to },
+    });
+    res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ecovis-estado-de-cuenta.xls"');
+    res.send(xml);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/ecovis/projects/assignable', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res) => {

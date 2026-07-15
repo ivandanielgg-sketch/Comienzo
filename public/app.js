@@ -127,6 +127,11 @@ state.ecovisLoansPag = { page: 1, limit: 15 };
 state.ecovisMovementsPag = { page: 1, limit: 15 };
 state.ecovisMovementsSearch = '';
 state.ecovisMovementsTypeFilter = '';
+state.ecovisStatementPag = { page: 1, limit: 15 };
+state.ecovisStatementSearch = '';
+state.ecovisStatementTypeFilter = '';
+state.ecovisStatementFrom = '';
+state.ecovisStatementTo = '';
 state.selectedEcovisPaymentId = null;
 state.tableSort = {};
 
@@ -2859,6 +2864,7 @@ if (closedDetailNewReport) {
 const ecovisTab = document.querySelector('#ecovis-tab');
 const ecovisView = document.querySelector('#ecovis-view');
 const ecovisProjectsTable = document.querySelector('#ecovis-projects-table');
+const ecovisStatementTable = document.querySelector('#ecovis-statement-table');
 const ecovisPaymentsTable = document.querySelector('#ecovis-payments-table');
 const ecovisLoansTable = document.querySelector('#ecovis-loans-table');
 const ecovisMovementsTable = document.querySelector('#ecovis-movements-table');
@@ -3063,7 +3069,7 @@ function showEcovisTab() {
 }
 
 function switchEcovisSubtab(name) {
-  const sections = ['projects', 'payments', 'loans', 'movements', 'history'];
+  const sections = ['statement', 'projects', 'payments', 'loans', 'movements', 'history'];
   sections.forEach((s) => {
     const section = document.getElementById('ecovis-' + s + '-section');
     const btn = document.getElementById('ecovis-subtab-' + s);
@@ -3072,6 +3078,10 @@ function switchEcovisSubtab(name) {
   });
 }
 
+document.getElementById('ecovis-subtab-statement').addEventListener('click', () => {
+  switchEcovisSubtab('statement');
+  loadEcovisStatement();
+});
 document.getElementById('ecovis-subtab-projects').addEventListener('click', () => {
   switchEcovisSubtab('projects');
   loadEcovisProjects();
@@ -3095,21 +3105,157 @@ if (document.getElementById('ecovis-subtab-history')) {
   });
 }
 
+function formatEcovisSignedMoney(value, forceSign) {
+  const num = Number(value) || 0;
+  const abs = money.format(Math.abs(num));
+  if (forceSign === '+') return (num >= 0 ? '+' : '−') + abs.replace(/^\$/, '$');
+  if (forceSign === '−' || forceSign === '-') return '−' + abs;
+  if (num > 0) return '+' + abs;
+  if (num < 0) return '−' + abs;
+  return abs;
+}
+
 async function loadEcovisSummary() {
   try {
     const summary = await api('/api/ecovis/summary');
-    document.getElementById('ecovis-stat-projects').textContent = money.format(summary.active_projects_total_mxn || summary.total_projected || 0);
-    document.getElementById('ecovis-stat-paid').textContent = money.format(summary.active_projects_paid_mxn || summary.total_paid_to_projects || 0);
-    document.getElementById('ecovis-stat-pending').textContent = money.format(summary.active_projects_pending_mxn || summary.pending_project_amount || 0);
-    document.getElementById('ecovis-stat-loans').textContent = money.format(summary.outstanding_loans || 0);
+    const header = summary.header || {};
+    const equation = header.equation || {};
+    const headerEl = document.getElementById('ecovis-account-header');
+    const statusEl = document.getElementById('ecovis-account-status');
+    const amountEl = document.getElementById('ecovis-account-amount');
+
+    headerEl.classList.remove('is-ecovis-owes', 'is-revram-owes', 'is-settled');
+    if (header.status === 'ecovis_owes') {
+      headerEl.classList.add('is-ecovis-owes');
+      statusEl.textContent = 'ECOVIS debe a REVRAM';
+      amountEl.textContent = money.format(header.display_amount || Math.abs(summary.net_balance || 0)) + ' MXN';
+    } else if (header.status === 'revram_owes') {
+      headerEl.classList.add('is-revram-owes');
+      statusEl.textContent = 'REVRAM debe a ECOVIS';
+      amountEl.textContent = money.format(header.display_amount || Math.abs(summary.net_balance || 0)) + ' MXN';
+    } else {
+      headerEl.classList.add('is-settled');
+      statusEl.textContent = 'Cuenta saldada';
+      amountEl.textContent = '';
+    }
+
+    const pending = equation.pending_projects != null ? equation.pending_projects : (summary.pending_project_amount || 0);
+    const adjustments = equation.adjustments != null ? equation.adjustments : (summary.adjustments || 0);
+    const loans = equation.outstanding_loans != null ? equation.outstanding_loans : (summary.outstanding_loans || 0);
+    const net = equation.net_balance != null ? equation.net_balance : (summary.net_balance || 0);
+
+    document.getElementById('ecovis-eq-pending').textContent = formatEcovisSignedMoney(pending, '+');
+    document.getElementById('ecovis-eq-adjustments').textContent = formatEcovisSignedMoney(adjustments);
+    document.getElementById('ecovis-eq-loans').textContent = formatEcovisSignedMoney(loans, '−');
+    const favorText = header.favor_of ? (' a favor de ' + header.favor_of) : '';
+    document.getElementById('ecovis-eq-net').innerHTML =
+      money.format(net) + ' <em id="ecovis-eq-favor">' + escapeHtml(favorText.trim()) + '</em>';
+
+    document.getElementById('ecovis-stat-pending').textContent = money.format(pending);
+    document.getElementById('ecovis-stat-pending-count').textContent =
+      (summary.active_projects || 0) + ' proyectos abiertos';
+    document.getElementById('ecovis-stat-loans').textContent = money.format(loans);
+    document.getElementById('ecovis-stat-loans-count').textContent =
+      (summary.active_loans_count || 0) + ' prestamos';
     document.getElementById('ecovis-stat-credit').textContent = money.format(summary.credit_balance || 0);
-    const unallocated = (summary.total_payments_received || 0) - (summary.total_allocated || 0);
+
+    const unallocated = summary.unallocated_payments != null
+      ? summary.unallocated_payments
+      : ((summary.total_payments_received || 0) - (summary.total_allocated || 0));
     document.getElementById('ecovis-stat-unallocated').textContent = money.format(unallocated);
-    document.getElementById('ecovis-stat-balance').textContent = money.format(summary.net_balance || 0);
+    document.getElementById('ecovis-card-unallocated').classList.toggle('is-ok', Math.abs(unallocated) < 0.01);
+
     state.ecovisSummary = summary;
   } catch (error) {
     console.error('Error loading ECOVIS summary:', error);
   }
+}
+
+function buildEcovisStatementParams(extra) {
+  const params = new URLSearchParams({
+    page: state.ecovisStatementPag.page,
+    limit: state.ecovisStatementPag.limit,
+    search: state.ecovisStatementSearch,
+    sort_order: 'desc',
+    ...(extra || {}),
+  });
+  if (state.ecovisStatementFrom) params.set('from', state.ecovisStatementFrom);
+  if (state.ecovisStatementTo) params.set('to', state.ecovisStatementTo);
+  if (state.ecovisStatementTypeFilter) params.set('movement_type', state.ecovisStatementTypeFilter);
+  return params;
+}
+
+async function loadEcovisStatement() {
+  if (!ecovisStatementTable) return;
+  try {
+    const result = await api('/api/ecovis/statement?' + buildEcovisStatementParams());
+    renderEcovisStatement(result);
+  } catch (error) {
+    console.error('Error loading ECOVIS statement:', error);
+    ecovisStatementTable.innerHTML = '<tr><td colspan="6">Error al cargar estado de cuenta.</td></tr>';
+  }
+}
+
+function renderEcovisStatement(result) {
+  const statement = result.statement || {};
+  const rows = statement.data || [];
+  const pagination = statement.pagination || defaultPagination;
+  const meta = document.getElementById('ecovis-statement-meta');
+  if (meta) {
+    const period = (statement.from || statement.to)
+      ? ('Periodo: ' + (statement.from || '…') + ' → ' + (statement.to || '…') + ' · ')
+      : '';
+    meta.textContent = period
+      + 'Saldo inicial: ' + money.format(statement.opening_balance || 0)
+      + ' · Saldo final: ' + money.format(statement.closing_balance || 0);
+  }
+
+  if (!rows.length) {
+    ecovisStatementTable.innerHTML = '<tr><td colspan="6">No hay movimientos para mostrar.</td></tr>';
+  } else {
+    ecovisStatementTable.innerHTML = rows.map((row) => {
+      const classes = [];
+      if (row.is_cancelled) classes.push('ecovis-ledger-row-cancelled');
+      else if (row.informational) classes.push('ecovis-ledger-row-memo');
+      const currencyNote = row.currency && row.currency !== 'MXN'
+        ? ' <small>(' + escapeHtml(String(row.original_amount)) + ' ' + escapeHtml(row.currency) + ')</small>'
+        : '';
+      const reason = row.is_cancelled && row.cancellation_reason
+        ? '<span class="ecovis-ledger-reason">' + escapeHtml(row.cancellation_reason) + '</span>'
+        : '';
+      return '<tr class="' + classes.join(' ') + '">'
+        + '<td>' + escapeHtml(row.movement_date || '') + '</td>'
+        + '<td>' + escapeHtml(row.concept || '') + currencyNote + reason + '</td>'
+        + '<td>' + escapeHtml(row.reference || '—') + '</td>'
+        + '<td class="num">' + (row.charge ? money.format(row.charge) : '—') + '</td>'
+        + '<td class="num">' + (row.credit ? money.format(row.credit) : '—') + '</td>'
+        + '<td class="num">' + money.format(row.running_balance || 0) + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  renderPaginationControls(
+    'ecovis-statement-pagination',
+    pagination,
+    (newPage) => {
+      state.ecovisStatementPag.page = newPage;
+      loadEcovisStatement();
+    },
+    (newLimit) => {
+      state.ecovisStatementPag.limit = newLimit;
+      state.ecovisStatementPag.page = 1;
+      loadEcovisStatement();
+    },
+  );
+}
+
+function exportEcovisStatementExcel() {
+  window.location.href = '/api/ecovis/statement/export?' + buildEcovisStatementParams({ page: 1, limit: 100000 });
+}
+
+function exportEcovisStatementPdf() {
+  const qs = buildEcovisStatementParams({ page: 1, limit: 100000 }).toString();
+  window.open('/ecovis-statement-print.html?qs=' + encodeURIComponent(qs), '_blank', 'noopener');
 }
 
 async function loadEcovisProjects() {
@@ -3325,10 +3471,35 @@ ecovisTab.addEventListener('click', async () => {
     return;
   }
   switchView('ecovis');
-  switchEcovisSubtab('projects');
+  switchEcovisSubtab('statement');
   await loadEcovisSummary();
-  await loadEcovisProjects();
+  await loadEcovisStatement();
 });
+
+const ecovisStatementSearchBtn = document.getElementById('ecovis-statement-search-btn');
+if (ecovisStatementSearchBtn) {
+  ecovisStatementSearchBtn.addEventListener('click', () => {
+    state.ecovisStatementFrom = document.getElementById('ecovis-statement-from').value || '';
+    state.ecovisStatementTo = document.getElementById('ecovis-statement-to').value || '';
+    state.ecovisStatementTypeFilter = document.getElementById('ecovis-statement-type-filter').value || '';
+    state.ecovisStatementSearch = document.getElementById('ecovis-statement-search').value.trim();
+    state.ecovisStatementPag.page = 1;
+    loadEcovisStatement();
+  });
+}
+const ecovisStatementSearchInput = document.getElementById('ecovis-statement-search');
+if (ecovisStatementSearchInput) {
+  ecovisStatementSearchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      ecovisStatementSearchBtn.click();
+    }
+  });
+}
+const ecovisExportExcelBtn = document.getElementById('ecovis-export-excel-btn');
+if (ecovisExportExcelBtn) ecovisExportExcelBtn.addEventListener('click', exportEcovisStatementExcel);
+const ecovisExportPdfBtn = document.getElementById('ecovis-export-pdf-btn');
+if (ecovisExportPdfBtn) ecovisExportPdfBtn.addEventListener('click', exportEcovisStatementPdf);
 
 document.getElementById('ecovis-new-project-btn').addEventListener('click', () => {
   ecovisProjectFormTitle.textContent = 'Agregar proyecto ECOVIS';

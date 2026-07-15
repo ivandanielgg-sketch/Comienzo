@@ -1008,28 +1008,115 @@
         </section>
 
         <section id="ecovis-view" class="hidden">
-          <!-- Summary cards -->
+          <!-- Account header + equation -->
+          <section class="ecovis-account-header" id="ecovis-account-header">
+            <p class="ecovis-account-status" id="ecovis-account-status">Cuenta saldada</p>
+            <p class="ecovis-account-amount" id="ecovis-account-amount"></p>
+            <div class="ecovis-equation" id="ecovis-equation" title="">
+              <div class="ecovis-equation-row" title="Suma de montos MXN de proyectos activos no cancelados menos asignaciones tipo proyecto (ecovis_projects − ecovis_payment_allocations.allocation_type=proyecto).">
+                <span>Nos deben por proyectos</span>
+                <strong id="ecovis-eq-pending">+$0.00</strong>
+              </div>
+              <div class="ecovis-equation-row" title="Suma neta de movimientos tipo ajuste: + si direction=ecovis_debe_a_revram, − si revram_debe_a_ecovis (ecovis_movements).">
+                <span>Ajustes a favor/en contra</span>
+                <strong id="ecovis-eq-adjustments">$0.00</strong>
+              </div>
+              <div class="ecovis-equation-row" title="Prestamos vigentes: movimientos prestamo_ecovis_a_revram menos devoluciones (ecovis_movements).">
+                <span>Les debemos por prestamos</span>
+                <strong id="ecovis-eq-loans">−$0.00</strong>
+              </div>
+              <div class="ecovis-equation-total">
+                <span>Saldo neto</span>
+                <strong id="ecovis-eq-net">$0.00 <em id="ecovis-eq-favor"></em></strong>
+              </div>
+            </div>
+          </section>
+
+          <!-- Secondary cards (max 4) -->
           <section class="cards ecovis-cards">
-            <article><span>Total proyectos ECOVIS</span><strong id="ecovis-stat-projects">$0.00</strong></article>
-            <article><span>Pagado a proyectos</span><strong id="ecovis-stat-paid">$0.00</strong></article>
-            <article><span>Pendiente por cobrar</span><strong id="ecovis-stat-pending">$0.00</strong></article>
-            <article><span>Prestamos vigentes</span><strong id="ecovis-stat-loans">$0.00</strong></article>
-            <article><span>Saldo a favor ECOVIS</span><strong id="ecovis-stat-credit">$0.00</strong></article>
-            <article><span>Pagos no asignados</span><strong id="ecovis-stat-unallocated">$0.00</strong></article>
-            <article class="ecovis-balance-card"><span>Balance neto</span><strong id="ecovis-stat-balance">$0.00</strong></article>
+            <article>
+              <span>Pendiente por cobrar de proyectos</span>
+              <strong id="ecovis-stat-pending">$0.00</strong>
+              <small id="ecovis-stat-pending-count">0 proyectos abiertos</small>
+            </article>
+            <article>
+              <span>Prestamos vigentes</span>
+              <strong id="ecovis-stat-loans">$0.00</strong>
+              <small id="ecovis-stat-loans-count">0 prestamos</small>
+            </article>
+            <article>
+              <span>Saldo a favor disponible</span>
+              <strong id="ecovis-stat-credit">$0.00</strong>
+              <small>Credito ECOVIS no aplicado</small>
+            </article>
+            <article id="ecovis-card-unallocated" class="ecovis-card-warn">
+              <span>Pagos sin asignar</span>
+              <strong id="ecovis-stat-unallocated">$0.00</strong>
+              <small>Dinero recibido sin aplicar</small>
+            </article>
           </section>
 
           <!-- Sub-navigation tabs for ECOVIS sections -->
           <div class="ecovis-subtabs">
-            <button id="ecovis-subtab-projects" class="secondary active" type="button">Proyectos ECOVIS</button>
+            <button id="ecovis-subtab-statement" class="secondary active" type="button">Estado de cuenta</button>
+            <button id="ecovis-subtab-projects" class="secondary" type="button">Proyectos ECOVIS</button>
             <button id="ecovis-subtab-payments" class="secondary" type="button">Pagos / Abonos</button>
             <button id="ecovis-subtab-loans" class="secondary" type="button">Prestamos</button>
             <button id="ecovis-subtab-movements" class="secondary" type="button">Movimientos</button>
             <button id="ecovis-subtab-history" class="secondary" type="button">Historial</button>
           </div>
 
+          <!-- ECOVIS Statement (ledger) Section -->
+          <div id="ecovis-statement-section">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Estado de cuenta</h2>
+                <div class="row-actions">
+                  <button id="ecovis-export-excel-btn" class="secondary" type="button">Exportar Excel</button>
+                  <button id="ecovis-export-pdf-btn" class="secondary" type="button">Exportar PDF</button>
+                </div>
+              </div>
+              <div class="search-bar ecovis-statement-filters">
+                <label>Desde<input id="ecovis-statement-from" type="date" /></label>
+                <label>Hasta<input id="ecovis-statement-to" type="date" /></label>
+                <select id="ecovis-statement-type-filter">
+                  <option value="">Todos los tipos</option>
+                  <option value="proyecto">Proyecto</option>
+                  <option value="pago_recibido">Pago recibido</option>
+                  <option value="prestamo_ecovis_a_revram">Prestamo</option>
+                  <option value="aplicacion_a_proyecto">Aplicacion a proyecto</option>
+                  <option value="saldo_a_favor">Saldo a favor</option>
+                  <option value="devolucion">Devolucion</option>
+                  <option value="ajuste">Ajuste</option>
+                  <option value="cancelacion">Cancelacion</option>
+                </select>
+                <input id="ecovis-statement-search" type="text" placeholder="Buscar en estado de cuenta..." />
+                <button id="ecovis-statement-search-btn" type="button">Filtrar</button>
+              </div>
+              <p class="text-muted ecovis-statement-meta" id="ecovis-statement-meta">
+                Saldo inicial: $0.00 · Saldo final: $0.00
+              </p>
+              <div class="table-wrapper ecovis-ledger-wrapper">
+                <table class="ecovis-ledger-table">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Concepto</th>
+                      <th>Referencia</th>
+                      <th>Cargo (nos deben +)</th>
+                      <th>Abono (debemos −)</th>
+                      <th>Saldo corrido</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-statement-table"></tbody>
+                </table>
+              </div>
+              <div id="ecovis-statement-pagination"></div>
+            </div>
+          </div>
+
           <!-- ECOVIS Projects Section -->
-          <div id="ecovis-projects-section">
+          <div id="ecovis-projects-section" class="hidden">
             <div class="panel">
               <div class="panel-header">
                 <h2>Proyectos ECOVIS</h2>
