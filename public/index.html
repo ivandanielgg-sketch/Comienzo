@@ -1090,7 +1090,7 @@
                   <option value="ajuste">Ajuste</option>
                   <option value="cancelacion">Cancelacion</option>
                 </select>
-                <input id="ecovis-statement-search" type="text" placeholder="Buscar en estado de cuenta..." />
+                <input id="ecovis-statement-search" type="text" placeholder="Buscar en estado de cuenta..." autocomplete="off" />
                 <button id="ecovis-statement-search-btn" type="button">Filtrar</button>
               </div>
               <p class="text-muted ecovis-statement-meta" id="ecovis-statement-meta">
@@ -1290,7 +1290,7 @@
               </div>
               <form id="ecovis-project-form" class="grid-form">
                 <input type="hidden" name="id" />
-                <label>Nombre del proyecto *<input name="project_name" required /></label>
+                <label>Nombre del proyecto *<input name="project_name" autocomplete="off" required /></label>
                 <label>Fecha del proyecto *<input name="project_date" type="date" required /></label>
                 <label>Cotizacion<input name="quote_number" /></label>
                 <label>Orden de compra<input name="purchase_order_number" /></label>
@@ -1369,7 +1369,7 @@
                   <select name="ecovis_project_id" id="ecovis-allocation-project-select"></select>
                 </label>
                 <label>Monto a asignar *<input name="amount" type="text" inputmode="decimal" required /></label>
-                <label class="full">Nota<input name="notes" /></label>
+                <label class="full">Nota<input name="notes" autocomplete="off" /></label>
                 <button type="submit">Asignar</button>
                 <p id="ecovis-allocation-message" class="message"></p>
               </form>
