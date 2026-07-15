@@ -1703,28 +1703,174 @@ function buildKpiContext(db, query) {
   };
 }
 
+/** Periodo inmediatamente anterior (misma duración; meses/años calendario cuando aplica). */
+function getAdjacentPreviousPeriod(period) {
+  if (!period?.startDate || !period?.endDate) return null;
+  const startParts = period.startDate.split('-').map(Number);
+  const endParts = period.endDate.split('-').map(Number);
+  if (startParts.length !== 3 || endParts.length !== 3) return null;
+  const [sy, sm, sd] = startParts;
+  const [ey, em, ed] = endParts;
+  if (![sy, sm, sd, ey, em, ed].every((n) => Number.isFinite(n))) return null;
+
+  // Mes calendario completo → mes anterior
+  if (sd === 1 && sy === ey && sm === em && ed === lastDayOfMonth(ey, em)) {
+    let y = sy;
+    let m = sm - 1;
+    if (m < 1) { m = 12; y -= 1; }
+    return {
+      startDate: formatDate(y, m, 1),
+      endDate: formatDate(y, m, lastDayOfMonth(y, m)),
+      label: `Periodo anterior (${pad2(m)}/${y})`,
+    };
+  }
+
+  // Año calendario completo → año anterior
+  if (sd === 1 && sm === 1 && em === 12 && ed === 31 && sy === ey) {
+    const y = sy - 1;
+    return {
+      startDate: formatDate(y, 1, 1),
+      endDate: formatDate(y, 12, 31),
+      label: `Periodo anterior (${y})`,
+    };
+  }
+
+  // Trimestre calendario (1-3, 4-6, 7-9, 10-12)
+  if (sd === 1 && sy === ey && [1, 4, 7, 10].includes(sm) && em === sm + 2 && ed === lastDayOfMonth(ey, em)) {
+    let y = sy;
+    let qStart = sm - 3;
+    if (qStart < 1) { qStart = 10; y -= 1; }
+    const qEnd = qStart + 2;
+    return {
+      startDate: formatDate(y, qStart, 1),
+      endDate: formatDate(y, qEnd, lastDayOfMonth(y, qEnd)),
+      label: `Periodo anterior (T${Math.floor((qStart - 1) / 3) + 1}/${y})`,
+    };
+  }
+
+  const start = new Date(Date.UTC(sy, sm - 1, sd, 12));
+  const end = new Date(Date.UTC(ey, em - 1, ed, 12));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return null;
+  const days = Math.round((end - start) / 86400000) + 1;
+  const prevEnd = new Date(start);
+  prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+  const prevStart = new Date(prevEnd);
+  prevStart.setUTCDate(prevStart.getUTCDate() - (days - 1));
+  const startDate = formatDate(prevStart.getUTCFullYear(), prevStart.getUTCMonth() + 1, prevStart.getUTCDate());
+  const endDate = formatDate(prevEnd.getUTCFullYear(), prevEnd.getUTCMonth() + 1, prevEnd.getUTCDate());
+  return {
+    startDate,
+    endDate,
+    label: `Periodo anterior (${startDate} a ${endDate})`,
+  };
+}
+
+function pctChange(current, previous) {
+  if (current === null || current === undefined || previous === null || previous === undefined) return null;
+  const cur = Number(current);
+  const prev = Number(previous);
+  if (!Number.isFinite(cur) || !Number.isFinite(prev)) return null;
+  if (prev === 0) return cur === 0 ? 0 : null;
+  return roundMoney(((cur - prev) / Math.abs(prev)) * 100);
+}
+
+function summaryCardFromKpi(label, kpiObj, options = {}) {
+  const {
+    section = null,
+    unit = null,
+    key = null,
+    previousKpi = null,
+    compare = false,
+  } = options;
+  const metric = kpiObj && typeof kpiObj === 'object' ? kpiObj : { value: kpiObj, display: kpiObj == null ? '—' : String(kpiObj), has_data: kpiObj != null };
+  const card = {
+    label,
+    value: metric.display != null ? metric.display : '—',
+    raw_value: metric.value != null ? metric.value : null,
+    has_data: metric.has_data !== false && metric.available !== false && metric.value != null,
+    section,
+    unit,
+    key,
+    change_pct: null,
+    change_direction: null,
+  };
+  if (compare && previousKpi && card.has_data && previousKpi.has_data !== false && previousKpi.value != null) {
+    const change = pctChange(metric.value, previousKpi.value);
+    if (change !== null) {
+      card.change_pct = change;
+      card.change_direction = change > 0 ? 'up' : (change < 0 ? 'down' : 'flat');
+    }
+  }
+  return card;
+}
+
+function buildGlobalSummaryCards(ctx, prevCtx) {
+  const prevSales = prevCtx?.sales || null;
+  const prevCollection = prevCtx?.collection || null;
+  return [
+    summaryCardFromKpi('Monto vendido', ctx.sales.sold_amount_mxn, {
+      section: 'ventas',
+      unit: 'MXN',
+      key: 'sold_amount_mxn',
+      previousKpi: prevSales?.sold_amount_mxn,
+      compare: true,
+    }),
+    summaryCardFromKpi('Monto cobrado', ctx.collection.collected_amount_mxn, {
+      section: 'cobranza',
+      unit: 'MXN',
+      key: 'collected_amount_mxn',
+      previousKpi: prevCollection?.collected_amount_mxn,
+      compare: true,
+    }),
+    summaryCardFromKpi('Margen bruto promedio', ctx.projectsKpi.gross_margin_real, {
+      section: 'proyectos',
+      unit: '%',
+      key: 'gross_margin_real',
+    }),
+    summaryCardFromKpi('% de cartera vencida', ctx.collection.overdue_portfolio, {
+      section: 'cobranza',
+      unit: '%',
+      key: 'overdue_portfolio',
+    }),
+    summaryCardFromKpi('Proyectos activos', ctx.projectsKpi.active_projects, {
+      section: 'proyectos',
+      unit: 'cant.',
+      key: 'active_projects',
+    }),
+    summaryCardFromKpi('Cumplimiento de entrega', ctx.projectsKpi.delivery_compliance, {
+      section: 'proyectos',
+      unit: '%',
+      key: 'delivery_compliance',
+    }),
+  ];
+}
+
 function computeSummary(db, query) {
   const ctx = buildKpiContext(db, query);
   const departments = KPI_DEPARTMENTS.map((d) =>
     computeDepartmentKpis(d, ctx.sales, ctx.projectsKpi, ctx.reportsKpi, ctx.billing, ctx.collection),
   );
-  const alerts = generateAlerts(ctx.projects, ctx.reports, ctx.settings, ctx.sales);
   const ventasSummaryGroups = buildVentasSummaryCards(ctx.sales);
   const ventasSummaryCards = ventasSummaryGroups.flatMap((g) => g.cards);
+
+  const prevPeriod = getAdjacentPreviousPeriod(ctx.period);
+  let prevCtx = null;
+  if (prevPeriod) {
+    prevCtx = buildKpiContext(db, {
+      ...query,
+      periodType: 'custom',
+      startDate: prevPeriod.startDate,
+      endDate: prevPeriod.endDate,
+    });
+  }
 
   return {
     period: ctx.period,
     period_type: ctx.periodType,
+    previous_period: prevPeriod,
     filters: ctx.filters,
     timezone: TIMEZONE,
-    summary_cards: [
-      ...ventasSummaryCards,
-      { label: 'Margen real', value: ctx.projectsKpi.gross_margin_real.display, section: 'proyectos' },
-      { label: 'CxC vencida', value: ctx.collection.overdue_portfolio.display, section: 'cobranza' },
-      { label: 'Reportes completos', value: ctx.reportsKpi.complete_reports.display, section: 'reportes' },
-      { label: 'Facturas emitidas', value: ctx.billing.invoices_issued.display, section: 'facturacion' },
-      { label: 'Alertas activas', value: String(alerts.length), section: 'alertas' },
-    ],
+    summary_cards: buildGlobalSummaryCards(ctx, prevCtx),
     ventas_summary_cards: ventasSummaryCards,
     ventas_summary_groups: ventasSummaryGroups,
     ventas: ctx.sales,
@@ -1850,4 +1996,6 @@ module.exports = {
   computeVentasBySeller,
   getVentasSellerTrafficLight,
   computeVentasChartData,
+  getAdjacentPreviousPeriod,
+  buildGlobalSummaryCards,
 };

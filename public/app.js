@@ -7504,6 +7504,308 @@ function renderEmployeeKpiSummary(kpis) {
   }).join(' · ');
 }
 
+function kpiMetricDisplay(kpiObj) {
+  if (!kpiObj) return '—';
+  if (typeof kpiObj === 'object') {
+    if (kpiObj.display != null) return kpiObj.display;
+    if (kpiObj.value != null) return String(kpiObj.value);
+  }
+  return String(kpiObj);
+}
+
+function kpiHasRealData(kpiObj) {
+  if (!kpiObj || typeof kpiObj !== 'object') return kpiObj != null && kpiObj !== '';
+  if (kpiObj.available === false || kpiObj.not_captured === true || kpiObj.has_data === false) return false;
+  return kpiObj.value != null && kpiObj.display !== '—' && kpiObj.display !== 'Dato no disponible' && kpiObj.display !== 'Dato no capturado';
+}
+
+function renderKpiLabelWithTip(label, tip) {
+  if (!tip) return escapeHtml(label);
+  return escapeHtml(label)
+    + ' <span class="kpi-tip" title="' + escapeHtml(tip) + '" aria-label="' + escapeHtml(tip) + '">ⓘ</span>';
+}
+
+function renderSummaryCardHtml(card) {
+  if (!card) return '';
+  if (card.has_data === false && (card.value === '—' || !card.value)) return '';
+  let changeHtml = '';
+  if (card.change_pct != null && Number.isFinite(Number(card.change_pct))) {
+    const dir = card.change_direction || (card.change_pct > 0 ? 'up' : (card.change_pct < 0 ? 'down' : 'flat'));
+    const arrow = dir === 'up' ? '↑' : (dir === 'down' ? '↓' : '→');
+    const sign = card.change_pct > 0 ? '+' : '';
+    changeHtml = '<span class="kpi-card-change kpi-card-change-' + escapeHtml(dir) + '">'
+      + arrow + ' ' + escapeHtml(sign + card.change_pct + '%') + ' vs periodo anterior</span>';
+  }
+  const unit = card.unit ? '<span class="kpi-card-unit">' + escapeHtml(card.unit) + '</span>' : '';
+  return '<div class="kpi-card kpi-summary-card">'
+    + '<span class="kpi-card-label">' + escapeHtml(card.label) + unit + '</span>'
+    + '<strong>' + escapeHtml(card.value) + '</strong>'
+    + changeHtml
+    + '</div>';
+}
+
+function renderSectionCard(label, display, options) {
+  const opts = options || {};
+  const accent = opts.accent ? ' kpi-card-accent-' + opts.accent : '';
+  const tip = opts.tip ? renderKpiLabelWithTip(label, opts.tip) : escapeHtml(label);
+  const secondary = opts.secondary
+    ? '<span class="kpi-card-secondary">' + escapeHtml(opts.secondary) + '</span>'
+    : '';
+  return '<div class="kpi-card' + accent + '">'
+    + '<span class="kpi-card-label">' + tip + '</span>'
+    + '<strong>' + escapeHtml(display) + '</strong>'
+    + secondary
+    + '</div>';
+}
+
+function renderRentabilidadSection(proyectos) {
+  const cardsEl = document.getElementById('kpi-rentabilidad-cards');
+  if (cardsEl) {
+    if (!proyectos) {
+      cardsEl.innerHTML = '<p class="muted kpi-chart-empty">Sin datos en el periodo.</p>';
+    } else {
+      const cards = [];
+      if (kpiHasRealData(proyectos.active_projects) || (proyectos.active_projects && proyectos.active_projects.value === 0)) {
+        cards.push(renderSectionCard('Proyectos activos (cant.)', kpiMetricDisplay(proyectos.active_projects)));
+      }
+      if (kpiHasRealData(proyectos.gross_margin_real)) {
+        cards.push(renderSectionCard('Margen bruto promedio (%)', kpiMetricDisplay(proyectos.gross_margin_real)));
+      }
+      if (kpiHasRealData(proyectos.delivery_compliance)) {
+        cards.push(renderSectionCard(
+          'Cumplimiento de entrega a tiempo (%)',
+          kpiMetricDisplay(proyectos.delivery_compliance),
+          { tip: 'Proyectos cerrados en o antes de la fecha prometida, con reporte técnico completo' },
+        ));
+      }
+      if (kpiHasRealData(proyectos.rework_rate)) {
+        cards.push(renderSectionCard('Tasa de retrabajo (%)', kpiMetricDisplay(proyectos.rework_rate)));
+      }
+      cardsEl.innerHTML = cards.length
+        ? cards.join('')
+        : '<p class="muted kpi-chart-empty">Sin datos en el periodo.</p>';
+    }
+  }
+
+  const tbody = document.getElementById('kpi-red-margin-table');
+  if (tbody) {
+    const list = (proyectos && Array.isArray(proyectos.red_margin_list) ? proyectos.red_margin_list.slice() : [])
+      .sort(function(a, b) {
+        const am = a.margin_percent == null ? Infinity : Number(a.margin_percent);
+        const bm = b.margin_percent == null ? Infinity : Number(b.margin_percent);
+        return am - bm;
+      });
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="muted">Sin proyectos con margen en rojo en el periodo.</td></tr>';
+    } else {
+      tbody.innerHTML = list.map(function(row) {
+        return '<tr>'
+          + '<td>' + escapeHtml(row.quote_number || ('#' + row.project_id)) + '</td>'
+          + '<td>' + escapeHtml(row.client_name || '') + '</td>'
+          + '<td>' + escapeHtml(row.margin_percent == null ? '—' : (row.margin_percent + '%')) + '</td>'
+          + '<td class="kpi-semaphore-cell">' + renderTrafficLight(row.traffic_light) + '</td>'
+          + '</tr>';
+      }).join('');
+    }
+  }
+}
+
+function renderCobroFacturacionSection(facturacion, cobranza) {
+  const cardsEl = document.getElementById('kpi-cobro-cards');
+  const pendingEl = document.getElementById('kpi-cobro-pending');
+  const noteEl = document.getElementById('kpi-cobro-admin-note');
+  if (noteEl) {
+    noteEl.textContent = (facturacion && facturacion.billing_admin_note) || '';
+  }
+
+  const pendingItems = [];
+  if (facturacion) {
+    ['cancelled_invoices', 'error_invoices', 'pending_documentation'].forEach(function(key) {
+      const m = facturacion[key];
+      if (!m) return;
+      if (!kpiHasRealData(m) || Number(m.value) === 0) {
+        pendingItems.push(getKpiFieldLabel(key));
+      }
+    });
+    if (facturacion.billing_time_days && !kpiHasRealData(facturacion.billing_time_days)) {
+      pendingItems.push('Tiempo de facturación (días) — falta captura de invoice_issued_at');
+    }
+  }
+  if (pendingEl) {
+    if (pendingItems.length) {
+      pendingEl.classList.remove('hidden');
+      pendingEl.innerHTML = '<p class="kpi-pending-capture-title"><strong>Pendiente de captura</strong></p>'
+        + '<p class="muted">No se muestran como métrica porque no hay captura operativa: '
+        + escapeHtml(pendingItems.join('; ')) + '.</p>';
+    } else {
+      pendingEl.classList.add('hidden');
+      pendingEl.innerHTML = '';
+    }
+  }
+
+  if (!cardsEl) return;
+  if (!facturacion && !cobranza) {
+    cardsEl.innerHTML = '<p class="muted kpi-chart-empty">Sin datos en el periodo.</p>';
+    return;
+  }
+
+  const cards = [];
+  if (kpiHasRealData(facturacion && facturacion.invoiced_amount_mxn) || (facturacion && facturacion.invoiced_amount_mxn && facturacion.invoiced_amount_mxn.value === 0)) {
+    cards.push(renderSectionCard('Facturado en el periodo (MXN)', kpiMetricDisplay(facturacion.invoiced_amount_mxn)));
+  }
+  if (kpiHasRealData(cobranza && cobranza.collected_amount_mxn) || (cobranza && cobranza.collected_amount_mxn && cobranza.collected_amount_mxn.value === 0)) {
+    cards.push(renderSectionCard('Cobrado en el periodo (MXN)', kpiMetricDisplay(cobranza.collected_amount_mxn)));
+  }
+  if (kpiHasRealData(cobranza && cobranza.avg_collection_days)) {
+    cards.push(renderSectionCard(
+      'DSO / Días promedio de cobro',
+      kpiMetricDisplay(cobranza.avg_collection_days) + (/\d/.test(kpiMetricDisplay(cobranza.avg_collection_days)) ? ' días' : ''),
+      { tip: 'DSO: días promedio que tardas en cobrar una factura' },
+    ));
+  }
+  if (kpiHasRealData(cobranza && cobranza.overdue_portfolio)) {
+    const overdueAmt = cobranza.overdue_amount_mxn && kpiHasRealData(cobranza.overdue_amount_mxn)
+      ? ('Monto vencido: ' + kpiMetricDisplay(cobranza.overdue_amount_mxn))
+      : '';
+    cards.push(renderSectionCard('% de cartera vencida', kpiMetricDisplay(cobranza.overdue_portfolio), { secondary: overdueAmt }));
+  }
+  if (kpiHasRealData(cobranza && cobranza.accounts_over_120_days) || (cobranza && cobranza.accounts_over_120_days && Number(cobranza.accounts_over_120_days.value) === 0)) {
+    const count = kpiMetricDisplay(cobranza.accounts_over_120_days);
+    const amount = cobranza.accounts_over_120_amount_mxn
+      ? kpiMetricDisplay(cobranza.accounts_over_120_amount_mxn)
+      : '';
+    const display = count + (amount ? ' · ' + amount : '');
+    const accent = Number(cobranza.accounts_over_120_days.value) > 0 ? 'critical' : '';
+    cards.push(renderSectionCard('Cuentas +120 días (cant. · MXN)', display, { accent: accent }));
+  }
+  if (kpiHasRealData(cobranza && cobranza.invoices_without_contact) || (cobranza && cobranza.invoices_without_contact && Number(cobranza.invoices_without_contact.value) === 0)) {
+    cards.push(renderSectionCard('Facturas vencidas sin gestión de cobro', kpiMetricDisplay(cobranza.invoices_without_contact)));
+  }
+
+  cardsEl.innerHTML = cards.length
+    ? cards.join('')
+    : '<p class="muted kpi-chart-empty">Sin datos en el periodo.</p>';
+}
+
+function renderEquipoSection(reportes, employeesPayload) {
+  const cardsEl = document.getElementById('kpi-equipo-cards');
+  if (cardsEl) {
+    const cards = [];
+    if (reportes && kpiHasRealData(reportes.complete_reports)) {
+      cards.push(renderSectionCard('% de reportes completos', kpiMetricDisplay(reportes.complete_reports)));
+    }
+    if (reportes && (kpiHasRealData(reportes.services_without_report) || Number(reportes.services_without_report && reportes.services_without_report.value) === 0)) {
+      cards.push(renderSectionCard('Servicios sin reporte (cant.)', kpiMetricDisplay(reportes.services_without_report)));
+    }
+    cardsEl.innerHTML = cards.length
+      ? cards.join('')
+      : '<p class="muted kpi-chart-empty">Sin datos en el periodo.</p>';
+  }
+
+  const tbody = document.getElementById('kpi-employees-table');
+  if (!tbody) return;
+  const employees = (employeesPayload && employeesPayload.employees) || [];
+  const rows = employees.filter(function(e) {
+    return e && e.department !== 'Ventas';
+  });
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="muted">Sin empleados técnicos/operativos en el periodo. Los vendedores están en la sección Ventas.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(function(e) {
+    const kpis = e.kpis || {};
+    const isTecnico = /t[eé]cnico/i.test(e.department || '');
+    const services = isTecnico
+      ? (kpis.services_executed != null ? kpis.services_executed : (kpis.assigned_services != null ? kpis.assigned_services : '—'))
+      : '—';
+    const complete = isTecnico
+      ? (kpis.complete_reports != null ? (Number.isFinite(Number(kpis.complete_reports)) ? kpis.complete_reports + '%' : String(kpis.complete_reports)) : '—')
+      : '—';
+    const reworks = isTecnico
+      ? (kpis.reworks != null ? kpis.reworks : '—')
+      : '—';
+    const note = isTecnico ? '' : '<span class="muted">Indicadores de este rol no se duplican aquí</span>';
+    return '<tr>'
+      + '<td>' + escapeHtml(e.employee) + (note ? '<div>' + note + '</div>' : '') + '</td>'
+      + '<td>' + escapeHtml(e.department || '') + '</td>'
+      + '<td>' + escapeHtml(String(services)) + '</td>'
+      + '<td>' + escapeHtml(String(complete)) + '</td>'
+      + '<td>' + escapeHtml(String(reworks)) + '</td>'
+      + '<td class="kpi-semaphore-cell">' + renderTrafficLight(e.traffic_light) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+const KPI_ALERT_TYPE_LABELS = {
+  margen_rojo: 'Margen en rojo',
+  servicio_sin_reporte: 'Servicio sin reporte',
+  factura_pendiente_documentacion: 'Factura pendiente de documentación',
+  cuenta_mayor_120_dias: 'Cuenta +120 días',
+  cuenta_vencida: 'Cuenta vencida',
+  proyecto_cerrado_sin_cobro: 'Proyecto cerrado sin cobro',
+};
+
+function renderOperativeAlertsGrouped(alertsPayload) {
+  const wrap = document.getElementById('kpi-alerts-wrap');
+  if (!wrap) return;
+  const all = ((alertsPayload && alertsPayload.alerts) || []).filter(function(a) {
+    return a && a.suggested_action;
+  });
+  if (!all.length) {
+    wrap.innerHTML = '<p class="muted">Sin alertas operativas con acción sugerida para el periodo.</p>';
+    return;
+  }
+
+  const byType = {};
+  all.forEach(function(a) {
+    const key = a.type || 'otra';
+    if (!byType[key]) byType[key] = [];
+    byType[key].push(a);
+  });
+  const groups = Object.keys(byType).map(function(type) {
+    return {
+      type: type,
+      label: KPI_ALERT_TYPE_LABELS[type] || type.replace(/_/g, ' '),
+      count: byType[type].length,
+      alerts: byType[type],
+    };
+  }).sort(function(a, b) { return b.count - a.count; });
+
+  const initialLimit = 10;
+  let html = '<div class="kpi-ops-alert-groups">';
+  groups.forEach(function(g, idx) {
+    const hiddenClass = idx >= initialLimit ? ' hidden kpi-alert-group-collapsed' : '';
+    html += '<details class="kpi-ops-alert-group' + hiddenClass + '"' + (idx === 0 ? ' open' : '') + '>';
+    html += '<summary><strong>' + escapeHtml(g.label) + '</strong> — ' + g.count
+      + (g.count === 1 ? ' alerta' : ' alertas') + '</summary>';
+    html += '<ul class="kpi-ops-alert-list">';
+    g.alerts.forEach(function(a) {
+      const link = a.link ? (a.link.quote_number || ('Proyecto #' + a.link.project_id)) : '';
+      html += '<li>'
+        + (a.traffic_light ? renderTrafficLight(a.traffic_light) : '')
+        + escapeHtml(a.suggested_action || '')
+        + (a.responsible ? ' · ' + escapeHtml(a.responsible) : '')
+        + (a.date ? ' · ' + escapeHtml(a.date) : '')
+        + (link ? ' · ' + escapeHtml(link) : '')
+        + '</li>';
+    });
+    html += '</ul></details>';
+  });
+  html += '</div>';
+  if (groups.length > initialLimit) {
+    html += '<button type="button" class="secondary kpi-ops-alerts-toggle" id="kpi-ops-alerts-toggle">Ver todas (' + groups.length + ')</button>';
+  }
+  wrap.innerHTML = html;
+  const toggleBtn = document.getElementById('kpi-ops-alerts-toggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', function() {
+      wrap.querySelectorAll('.kpi-alert-group-collapsed').forEach(function(el) {
+        el.classList.remove('hidden', 'kpi-alert-group-collapsed');
+      });
+      toggleBtn.remove();
+    });
+  }
+}
 
 function renderTrafficLight(color) {
   const labels = { green: 'Verde', yellow: 'Amarillo', red: 'Rojo', critical: 'Critico', gray: 'N/A' };
@@ -7574,15 +7876,10 @@ function renderKpiDashboard(summary, alerts, employees) {
   const cardsEl = document.getElementById('kpi-summary-cards');
   if (cardsEl && summary.summary_cards) {
     const visibleCards = summary.summary_cards.filter(function(c) {
-      return c.section !== 'ventas' || (c.value && c.value !== '—' && c.value !== 'Dato no capturado' && c.value !== 'Dato no disponible');
-    });
-    cardsEl.innerHTML = visibleCards.map(function(c) {
-      let val = c.value;
-      if (/MXN|cotizado|vendido|cobrado|facturado/i.test(c.label) && typeof val === 'number') {
-        val = formatCurrencyMXN(val);
-      }
-      return '<div class="kpi-card"><span class="kpi-card-label">' + escapeHtml(c.label) + '</span><strong>' + escapeHtml(val) + '</strong></div>';
-    }).join('');
+      return c.has_data !== false || (c.value && c.value !== '—' && c.value !== 'Dato no capturado' && c.value !== 'Dato no disponible');
+    }).slice(0, 6);
+    cardsEl.innerHTML = visibleCards.map(renderSummaryCardHtml).join('')
+      || '<p class="muted kpi-chart-empty">Sin datos en el periodo.</p>';
   }
   const periodLabel = document.getElementById('kpi-period-label');
   if (periodLabel && summary.period) {
@@ -7596,62 +7893,10 @@ function renderKpiDashboard(summary, alerts, employees) {
   }
 
   renderVentasSection(summary.ventas);
-
-  renderKpiSectionMetrics('kpi-proyectos-content', [
-    { label: 'Proyectos activos', value: summary.proyectos.active_projects },
-    { label: 'Margen bruto real (%)', value: summary.proyectos.gross_margin_real },
-    { label: 'Proyectos margen rojo', value: summary.proyectos.red_margin_projects },
-    { label: 'Cumplimiento entrega (%)', value: summary.proyectos.delivery_compliance },
-    { label: 'Retrabajos', value: summary.proyectos.reworks },
-    { label: 'Tasa retrabajo (%)', value: summary.proyectos.rework_rate },
-    { label: 'Cierre tecnico pendiente', value: summary.proyectos.technical_close_pending },
-  ]);
-
-  renderKpiSectionMetrics('kpi-reportes-content', [
-    { label: 'Reportes completos (%)', value: summary.reportes.complete_reports },
-    { label: 'Reportes completos (#)', value: summary.reportes.complete_count },
-    { label: 'Evidencias completas (%)', value: summary.reportes.complete_evidence },
-    { label: 'Servicios sin reporte', value: summary.reportes.services_without_report },
-  ]);
-
-  renderKpiSectionMetrics('kpi-facturacion-content', [
-    { label: 'Facturas emitidas', value: summary.facturacion.invoices_issued },
-    { label: 'Monto facturado (MXN)', value: summary.facturacion.invoiced_amount_mxn },
-    { label: 'Tiempo facturacion (dias)', value: summary.facturacion.billing_time_days },
-    { label: 'Facturas canceladas', value: summary.facturacion.cancelled_invoices },
-    { label: 'Facturas con error', value: summary.facturacion.error_invoices },
-    { label: 'Pendientes documentacion', value: summary.facturacion.pending_documentation },
-  ]);
-
-  renderKpiSectionMetrics('kpi-cobranza-content', [
-    { label: 'Monto cobrado (MXN)', value: summary.cobranza.collected_amount_mxn },
-    { label: 'Facturas cobradas', value: summary.cobranza.collected_invoices },
-    { label: 'Dias prom. cobranza', value: summary.cobranza.avg_collection_days },
-    { label: 'Cartera vencida (%)', value: summary.cobranza.overdue_portfolio },
-    { label: 'Cuentas +120 dias', value: summary.cobranza.accounts_over_120_days },
-    { label: 'Sin contacto de pago', value: summary.cobranza.invoices_without_contact },
-  ]);
-
-  const deptContent = document.getElementById('kpi-departments-content');
-  if (deptContent && summary.departments) {
-    deptContent.innerHTML = renderDepartmentKpis(summary.departments);
-  }
-
-  const empTable = document.getElementById('kpi-employees-table');
-  if (empTable && employees && employees.employees) {
-    empTable.innerHTML = employees.employees.map(function(e) {
-      return '<tr><td>' + escapeHtml(e.employee) + '</td><td>' + escapeHtml(e.department) + '</td><td>' + renderEmployeeKpiSummary(e.kpis) + '</td><td>' + renderTrafficLight(e.traffic_light) + '</td><td>' + (e.alerts && e.alerts.length ? e.alerts.length : '0') + '</td></tr>';
-    }).join('') || '<tr><td colspan="5" class="muted">Sin empleados activos en departamentos medibles.</td></tr>';
-  }
-
-  const alertsTable = document.getElementById('kpi-alerts-table');
-  if (alertsTable && alerts && alerts.alerts) {
-    alertsTable.innerHTML = alerts.alerts.slice(0, 100).map(function(a) {
-      const link = a.link ? (a.link.quote_number || ('Proyecto #' + a.link.project_id)) : '—';
-      const sem = a.traffic_light ? renderTrafficLight(a.traffic_light) : '';
-      return '<tr><td>' + sem + escapeHtml(a.severity) + '</td><td>' + escapeHtml(a.type) + '</td><td>' + escapeHtml(a.responsible || '') + '</td><td>' + escapeHtml(a.date || '') + '</td><td>' + escapeHtml(a.suggested_action || '') + '</td><td>' + escapeHtml(link) + '</td></tr>';
-    }).join('') || '<tr><td colspan="6" class="muted">Sin alertas para el periodo seleccionado.</td></tr>';
-  }
+  renderRentabilidadSection(summary.proyectos);
+  renderCobroFacturacionSection(summary.facturacion, summary.cobranza);
+  renderEquipoSection(summary.reportes, employees);
+  renderOperativeAlertsGrouped(alerts);
 
   const unassignedEl = document.getElementById('kpi-unassigned');
   const unassignedList = document.getElementById('kpi-unassigned-list');

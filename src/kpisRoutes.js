@@ -514,6 +514,7 @@ function registerKpiRoutes(app, db, { requireAuth }) {
         reportes: summary.reportes,
         cobranza: summary.cobranza,
         facturacion: summary.facturacion,
+        departments: summary.departments,
         employees: employees.employees,
         formulas: getFormulaDefinitions(settings),
         alerts: alerts.alerts,
