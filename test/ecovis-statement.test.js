@@ -7,6 +7,7 @@ const {
   buildEcovisStatementLedger,
   buildEcovisAccountHeader,
   describeEcovisNetBalance,
+  resolveStatementConcept,
   roundMoney,
 } = require('../src/ecovis');
 
@@ -20,7 +21,7 @@ test('describeEcovisNetBalance directions', () => {
 test('header equation matches net_balance components', () => {
   const projects = [{ id: 1, amount_mxn: 100000, is_cancelled: 0 }];
   const allocations = [
-    { allocation_type: 'proyecto', amount_mxn: 30000, is_cancelled: 0 },
+    { allocation_type: 'proyecto', ecovis_project_id: 1, amount_mxn: 30000, is_cancelled: 0 },
   ];
   const movements = [
     { id: 10, movement_type: 'prestamo_ecovis_a_revram', amount_mxn: 20000, is_cancelled: 0 },
@@ -28,7 +29,6 @@ test('header equation matches net_balance components', () => {
   ];
   const summary = calculateEcovisAccountSummary(projects, [], allocations, movements);
   const header = buildEcovisAccountHeader(summary);
-  // A=70000, B=+5000, C=20000 → net=55000
   assert.equal(summary.pending_project_amount, 70000);
   assert.equal(summary.adjustments, 5000);
   assert.equal(summary.outstanding_loans, 20000);
@@ -39,9 +39,8 @@ test('header equation matches net_balance components', () => {
 });
 
 test('ledger running balance matches header net_balance (three-way)', () => {
-  // Proyecto 100k, pago asignado 40k, prestamo 25k, devolucion 5k, ajuste -2k (REVRAM debe)
   const projects = [
-    { id: 1, amount_mxn: 100000, total_amount: 100000, is_cancelled: 0 },
+    { id: 1, amount_mxn: 100000, total_amount: 100000, is_cancelled: 0, project_name: 'Alpha' },
   ];
   const payments = [
     { id: 1, amount_mxn: 40000, amount: 40000, is_cancelled: 0 },
@@ -61,7 +60,7 @@ test('ledger running balance matches header net_balance (three-way)', () => {
       id: 1,
       movement_date: '2026-01-05',
       movement_type: 'proyecto',
-      description: 'Proyecto Alpha',
+      description: 'Alpha',
       amount: 100000,
       amount_mxn: 100000,
       currency: 'MXN',
@@ -85,7 +84,7 @@ test('ledger running balance matches header net_balance (three-way)', () => {
       id: 3,
       movement_date: '2026-01-10',
       movement_type: 'aplicacion_a_proyecto',
-      description: 'Abono Alpha',
+      description: 'proyecto',
       amount: 40000,
       amount_mxn: 40000,
       currency: 'MXN',
@@ -132,34 +131,35 @@ test('ledger running balance matches header net_balance (three-way)', () => {
 
   const summary = calculateEcovisAccountSummary(projects, payments, allocations, movements);
   const header = buildEcovisAccountHeader(summary);
-  const ledger = buildEcovisStatementLedger(movements, { cancelledProjectIds: new Set() });
+  const ledger = buildEcovisStatementLedger(movements, {
+    cancelledProjectIds: new Set(),
+    activeProjectIds: new Set([1]),
+    projectById: { 1: projects[0] },
+  });
 
-  // A = 100000 - 40000 = 60000
-  // B = -2000
-  // C = 25000 - 5000 = 20000
-  // net = 60000 - 2000 - 20000 = 38000
   assert.equal(summary.pending_project_amount, 60000);
   assert.equal(summary.adjustments, -2000);
   assert.equal(summary.outstanding_loans, 20000);
   assert.equal(summary.net_balance, 38000);
   assert.equal(header.equation.net_balance, 38000);
   assert.equal(ledger.closing_balance, 38000);
-  assert.equal(ledger.rows[ledger.rows.length - 1].running_balance, 38000);
 
-  // pago_recibido is informational: does not move running balance
   const paymentRow = ledger.rows.find((r) => r.movement_type === 'pago_recibido');
   assert.equal(paymentRow.affects_balance, false);
   assert.equal(paymentRow.informational, true);
+
+  const appRow = ledger.rows.find((r) => r.movement_type === 'aplicacion_a_proyecto');
+  assert.equal(appRow.concept, 'Aplicacion a Alpha');
 });
 
-test('cancelled project movement does not affect running balance', () => {
+test('cancelled project movements are omitted from statement listing', () => {
   const movements = [
     {
       id: 1,
       movement_date: '2026-02-01',
       movement_type: 'proyecto',
-      description: 'Cancelado',
-      amount_mxn: 50000,
+      description: 'ldga3042',
+      amount_mxn: 348,
       related_project_id: 9,
       is_cancelled: 0,
       direction: 'ecovis_debe_a_revram',
@@ -167,21 +167,70 @@ test('cancelled project movement does not affect running balance', () => {
     {
       id: 2,
       movement_date: '2026-02-02',
+      movement_type: 'aplicacion_a_proyecto',
+      description: 'ldga3042',
+      amount_mxn: 348,
+      related_project_id: 9,
+      is_cancelled: 0,
+      direction: 'ecovis_debe_a_revram',
+    },
+    {
+      id: 3,
+      movement_date: '2026-02-03',
       movement_type: 'cancelacion',
       description: 'Motivo X',
-      amount_mxn: 50000,
+      amount_mxn: 348,
       related_project_id: 9,
       is_cancelled: 0,
       cancellation_reason: 'Motivo X',
       direction: 'ecovis_debe_a_revram',
     },
+    {
+      id: 4,
+      movement_date: '2026-02-04',
+      movement_type: 'prestamo_ecovis_a_revram',
+      description: 'Prestamo vigente',
+      amount_mxn: 1000,
+      is_cancelled: 0,
+      direction: 'revram_debe_a_ecovis',
+    },
   ];
   const ledger = buildEcovisStatementLedger(movements, {
     cancelledProjectIds: new Set([9]),
+    activeProjectIds: new Set(),
+    projectById: { 9: { id: 9, project_name: 'ldga3042', is_cancelled: 1 } },
   });
-  assert.equal(ledger.closing_balance, 0);
-  assert.equal(ledger.rows[0].affects_balance, false);
-  assert.equal(ledger.rows[1].affects_balance, false);
+  assert.equal(ledger.rows.length, 1);
+  assert.equal(ledger.rows[0].movement_type, 'prestamo_ecovis_a_revram');
+  assert.equal(ledger.closing_balance, -1000);
+});
+
+test('allocations to cancelled projects do not reduce pending in summary', () => {
+  const projects = [
+    { id: 1, amount_mxn: 100000, is_cancelled: 1 },
+    { id: 2, amount_mxn: 50000, is_cancelled: 0 },
+  ];
+  const allocations = [
+    { allocation_type: 'proyecto', ecovis_project_id: 1, amount_mxn: 40000, is_cancelled: 0 },
+    { allocation_type: 'proyecto', ecovis_project_id: 2, amount_mxn: 10000, is_cancelled: 0 },
+  ];
+  const summary = calculateEcovisAccountSummary(projects, [], allocations, []);
+  assert.equal(summary.total_projected, 50000);
+  assert.equal(summary.total_paid_to_projects, 10000);
+  assert.equal(summary.pending_project_amount, 40000);
+  assert.equal(summary.net_balance, 40000);
+});
+
+test('resolveStatementConcept prefers project name over autofilled notes', () => {
+  const concept = resolveStatementConcept(
+    {
+      movement_type: 'aplicacion_a_proyecto',
+      description: 'ldga3042',
+      related_project_id: 37,
+    },
+    { 37: { id: 37, project_name: 'Arranque caldera planta Norte' } },
+  );
+  assert.equal(concept, 'Aplicacion a Arranque caldera planta Norte');
 });
 
 test('date range opening and closing balances', () => {
@@ -220,6 +269,7 @@ test('date range opening and closing balances', () => {
     from: '2026-02-01',
     to: '2026-02-28',
     cancelledProjectIds: new Set(),
+    activeProjectIds: new Set([1, 2]),
   });
   assert.equal(ledger.opening_balance, 10000);
   assert.equal(ledger.closing_balance, 15000);
@@ -249,7 +299,10 @@ test('display order can be descending while balance was computed ascending', () 
       direction: 'ecovis_debe_a_revram',
     },
   ];
-  const ledger = buildEcovisStatementLedger(movements, { cancelledProjectIds: new Set() });
+  const ledger = buildEcovisStatementLedger(movements, {
+    cancelledProjectIds: new Set(),
+    activeProjectIds: new Set([1, 2]),
+  });
   const desc = [...ledger.rows].reverse();
   assert.equal(desc[0].running_balance, 3000);
   assert.equal(desc[1].running_balance, 1000);

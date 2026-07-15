@@ -101,9 +101,16 @@ function calculateEcovisAccountSummary(projects, payments, allocations, movement
     activeProjects.reduce((sum, p) => sum + Number(p.amount_mxn || p.total_amount || 0), 0),
   );
 
+  // Allocations to cancelled/missing projects must not reduce pending
+  // (otherwise pending can go negative after cancel while movements linger).
+  const activeProjectIds = new Set(activeProjects.map((p) => Number(p.id)));
   const totalPaidToProjects = roundMoney(
     allocations
       .filter((a) => a.allocation_type === 'proyecto' && !a.is_cancelled)
+      .filter((a) => {
+        if (a.ecovis_project_id == null) return true; // legacy rows without FK
+        return activeProjectIds.has(Number(a.ecovis_project_id));
+      })
       .reduce((sum, a) => sum + Number(a.amount_mxn || a.amount || 0), 0),
   );
 
@@ -278,22 +285,97 @@ const STATEMENT_TYPE_LABELS = {
   cancelacion: 'Cancelacion',
 };
 
+const GENERIC_MOVEMENT_DESCRIPTIONS = new Set([
+  '',
+  'proyecto',
+  'pago_recibido',
+  'prestamo_ecovis_a_revram',
+  'aplicacion_a_proyecto',
+  'saldo_a_favor',
+  'devolucion',
+  'ajuste',
+  'cancelacion',
+  'orden_compra',
+  'prestamo',
+]);
+
+/**
+ * Prefer structured labels + related project name over raw description.
+ * Raw notes were sometimes browser-autofilled with the admin password into
+ * allocation forms (input name="notes") / project_name.
+ */
+function resolveStatementConcept(movement, projectById = {}) {
+  const type = movement.movement_type;
+  const label = STATEMENT_TYPE_LABELS[type] || type;
+  const project = movement.related_project_id != null
+    ? projectById[Number(movement.related_project_id)]
+    : null;
+  const projectName = project && project.project_name
+    ? String(project.project_name).trim()
+    : '';
+  const raw = String(movement.description || '').trim();
+  const isGeneric = GENERIC_MOVEMENT_DESCRIPTIONS.has(raw);
+
+  switch (type) {
+    case 'proyecto':
+      return projectName || (isGeneric ? label : raw) || label;
+    case 'aplicacion_a_proyecto':
+      if (projectName) return `Aplicacion a ${projectName}`;
+      if (movement.related_project_id == null) return 'Aplicacion a orden de compra';
+      return isGeneric ? label : raw;
+    case 'saldo_a_favor':
+      if (movement.direction === 'ecovis_debe_a_revram') {
+        return projectName
+          ? `Aplicacion de saldo a favor a ${projectName}`
+          : 'Aplicacion de saldo a favor';
+      }
+      return isGeneric ? 'Saldo a favor (credito disponible)' : raw;
+    case 'cancelacion': {
+      const reason = String(movement.cancellation_reason || raw || '').trim();
+      return reason ? `Cancelacion: ${reason}` : label;
+    }
+    case 'pago_recibido':
+      return (!isGeneric && raw)
+        ? `${raw} (sin efecto en saldo hasta asignar)`
+        : 'Pago recibido (sin efecto en saldo hasta asignar)';
+    case 'prestamo_ecovis_a_revram':
+    case 'devolucion':
+    case 'ajuste':
+      return (!isGeneric && raw) ? raw : label;
+    default:
+      return raw || label;
+  }
+}
+
+function isInactiveProjectMovement(movement, options = {}) {
+  if (Number(movement.is_cancelled)) return true;
+  const pid = movement.related_project_id;
+  if (pid == null) return false;
+  const id = Number(pid);
+  const cancelledProjectIds = options.cancelledProjectIds || new Set();
+  const activeProjectIds = options.activeProjectIds || null;
+  if (cancelledProjectIds.has(id)) return true;
+  if (activeProjectIds && !activeProjectIds.has(id)) return true;
+  return false;
+}
+
 /**
  * Signed effect of a movement on net_balance (positive = ECOVIS debe a REVRAM).
  * Mirrors calculateEcovisAccountSummary — do not change independently.
  */
 function classifyEcovisStatementEffect(movement, options = {}) {
-  const cancelledProjectIds = options.cancelledProjectIds || new Set();
   const amount = roundMoney(Number(movement.amount_mxn || movement.amount || 0));
   const isCancelled = Boolean(Number(movement.is_cancelled));
   const type = movement.movement_type;
   const currency = movement.currency || 'MXN';
   const originalAmount = Number(movement.amount || 0);
   const label = STATEMENT_TYPE_LABELS[type] || type;
+  const projectById = options.projectById || {};
+  const concept = resolveStatementConcept(movement, projectById);
 
   const base = {
     movement_type: type,
-    concept: movement.description || label,
+    concept,
     concept_label: label,
     reference: movement.reference
       || (movement.related_project_id ? `Proyecto #${movement.related_project_id}` : null)
@@ -309,26 +391,16 @@ function classifyEcovisStatementEffect(movement, options = {}) {
     credit: 0,
     delta: 0,
     informational: false,
+    omit: false,
   };
 
-  if (isCancelled) {
-    return { ...base, informational: true };
+  if (isCancelled || isInactiveProjectMovement(movement, options)) {
+    return { ...base, informational: true, omit: true };
   }
 
   switch (type) {
-    case 'proyecto': {
-      const projectCancelled = movement.related_project_id != null
-        && cancelledProjectIds.has(Number(movement.related_project_id));
-      if (projectCancelled) {
-        return {
-          ...base,
-          charge: amount,
-          informational: true,
-          concept: `${base.concept} (proyecto cancelado)`,
-        };
-      }
+    case 'proyecto':
       return { ...base, charge: amount, delta: amount, affects_balance: true };
-    }
     case 'aplicacion_a_proyecto': {
       // Only project allocations reduce pending in the summary formula (not OC).
       if (movement.related_project_id == null) {
@@ -336,7 +408,7 @@ function classifyEcovisStatementEffect(movement, options = {}) {
           ...base,
           credit: amount,
           informational: true,
-          concept: `${base.concept} (OC / sin proyecto)`,
+          concept: 'Aplicacion a orden de compra',
         };
       }
       return { ...base, credit: amount, delta: -amount, affects_balance: true };
@@ -355,37 +427,11 @@ function classifyEcovisStatementEffect(movement, options = {}) {
       return { ...base, informational: true };
     }
     case 'cancelacion':
-      return {
-        ...base,
-        credit: amount,
-        informational: true,
-        concept: movement.cancellation_reason
-          ? `Cancelacion: ${movement.cancellation_reason}`
-          : base.concept,
-      };
+      return { ...base, credit: amount, informational: true, omit: true };
     case 'pago_recibido':
-      return {
-        ...base,
-        credit: amount,
-        informational: true,
-        concept: `${base.concept} (sin efecto en saldo hasta asignar)`,
-      };
-    case 'saldo_a_favor': {
-      if (movement.direction === 'ecovis_debe_a_revram') {
-        return {
-          ...base,
-          credit: amount,
-          informational: true,
-          concept: `${base.concept} (aplicacion de saldo a favor)`,
-        };
-      }
-      return {
-        ...base,
-        credit: amount,
-        informational: true,
-        concept: `${base.concept} (credito disponible)`,
-      };
-    }
+      return { ...base, credit: amount, informational: true };
+    case 'saldo_a_favor':
+      return { ...base, credit: amount, informational: true };
     default:
       return { ...base, informational: true };
   }
@@ -402,16 +448,22 @@ function compareStatementChronology(a, b) {
 
 /**
  * Builds chronological ledger with running balance.
- * Running balance is computed ascending; callers may reverse for display.
- * Final running_balance equals net_balance when options include all movements
- * and cancelledProjectIds matches projects used by calculateEcovisAccountSummary.
+ * Movements linked to cancelled/missing projects are omitted from the listing
+ * and do not affect the running balance (aligned with summary pending formula).
  */
 function buildEcovisStatementLedger(movements, options = {}) {
   const cancelledProjectIds = options.cancelledProjectIds instanceof Set
     ? options.cancelledProjectIds
     : new Set((options.cancelledProjectIds || []).map(Number));
+  const activeProjectIds = options.activeProjectIds instanceof Set
+    ? options.activeProjectIds
+    : (options.activeProjectIds
+      ? new Set([...options.activeProjectIds].map(Number))
+      : null);
+  const projectById = options.projectById || {};
   const from = options.from || null;
   const to = options.to || null;
+  const classifyOpts = { cancelledProjectIds, activeProjectIds, projectById };
 
   const sorted = [...movements].sort(compareStatementChronology);
   let running = 0;
@@ -419,8 +471,12 @@ function buildEcovisStatementLedger(movements, options = {}) {
   const rows = [];
 
   for (const movement of sorted) {
-    const effect = classifyEcovisStatementEffect(movement, { cancelledProjectIds });
+    const effect = classifyEcovisStatementEffect(movement, classifyOpts);
     const date = String(movement.movement_date || '');
+
+    if (effect.omit) {
+      continue;
+    }
 
     if (from && date < from) {
       if (effect.affects_balance) {
@@ -545,6 +601,7 @@ module.exports = {
   roundMoney,
   classifyEcovisStatementEffect,
   buildEcovisStatementLedger,
+  resolveStatementConcept,
   describeEcovisNetBalance,
   buildEcovisAccountHeader,
   STATEMENT_TYPE_LABELS,
