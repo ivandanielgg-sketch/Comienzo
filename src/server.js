@@ -3618,19 +3618,31 @@ function loadEcovisStatementPayload(query) {
     throw badRequest('Tipo de movimiento no valido.');
   }
 
-  const projects = db.prepare('SELECT id, is_cancelled FROM ecovis_projects').all();
-  const cancelledProjectIds = new Set(
-    projects.filter((p) => p.is_cancelled).map((p) => Number(p.id)),
-  );
-
   const allProjects = db.prepare('SELECT * FROM ecovis_projects').all();
+  const cancelledProjectIds = new Set(
+    allProjects.filter((p) => p.is_cancelled).map((p) => Number(p.id)),
+  );
+  const activeProjectIds = new Set(
+    allProjects.filter((p) => !p.is_cancelled).map((p) => Number(p.id)),
+  );
+  const projectById = {};
+  for (const project of allProjects) {
+    projectById[Number(project.id)] = project;
+  }
+
   const payments = db.prepare('SELECT * FROM ecovis_payments').all();
   const allocations = db.prepare('SELECT * FROM ecovis_payment_allocations').all();
   const movements = db.prepare('SELECT * FROM ecovis_movements ORDER BY movement_date ASC, id ASC').all();
 
   const summary = calculateEcovisAccountSummary(allProjects, payments, allocations, movements);
   const header = buildEcovisAccountHeader(summary);
-  const ledger = buildEcovisStatementLedger(movements, { from, to, cancelledProjectIds });
+  const ledger = buildEcovisStatementLedger(movements, {
+    from,
+    to,
+    cancelledProjectIds,
+    activeProjectIds,
+    projectById,
+  });
 
   let filtered = ledger.rows;
   if (movementType) {
@@ -3962,12 +3974,42 @@ app.post('/api/ecovis/projects/:id/cancel', requireAuth, requirePermission('ecov
         WHERE id = ?`,
       ).run(audit.updated_at, req.session.username, reason, audit.updated_at, audit.updated_by_name, audit.updated_by_user_id, req.params.id);
 
+      // Soft-cancel related allocations so paid amounts / unallocated recalculate.
+      // Never DELETE — cancel = estado.
+      db.prepare(
+        `UPDATE ecovis_payment_allocations
+         SET is_cancelled = 1
+         WHERE ecovis_project_id = ? AND is_cancelled = 0`,
+      ).run(req.params.id);
+
+      db.prepare(
+        `UPDATE ecovis_movements SET
+          is_cancelled = 1,
+          cancelled_at = ?,
+          cancelled_by = ?,
+          cancellation_reason = ?,
+          updated_at = ?
+         WHERE related_project_id = ?
+           AND is_cancelled = 0
+           AND movement_type IN ('proyecto', 'aplicacion_a_proyecto', 'saldo_a_favor')`,
+      ).run(audit.updated_at, req.session.username, reason, audit.updated_at, req.params.id);
+
       db.prepare(
         `INSERT INTO ecovis_movements (
           movement_type, movement_date, amount, currency, direction,
-          description, related_project_id, created_by, created_by_user_id, created_at, updated_at
-        ) VALUES ('cancelacion', ${sqlCurrentDate()}, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?, ?, ?)`,
-      ).run(project.total_amount, project.currency, reason, req.params.id, req.session.username, audit.updated_by_user_id, audit.updated_at, audit.updated_at);
+          description, related_project_id, cancellation_reason, created_by, created_by_user_id, created_at, updated_at
+        ) VALUES ('cancelacion', ${sqlCurrentDate()}, ?, ?, 'ecovis_debe_a_revram', ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        project.total_amount,
+        project.currency,
+        reason,
+        req.params.id,
+        reason,
+        req.session.username,
+        audit.updated_by_user_id,
+        audit.updated_at,
+        audit.updated_at,
+      );
 
       const affectedPayments = db.prepare(
         'SELECT DISTINCT payment_id FROM ecovis_payment_allocations WHERE ecovis_project_id = ?',
@@ -4276,21 +4318,28 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
 
     let movementType;
     let direction;
+    let movementDescription;
     if (allocationType === 'proyecto') {
       movementType = 'aplicacion_a_proyecto';
       direction = 'ecovis_debe_a_revram';
+      const targetProject = getEcovisProjectOrFail(ecovisProjectId);
+      movementDescription = `Aplicacion a ${targetProject.project_name}`;
     } else if (allocationType === 'orden_compra') {
       movementType = 'aplicacion_a_proyecto';
       direction = 'ecovis_debe_a_revram';
+      movementDescription = 'Aplicacion a orden de compra';
     } else if (allocationType === 'saldo_a_favor') {
       movementType = 'saldo_a_favor';
       direction = 'neutral';
+      movementDescription = 'Saldo a favor (credito disponible)';
     } else if (allocationType === 'prestamo') {
       movementType = 'prestamo_ecovis_a_revram';
       direction = 'revram_debe_a_ecovis';
+      movementDescription = 'Prestamo ECOVIS a REVRAM';
     } else {
       movementType = 'ajuste';
       direction = 'neutral';
+      movementDescription = 'Ajuste';
     }
 
     const createAllocation = db.transaction(() => {
@@ -4303,11 +4352,11 @@ app.post('/api/ecovis/payments/:id/allocations', requireAuth, requirePermission(
       db.prepare(
         `INSERT INTO ecovis_movements (
           movement_type, movement_date, amount, currency, exchange_rate_to_mxn, amount_mxn, direction,
-          description, related_payment_id, related_project_id, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          description, notes, related_payment_id, related_project_id, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         movementType, payment.payment_date, amount, allocationCurrency, allocationRate, allocationAmountMxn, direction,
-        notes || allocationType, payment.id, ecovisProjectId, req.session.username,
+        movementDescription, notes || null, payment.id, ecovisProjectId, req.session.username,
       );
 
       recalculatePaymentUnallocated(payment.id);
