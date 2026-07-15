@@ -2045,13 +2045,8 @@
                 <button type="button" id="kpi-btn-export-pdf" class="secondary">Exportar PDF</button>
                 <button type="button" id="kpi-btn-export-excel" class="secondary">Exportar Excel</button>
               </div>
-              <div id="kpi-charts-section" class="kpi-charts-grid kpi-charts-global">
-                <div class="panel kpi-chart-panel"><h3>Cartera por vencimiento</h3><canvas id="kpi-chart-receivable" height="200"></canvas></div>
-                <div class="panel kpi-chart-panel"><h3>Servicios realizados por mes (tecnicos)</h3><canvas id="kpi-chart-reports" height="200"></canvas></div>
-              </div>
-
               <p id="kpi-period-label" class="muted" style="margin:8px 0;"></p>
-              <div id="kpi-summary-cards" class="kpi-cards"></div>
+              <div id="kpi-summary-cards" class="kpi-cards kpi-summary-global"></div>
               <div id="kpi-loading" class="muted hidden">Cargando indicadores...</div>
               <div id="kpi-error" class="hidden" style="color:var(--danger);padding:8px 0;"></div>
               <div id="kpi-sections">
@@ -2086,13 +2081,72 @@
                   </div>
                   <div id="kpi-ventas-alerts-wrap" class="kpi-ventas-alerts" style="margin-top:16px;"></div>
                 </div>
-                <div class="kpi-section panel" id="kpi-section-proyectos"><h3>Proyectos</h3><div id="kpi-proyectos-content" class="kpi-metrics"></div></div>
-                <div class="kpi-section panel" id="kpi-section-reportes"><h3>Reportes Tecnicos</h3><div id="kpi-reportes-content" class="kpi-metrics"></div></div>
-                <div class="kpi-section panel" id="kpi-section-facturacion"><h3>Facturacion</h3><div id="kpi-facturacion-content" class="kpi-metrics"></div></div>
-                <div class="kpi-section panel" id="kpi-section-cobranza"><h3>Cobranza</h3><div id="kpi-cobranza-content" class="kpi-metrics"></div></div>
-                <div class="kpi-section panel" id="kpi-section-departments"><h3>KPIs por Departamento</h3><div id="kpi-departments-content"></div></div>
-                <div class="kpi-section panel" id="kpi-section-employees"><h3>KPIs por Empleado</h3><div class="table-wrapper"><table><thead><tr><th>Empleado</th><th>Departamento</th><th>Indicadores</th><th>Semaforo</th><th>Alertas</th></tr></thead><tbody id="kpi-employees-table"></tbody></table></div></div>
-                <div class="kpi-section panel" id="kpi-section-alerts"><h3>Alertas Operativas</h3><div class="table-wrapper"><table><thead><tr><th>Severidad</th><th>Tipo</th><th>Responsable</th><th>Fecha</th><th>Accion sugerida</th><th>Registro</th></tr></thead><tbody id="kpi-alerts-table"></tbody></table></div></div>
+
+                <div class="kpi-section panel" id="kpi-section-rentabilidad">
+                  <h3>Rentabilidad de proyectos</h3>
+                  <div id="kpi-rentabilidad-cards" class="kpi-cards"></div>
+                  <div id="kpi-rentabilidad-charts" class="kpi-charts-grid">
+                    <div class="panel kpi-chart-panel"><h3>Cartera por vencimiento</h3><canvas id="kpi-chart-receivable" height="200"></canvas></div>
+                  </div>
+                  <div id="kpi-red-margin-wrap" class="table-wrapper" style="margin-top:12px;">
+                    <h4 style="margin:0 0 8px;">Proyectos con margen en rojo</h4>
+                    <table class="data-table kpi-red-margin-table">
+                      <thead>
+                        <tr>
+                          <th>Cotización</th>
+                          <th>Cliente</th>
+                          <th>Margen %</th>
+                          <th>Semáforo</th>
+                        </tr>
+                      </thead>
+                      <tbody id="kpi-red-margin-table"></tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div class="kpi-section panel" id="kpi-section-cobro">
+                  <h3>Cobro y facturación</h3>
+                  <div id="kpi-cobro-cards" class="kpi-cards"></div>
+                  <p id="kpi-cobro-admin-note" class="muted kpi-admin-note"></p>
+                  <div id="kpi-cobro-pending" class="kpi-pending-capture hidden"></div>
+                </div>
+
+                <div class="kpi-section panel" id="kpi-section-equipo">
+                  <h3>Desempeño del equipo</h3>
+                  <div id="kpi-equipo-cards" class="kpi-cards"></div>
+                  <div id="kpi-equipo-charts" class="kpi-charts-grid">
+                    <div class="panel kpi-chart-panel"><h3>Servicios realizados por mes (técnicos)</h3><canvas id="kpi-chart-reports" height="200"></canvas></div>
+                  </div>
+                  <div id="kpi-employees-wrap" class="table-wrapper" style="margin-top:12px;">
+                    <h4 style="margin:0 0 8px;">KPIs por empleado</h4>
+                    <p class="muted" style="margin:0 0 8px;font-size:0.85rem;">Los vendedores se consultan en la tabla de la sección Ventas.</p>
+                    <table class="data-table kpi-employees-table">
+                      <thead>
+                        <tr>
+                          <th>Empleado</th>
+                          <th>Departamento</th>
+                          <th>Servicios realizados</th>
+                          <th>Reportes completos (%)</th>
+                          <th>Retrabajos</th>
+                          <th>Semáforo</th>
+                        </tr>
+                      </thead>
+                      <tbody id="kpi-employees-table"></tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div class="kpi-section panel" id="kpi-section-alerts">
+                  <h3>Alertas operativas</h3>
+                  <div id="kpi-alerts-wrap" class="kpi-ops-alerts"></div>
+                </div>
+
+                <!-- Secciones legadas ocultas: payload/export siguen disponibles; IDs conservados por compatibilidad -->
+                <div id="kpi-section-proyectos" class="hidden" aria-hidden="true"><div id="kpi-proyectos-content"></div></div>
+                <div id="kpi-section-reportes" class="hidden" aria-hidden="true"><div id="kpi-reportes-content"></div></div>
+                <div id="kpi-section-facturacion" class="hidden" aria-hidden="true"><div id="kpi-facturacion-content"></div></div>
+                <div id="kpi-section-cobranza" class="hidden" aria-hidden="true"><div id="kpi-cobranza-content"></div></div>
+                <div id="kpi-section-departments" class="hidden" aria-hidden="true"><div id="kpi-departments-content"></div></div>
               </div>
               <div id="kpi-unassigned" class="hidden panel" style="margin-top:12px;">
                 <h3>Sin departamento asignado</h3>

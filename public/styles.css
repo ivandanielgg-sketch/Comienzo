@@ -1544,6 +1544,111 @@ th.col-number {
   margin-top: 8px;
 }
 
+.kpi-summary-global .kpi-summary-card {
+  flex: 1 1 150px;
+  min-width: 140px;
+}
+
+.kpi-card-unit {
+  margin-left: 6px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted, #94a3b8);
+}
+
+.kpi-card-change {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.kpi-card-change-up { color: #15803d; }
+.kpi-card-change-down { color: #b91c1c; }
+.kpi-card-change-flat { color: var(--muted, #64748b); }
+
+.kpi-card-secondary {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: var(--muted, #64748b);
+}
+
+.kpi-card-accent-critical {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.kpi-card-accent-critical strong {
+  color: #b91c1c;
+}
+
+.kpi-tip {
+  display: inline-block;
+  margin-left: 4px;
+  width: 1rem;
+  height: 1rem;
+  line-height: 1rem;
+  text-align: center;
+  border-radius: 50%;
+  border: 1px solid var(--border, #cbd5e1);
+  color: var(--muted, #64748b);
+  font-size: 0.7rem;
+  cursor: help;
+  vertical-align: middle;
+}
+
+.kpi-admin-note {
+  margin: 4px 0 12px;
+  font-size: 0.8rem;
+}
+
+.kpi-red-margin-table th,
+.kpi-red-margin-table td,
+.kpi-employees-table th,
+.kpi-employees-table td {
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+
+.kpi-ops-alert-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kpi-ops-alert-group {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--panel-bg, #fff);
+}
+
+.kpi-ops-alert-group summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.kpi-ops-alert-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.kpi-ops-alert-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.88rem;
+}
+
+.kpi-ops-alerts-toggle {
+  margin-top: 8px;
+}
+
+#kpi-rentabilidad-charts,
+#kpi-equipo-charts {
+  grid-template-columns: minmax(280px, 1fr);
+}
+
 /* Project detail drawer (Proyectos) */
 body.scroll-lock {
   overflow: hidden;

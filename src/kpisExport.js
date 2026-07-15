@@ -44,27 +44,106 @@ function buildWorksheet(name, headers, rows) {
   return `<Worksheet ss:Name="${escapeXml(name)}"><Table><Row>${headerRow}</Row>${dataRows}</Table></Worksheet>`;
 }
 
+function pickKpis(obj, keys) {
+  return keys.map(([label, key]) => [label, kpiCellDisplay(obj && obj[key])]);
+}
+
 function buildKpiExcelWorkbook(payload) {
   const meta = payload.meta || {};
   const worksheets = [];
 
-  worksheets.push(buildWorksheet('Resumen', ['Indicador', 'Valor'], (payload.summary_cards || []).map((c) => [c.label, c.value])));
+  worksheets.push(buildWorksheet(
+    'Resumen',
+    ['Indicador', 'Valor', 'Unidad', 'Cambio % vs anterior'],
+    (payload.summary_cards || []).map((c) => [
+      c.label,
+      c.value,
+      c.unit || '',
+      c.change_pct != null ? c.change_pct : '',
+    ]),
+  ));
 
-  worksheets.push(buildWorksheet('Ventas', ['Indicador', 'Valor'], Object.entries(payload.ventas || {}).map(([k, v]) => [k, kpiCellDisplay(v)])));
+  worksheets.push(buildWorksheet('Ventas', ['Indicador', 'Valor'], Object.entries(payload.ventas || {})
+    .filter(([, v]) => v && typeof v === 'object' && 'display' in v)
+    .map(([k, v]) => [k, kpiCellDisplay(v)])));
 
-  worksheets.push(buildWorksheet('Proyectos', ['Indicador', 'Valor'], Object.entries(payload.proyectos || {}).map(([k, v]) => [k, kpiCellDisplay(v)])));
+  worksheets.push(buildWorksheet(
+    'Rentabilidad',
+    ['Indicador', 'Valor'],
+    pickKpis(payload.proyectos, [
+      ['Proyectos activos', 'active_projects'],
+      ['Margen bruto promedio (%)', 'gross_margin_real'],
+      ['Cumplimiento de entrega (%)', 'delivery_compliance'],
+      ['Tasa de retrabajo (%)', 'rework_rate'],
+      ['Proyectos margen rojo (cant.)', 'red_margin_projects'],
+      ['Retrabajos (cant.)', 'reworks'],
+      ['Cierre técnico pendiente', 'technical_close_pending'],
+    ]),
+  ));
 
-  worksheets.push(buildWorksheet('Reportes', ['Indicador', 'Valor'], Object.entries(payload.reportes || {}).map(([k, v]) => [k, kpiCellDisplay(v)])));
+  const redList = Array.isArray(payload.proyectos?.red_margin_list)
+    ? payload.proyectos.red_margin_list.slice().sort((a, b) => (Number(a.margin_percent) || 0) - (Number(b.margin_percent) || 0))
+    : [];
+  worksheets.push(buildWorksheet(
+    'Margen rojo',
+    ['Cotizacion', 'Cliente', 'Margen %', 'Semaforo'],
+    redList.map((r) => [r.quote_number || '', r.client_name || '', r.margin_percent ?? '', r.traffic_light || '']),
+  ));
 
-  worksheets.push(buildWorksheet('Cobranza', ['Indicador', 'Valor'], Object.entries(payload.cobranza || {}).map(([k, v]) => [k, kpiCellDisplay(v)])));
+  worksheets.push(buildWorksheet(
+    'Cobro y facturacion',
+    ['Indicador', 'Valor'],
+    [
+      ...pickKpis(payload.facturacion, [
+        ['Facturado en el periodo (MXN)', 'invoiced_amount_mxn'],
+        ['Facturas emitidas', 'invoices_issued'],
+        ['Tiempo facturacion (dias)', 'billing_time_days'],
+        ['Facturas canceladas', 'cancelled_invoices'],
+        ['Facturas con error', 'error_invoices'],
+        ['Pendientes documentacion', 'pending_documentation'],
+      ]),
+      ...pickKpis(payload.cobranza, [
+        ['Cobrado en el periodo (MXN)', 'collected_amount_mxn'],
+        ['DSO / Dias promedio de cobro', 'avg_collection_days'],
+        ['% cartera vencida', 'overdue_portfolio'],
+        ['Monto cartera vencida (MXN)', 'overdue_amount_mxn'],
+        ['Cuentas +120 dias', 'accounts_over_120_days'],
+        ['Monto +120 dias (MXN)', 'accounts_over_120_amount_mxn'],
+        ['Facturas vencidas sin gestion de cobro', 'invoices_without_contact'],
+      ]),
+      ['Nota administrativa', (payload.facturacion && payload.facturacion.billing_admin_note) || ''],
+    ],
+  ));
 
-  worksheets.push(buildWorksheet('Facturacion', ['Indicador', 'Valor'], Object.entries(payload.facturacion || {}).map(([k, v]) => [k, kpiCellDisplay(v)])));
+  worksheets.push(buildWorksheet(
+    'Equipo',
+    ['Indicador', 'Valor'],
+    pickKpis(payload.reportes, [
+      ['% reportes completos', 'complete_reports'],
+      ['Reportes completos (#)', 'complete_count'],
+      ['Evidencias completas (%)', 'complete_evidence'],
+      ['Servicios sin reporte', 'services_without_report'],
+    ]),
+  ));
 
-  worksheets.push(buildWorksheet('Empleados', ['Empleado', 'Departamento', 'Indicadores', 'Semaforo'], (payload.employees || []).map((e) => [
-    e.employee,
-    e.department,
-    JSON.stringify(e.kpis || {}),
-    e.traffic_light || '',
+  worksheets.push(buildWorksheet('Empleados', [
+    'Empleado', 'Departamento', 'Servicios realizados', 'Reportes completos (%)', 'Retrabajos', 'Semaforo',
+  ], (payload.employees || []).map((e) => {
+    const k = e.kpis || {};
+    const isTec = /t[eé]cnico/i.test(e.department || '');
+    return [
+      e.employee,
+      e.department,
+      isTec ? (k.services_executed ?? k.assigned_services ?? '') : 'Ver Ventas / no aplica',
+      isTec ? (k.complete_reports ?? '') : '',
+      isTec ? (k.reworks ?? '') : '',
+      e.traffic_light || '',
+    ];
+  })));
+
+  worksheets.push(buildWorksheet('Departamentos', ['Departamento', 'Indicadores'], (payload.departments || []).map((d) => [
+    d.department,
+    JSON.stringify(d.kpis || {}),
   ])));
 
   worksheets.push(buildWorksheet('Formulas', ['KPI', 'Descripcion', 'Formula', 'Fuente', 'Modificable'], (payload.formulas || []).map((f) => [
@@ -109,6 +188,7 @@ ${worksheets.join('\n')}
 
 module.exports = {
   formatCurrencyMXN,
+  formatPercentCell,
   buildKpiExcelWorkbook,
   escapeXml,
 };

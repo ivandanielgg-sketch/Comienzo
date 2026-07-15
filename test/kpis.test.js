@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const Database = require('better-sqlite3');
 const {
   getPeriodRange,
+  getAdjacentPreviousPeriod,
   normalizeDepartment,
   normalizeProjectStatus,
   getMarginTrafficLight,
@@ -52,6 +53,12 @@ describe('KPIs unit tests', () => {
     assert.strictEqual(range.startDate, '2025-01-01');
     assert.strictEqual(range.endDate, '2025-01-31');
     assert.throws(() => getPeriodRange('custom', '2025-02-01', '2025-01-01'));
+  });
+
+  it('getAdjacentPreviousPeriod returns prior calendar month for full months', () => {
+    const prev = getAdjacentPreviousPeriod({ startDate: '2026-07-01', endDate: '2026-07-31' });
+    assert.strictEqual(prev.startDate, '2026-06-01');
+    assert.strictEqual(prev.endDate, '2026-06-30');
   });
 
   it('normalizeDepartment maps valid departments', () => {
@@ -546,6 +553,25 @@ describe('KPIs frontend markup', () => {
     assert.match(js, /renderVentasSection/);
     assert.match(js, /renderVentasCharts/);
     assert.match(js, /renderVentasSellersTable/);
+    assert.match(js, /renderRentabilidadSection/);
+    assert.match(js, /renderCobroFacturacionSection/);
+    assert.match(js, /renderEquipoSection/);
+    assert.match(js, /renderOperativeAlertsGrouped/);
+  });
+
+  it('index.html organizes KPI board into four business sections', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    assert.match(html, /id="kpi-section-ventas"/);
+    assert.match(html, /id="kpi-section-rentabilidad"/);
+    assert.match(html, /id="kpi-section-cobro"/);
+    assert.match(html, /id="kpi-section-equipo"/);
+    assert.match(html, /id="kpi-section-alerts"/);
+    assert.match(html, /id="kpi-red-margin-table"/);
+    assert.match(html, /id="kpi-chart-receivable"/);
+    assert.match(html, /id="kpi-chart-reports"/);
+    assert.match(html, /Rentabilidad de proyectos/);
+    assert.match(html, /Cobro y facturación/);
+    assert.match(html, /Desempeño del equipo/);
   });
 });
 

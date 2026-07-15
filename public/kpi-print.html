@@ -12,11 +12,13 @@
     .kpi-print-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; }
     .kpi-print-card { border: 1px solid #ccc; padding: 10px; border-radius: 6px; }
     .kpi-print-card span { display: block; font-size: 0.75rem; color: #666; }
+    .kpi-print-card .change { font-size: 0.75rem; color: #555; margin-top: 4px; }
     .kpi-print-charts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin: 16px 0; }
     .kpi-print-chart-panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px; break-inside: avoid; page-break-inside: avoid; }
     .kpi-print-chart-panel h3 { margin: 0 0 8px; font-size: 0.95rem; }
     .kpi-print-chart-panel canvas { width: 100% !important; max-height: 280px; }
     .kpi-chart-empty { margin: 8px 0; font-size: 0.85rem; }
+    .kpi-print-section { margin: 20px 0; break-inside: avoid; page-break-inside: avoid; }
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 12px 0; }
     th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
     th { background: #f3f4f6; }
@@ -45,6 +47,9 @@
     function chartPanel(id, title) {
       return '<div class="kpi-print-chart-panel"><h3>' + escapeHtml(title) + '</h3><div id="' + id + '"></div></div>';
     }
+    function metricLine(label, value) {
+      return '<li><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(cellDisplay(value)) + '</li>';
+    }
     async function load() {
       const params = new URLSearchParams(window.location.search);
       const qs = params.get('qs') || '';
@@ -54,37 +59,105 @@
         return;
       }
       const data = await res.json();
-      const alertsRes = await fetch('/api/kpis/alerts?' + qs, { credentials: 'include' });
+      const [alertsRes, empRes] = await Promise.all([
+        fetch('/api/kpis/alerts?' + qs, { credentials: 'include' }),
+        fetch('/api/kpis/employees?' + qs, { credentials: 'include' }),
+      ]);
       const alertsData = alertsRes.ok ? await alertsRes.json() : { alerts: [] };
+      const empData = empRes.ok ? await empRes.json() : { employees: [] };
       const generated = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
-      const cards = (data.summary_cards || []).map(function(c) {
-        return '<div class="kpi-print-card"><span>' + escapeHtml(c.label) + '</span><strong>' + escapeHtml(c.value) + '</strong></div>';
+
+      const cards = (data.summary_cards || []).slice(0, 6).map(function(c) {
+        const change = c.change_pct != null
+          ? '<div class="change">' + (c.change_direction === 'up' ? '↑' : (c.change_direction === 'down' ? '↓' : '→'))
+            + ' ' + (c.change_pct > 0 ? '+' : '') + c.change_pct + '% vs periodo anterior</div>'
+          : '';
+        return '<div class="kpi-print-card"><span>' + escapeHtml(c.label)
+          + (c.unit ? ' (' + escapeHtml(c.unit) + ')' : '') + '</span><strong>'
+          + escapeHtml(c.value) + '</strong>' + change + '</div>';
       }).join('');
-      const alertRows = (alertsData.alerts || []).slice(0, 30).map(function(a) {
-        return '<tr><td>' + escapeHtml(a.severity) + '</td><td>' + escapeHtml(a.type) + '</td><td>' + escapeHtml(a.responsible || '') + '</td><td>' + escapeHtml(a.suggested_action || '') + '</td></tr>';
-      }).join('');
+
+      const redList = ((data.proyectos && data.proyectos.red_margin_list) || []).slice().sort(function(a, b) {
+        return (Number(a.margin_percent) || 0) - (Number(b.margin_percent) || 0);
+      });
+      const redRows = redList.map(function(r) {
+        return '<tr><td>' + escapeHtml(r.quote_number || '') + '</td><td>' + escapeHtml(r.client_name || '')
+          + '</td><td>' + escapeHtml(r.margin_percent == null ? '—' : (r.margin_percent + '%'))
+          + '</td><td>' + escapeHtml(r.traffic_light || '') + '</td></tr>';
+      }).join('') || '<tr><td colspan="4">Sin proyectos con margen en rojo</td></tr>';
+
+      const empRows = ((empData.employees || []).filter(function(e) { return e.department !== 'Ventas'; })).map(function(e) {
+        const k = e.kpis || {};
+        const isTec = /t[eé]cnico/i.test(e.department || '');
+        return '<tr><td>' + escapeHtml(e.employee) + '</td><td>' + escapeHtml(e.department || '')
+          + '</td><td>' + escapeHtml(isTec ? String(k.services_executed != null ? k.services_executed : '—') : '—')
+          + '</td><td>' + escapeHtml(isTec && k.complete_reports != null ? (k.complete_reports + '%') : '—')
+          + '</td><td>' + escapeHtml(isTec ? String(k.reworks != null ? k.reworks : '—') : '—')
+          + '</td><td>' + escapeHtml(e.traffic_light || '') + '</td></tr>';
+      }).join('') || '<tr><td colspan="6">Sin empleados técnicos en el periodo</td></tr>';
+
+      const alertGroups = {};
+      (alertsData.alerts || []).filter(function(a) { return a && a.suggested_action; }).forEach(function(a) {
+        const t = a.type || 'otra';
+        if (!alertGroups[t]) alertGroups[t] = [];
+        alertGroups[t].push(a);
+      });
+      const alertRows = Object.keys(alertGroups).map(function(type) {
+        const items = alertGroups[type];
+        return '<tr><td>' + escapeHtml(type) + '</td><td>' + items.length + '</td><td>'
+          + escapeHtml(items.slice(0, 5).map(function(a) { return a.suggested_action; }).join('; '))
+          + '</td></tr>';
+      }).join('') || '<tr><td colspan="3">Sin alertas</td></tr>';
+
       document.getElementById('kpi-print-root').innerHTML =
         '<div class="print-header"><h1>Tablero KPIs REVRAM</h1>' +
         '<p><strong>Periodo:</strong> ' + escapeHtml(data.period && data.period.label) + '</p>' +
         '<p><strong>Generado:</strong> ' + escapeHtml(generated) + ' (Hora CDMX)</p>' +
         '<p><strong>Filtros:</strong> ' + escapeHtml(JSON.stringify(data.filters || {})) + '</p></div>' +
-        '<h2>Resumen</h2><div class="kpi-print-cards">' + cards + '</div>' +
-        '<h2>Gráficas generales</h2><div class="kpi-print-charts">' +
-        chartPanel('kpi-print-chart-receivable', 'Cartera por vencimiento') +
-        chartPanel('kpi-print-chart-reports', 'Servicios realizados por mes (técnicos)') +
-        '</div>' +
-        '<h2>Ventas</h2><p>Cotizaciones: ' + cellDisplay(data.ventas && data.ventas.quotes_sent) +
+        '<h2>Resumen ejecutivo</h2><div class="kpi-print-cards">' + cards + '</div>' +
+        '<div class="kpi-print-section"><h2>1. Ventas</h2>' +
+        '<p>Cotizaciones: ' + cellDisplay(data.ventas && data.ventas.quotes_sent) +
         ' · Monto cotizado: ' + cellDisplay(data.ventas && data.ventas.quoted_amount_mxn) +
-        ' · Monto vendido: ' + cellDisplay(data.ventas && data.ventas.sold_amount_mxn) + '</p>' +
+        ' · Monto vendido: ' + cellDisplay(data.ventas && data.ventas.sold_amount_mxn) +
+        ' · Cobrado: ' + cellDisplay(data.ventas && data.ventas.collected_amount_mxn) + '</p>' +
         '<div class="kpi-print-charts">' +
         chartPanel('kpi-print-chart-ventas-trend', 'Tendencia mensual') +
         chartPanel('kpi-print-chart-ventas-funnel', 'Embudo comercial del periodo') +
         chartPanel('kpi-print-chart-ventas-ranking', 'Ranking por monto vendido') +
         chartPanel('kpi-print-chart-ventas-margin', 'Brecha de margen: real vs deseado') +
-        '</div>' +
-        '<h2>Alertas operativas</h2><table><thead><tr><th>Severidad</th><th>Tipo</th><th>Responsable</th><th>Accion</th></tr></thead><tbody>' +
-        (alertRows || '<tr><td colspan="4">Sin alertas</td></tr>') + '</tbody></table>' +
-        '<p class="print-note"><em>Reporte administrativo interno. Los montos en MXN usan formato de moneda. Criterio de facturacion: todos los proyectos del periodo se consideran facturados para efectos del tablero (no contabilidad fiscal).</em></p>';
+        '</div></div>' +
+        '<div class="kpi-print-section"><h2>2. Rentabilidad de proyectos</h2><ul>' +
+        metricLine('Proyectos activos', data.proyectos && data.proyectos.active_projects) +
+        metricLine('Margen bruto promedio (%)', data.proyectos && data.proyectos.gross_margin_real) +
+        metricLine('Cumplimiento de entrega (%)', data.proyectos && data.proyectos.delivery_compliance) +
+        metricLine('Tasa de retrabajo (%)', data.proyectos && data.proyectos.rework_rate) +
+        '</ul><div class="kpi-print-charts">' +
+        chartPanel('kpi-print-chart-receivable', 'Cartera por vencimiento') +
+        '</div><h3>Proyectos con margen en rojo</h3>' +
+        '<table><thead><tr><th>Cotización</th><th>Cliente</th><th>Margen %</th><th>Semáforo</th></tr></thead><tbody>' +
+        redRows + '</tbody></table></div>' +
+        '<div class="kpi-print-section"><h2>3. Cobro y facturación</h2><ul>' +
+        metricLine('Facturado en el periodo (MXN)', data.facturacion && data.facturacion.invoiced_amount_mxn) +
+        metricLine('Cobrado en el periodo (MXN)', data.cobranza && data.cobranza.collected_amount_mxn) +
+        metricLine('DSO / Días promedio de cobro', data.cobranza && data.cobranza.avg_collection_days) +
+        metricLine('% de cartera vencida', data.cobranza && data.cobranza.overdue_portfolio) +
+        metricLine('Monto cartera vencida (MXN)', data.cobranza && data.cobranza.overdue_amount_mxn) +
+        metricLine('Cuentas +120 días', data.cobranza && data.cobranza.accounts_over_120_days) +
+        metricLine('Monto +120 días (MXN)', data.cobranza && data.cobranza.accounts_over_120_amount_mxn) +
+        metricLine('Facturas vencidas sin gestión de cobro', data.cobranza && data.cobranza.invoices_without_contact) +
+        '</ul><p class="muted">' + escapeHtml((data.facturacion && data.facturacion.billing_admin_note) || '') + '</p></div>' +
+        '<div class="kpi-print-section"><h2>4. Desempeño del equipo</h2><ul>' +
+        metricLine('% de reportes completos', data.reportes && data.reportes.complete_reports) +
+        metricLine('Servicios sin reporte', data.reportes && data.reportes.services_without_report) +
+        '</ul><div class="kpi-print-charts">' +
+        chartPanel('kpi-print-chart-reports', 'Servicios realizados por mes (técnicos)') +
+        '</div><h3>KPIs por empleado (técnicos)</h3>' +
+        '<table><thead><tr><th>Empleado</th><th>Departamento</th><th>Servicios</th><th>Reportes %</th><th>Retrabajos</th><th>Semáforo</th></tr></thead><tbody>' +
+        empRows + '</tbody></table></div>' +
+        '<div class="kpi-print-section"><h2>Alertas operativas</h2>' +
+        '<table><thead><tr><th>Tipo</th><th>Cantidad</th><th>Acciones (muestra)</th></tr></thead><tbody>' +
+        alertRows + '</tbody></table></div>' +
+        '<p class="print-note"><em>Reporte administrativo interno. Los montos en MXN usan formato de moneda. Criterio de facturación: todos los proyectos del periodo se consideran facturados para efectos del tablero (no contabilidad fiscal).</em></p>';
 
       renderPrintKpiCharts(data);
       document.getElementById('kpi-print-btn').addEventListener('click', function() {
