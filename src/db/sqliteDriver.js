@@ -1305,6 +1305,7 @@ function seedServiceTypes(database) {
 }
 
 function seedServiceQuoteSettings(database) {
+  const { getBuildupSettingDefaults } = require('../serviceQuoterBuildup');
   const defaults = [
     { key: 'tarifa_programador_hora', value: '300', label: 'Tarifa programador ($/h)', category: 'mano_de_obra' },
     { key: 'tarifa_tecnico_hora', value: '250', label: 'Tarifa técnico ($/h)', category: 'mano_de_obra' },
@@ -1316,6 +1317,7 @@ function seedServiceQuoteSettings(database) {
     { key: 'costo_por_comida', value: '150', label: 'Costo por comida ($)', category: 'viaticos' },
     { key: 'comidas_por_dia', value: '3', label: 'Comidas por día', category: 'viaticos' },
     { key: 'iva_final', value: '16', label: 'IVA final (%)', category: 'cotizacion' },
+    ...getBuildupSettingDefaults(),
   ];
 
   const stmt = database.prepare(

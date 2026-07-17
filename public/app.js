@@ -5346,6 +5346,9 @@ function showServiceQuoterTab() {
 
 let sqConfig = null;
 let sqInitialized = false;
+/** Session-only undo for underfloor rate correction (never lowers rates automatically). */
+let sqBuildupRateUndo = null;
+let sqBuildupPendingPlan = null;
 
 async function initServiceQuoter() {
   if (sqInitialized) return;
@@ -5436,6 +5439,7 @@ function populateServiceQuoterDefaults(data) {
   document.getElementById('sq-meal-rate').value = mealRate;
   document.getElementById('sq-meals-per-day').value = mealsPerDay;
   updateTravelRate();
+  updateSqUnderfloorWarning();
 }
 
 function calculateServiceQuote() {
@@ -5579,6 +5583,7 @@ async function openSqConfig() {
   modal.classList.remove('hidden');
   document.getElementById('sq-config-password').value = '';
   document.getElementById('sq-config-message').textContent = '';
+  hideSqBuildupPreview();
 
   try {
     const [types, settings] = await Promise.all([
@@ -5587,6 +5592,7 @@ async function openSqConfig() {
     ]);
     renderSqConfigTypes(types);
     renderSqConfigSettings(settings);
+    renderSqBuildupSection(settings);
   } catch (e) {
     document.getElementById('sq-config-message').textContent = 'Error cargando configuración: ' + e.message;
   }
@@ -5594,6 +5600,11 @@ async function openSqConfig() {
   document.getElementById('sq-config-close-btn').onclick = () => modal.classList.add('hidden');
   document.getElementById('sq-config-save-btn').onclick = saveSqConfig;
   document.getElementById('sq-add-type-btn').onclick = addSqServiceType;
+  document.getElementById('sq-buildup-correct-btn').onclick = previewSqBuildupCorrection;
+  document.getElementById('sq-buildup-confirm-btn').onclick = confirmSqBuildupCorrection;
+  document.getElementById('sq-buildup-cancel-preview-btn').onclick = hideSqBuildupPreview;
+  document.getElementById('sq-buildup-undo-btn').onclick = undoSqBuildupCorrection;
+  syncSqBuildupUndoButton();
 }
 
 function renderSqConfigTypes(types) {
@@ -5643,6 +5654,8 @@ function renderSqConfigSettings(settings) {
   const container = document.getElementById('sq-config-settings-form');
   container.innerHTML = '';
   for (const s of settings) {
+    // Build-up params live in the dedicated section (same persistence via service_quote_settings).
+    if (s.category === 'buildup') continue;
     const label = document.createElement('label');
     label.style.fontSize = '0.85rem';
     label.innerHTML = `${s.label || s.key}<input type="text" data-key="${s.key}" value="${s.value}" style="margin-top:2px;">`;
@@ -5651,6 +5664,11 @@ function renderSqConfigSettings(settings) {
     }
     container.appendChild(label);
   }
+  container.querySelectorAll('input[data-key^="tarifa_"]').forEach((inp) => {
+    inp.addEventListener('input', () => {
+      if (document.getElementById('sq-buildup-section').children.length) refreshSqBuildupOutputs();
+    });
+  });
 }
 
 async function addSqServiceType() {
@@ -5681,7 +5699,7 @@ async function addSqServiceType() {
 }
 
 async function saveSqConfig() {
-  const inputs = document.querySelectorAll('#sq-config-settings-form input[data-key]');
+  const inputs = document.querySelectorAll('#sq-config-settings-form input[data-key], #sq-buildup-section input[data-key]');
   const settings = {};
   inputs.forEach((inp) => { settings[inp.dataset.key] = inp.value; });
   const adminPassword = document.getElementById('sq-config-password').value;
@@ -5708,6 +5726,373 @@ async function refreshSqConfig() {
     sqConfig = data;
     populateServiceQuoterDefaults(data);
   } catch (e) { /* ignore */ }
+}
+
+function sqBuildupApi() {
+  return window.ServiceQuoterBuildup;
+}
+
+function sqSettingsMapFromConfig() {
+  if (!sqConfig || !sqConfig.settings) return {};
+  return Object.fromEntries(sqConfig.settings.map((s) => [s.key, s.value]));
+}
+
+function sqGetCurrentRates() {
+  const fromForm = (id, fallback) => {
+    const el = document.getElementById(id);
+    const n = Number(el && el.value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const map = sqSettingsMapFromConfig();
+  const B = sqBuildupApi();
+  const cfgRate = (key, fallback) => {
+    const inp = document.querySelector(`#sq-config-settings-form input[data-key="${key}"]`);
+    if (inp && inp.value !== '') return Number(inp.value);
+    if (map[key] !== undefined) return Number(map[key]);
+    return fallback;
+  };
+  return {
+    progRate: cfgRate(B.ROLE_META.programador.rateKey, fromForm('sq-prog-rate', B.ROLE_META.programador.defaultRate)),
+    techRate: cfgRate(B.ROLE_META.tecnico.rateKey, fromForm('sq-tech-rate', B.ROLE_META.tecnico.defaultRate)),
+    helperRate: cfgRate(B.ROLE_META.ayudante.rateKey, fromForm('sq-helper-rate', B.ROLE_META.ayudante.defaultRate)),
+  };
+}
+
+function sqApplyRatesToUi(rates) {
+  const B = sqBuildupApi();
+  const pairs = [
+    [B.ROLE_META.programador.rateKey, 'sq-prog-rate', rates.progRate],
+    [B.ROLE_META.tecnico.rateKey, 'sq-tech-rate', rates.techRate],
+    [B.ROLE_META.ayudante.rateKey, 'sq-helper-rate', rates.helperRate],
+  ];
+  for (const [key, formId, value] of pairs) {
+    const formEl = document.getElementById(formId);
+    if (formEl) formEl.value = String(value);
+    const cfgEl = document.querySelector(`#sq-config-settings-form input[data-key="${key}"]`);
+    if (cfgEl) cfgEl.value = String(value);
+    if (sqConfig && sqConfig.settings) {
+      const row = sqConfig.settings.find((s) => s.key === key);
+      if (row) row.value = String(value);
+    }
+  }
+  updateTravelRate();
+  updateSqUnderfloorWarning();
+  refreshSqBuildupOutputs();
+}
+
+function renderSqBuildupSection(settings) {
+  const B = sqBuildupApi();
+  if (!B) return;
+  const container = document.getElementById('sq-buildup-section');
+  const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
+  container.innerHTML = '';
+
+  for (const roleId of B.ROLE_IDS) {
+    const meta = B.ROLE_META[roleId];
+    const defaults = B.BUILDUP_FIELD_DEFAULTS[roleId];
+    const inputs = B.parseBuildupInputsFromSettings(settingsMap, roleId);
+    const card = document.createElement('div');
+    card.className = 'sq-buildup-role';
+    card.dataset.role = roleId;
+    card.style.cssText = 'border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px;';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px;">
+        <strong>${meta.label}</strong>
+        <button type="button" class="secondary sq-buildup-toggle" data-role="${roleId}" style="font-size:0.75rem;padding:2px 8px;">Ver desglose</button>
+      </div>
+      <div class="grid-form" style="grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;font-size:0.8rem;">
+        <label>Sueldo semanal base (MXN)<input type="number" min="0" step="1" data-role="${roleId}" data-field="sueldo_semanal" data-key="${B.buildupSettingKey(roleId, 'sueldo_semanal')}" value="${inputs.sueldo_semanal}"></label>
+        <label>Factor prestaciones<input type="number" min="1" step="0.01" data-role="${roleId}" data-field="factor_prestaciones" data-key="${B.buildupSettingKey(roleId, 'factor_prestaciones')}" value="${inputs.factor_prestaciones}"></label>
+        <label>Sobresueldo diario (MXN)<input type="number" min="0" step="1" data-role="${roleId}" data-field="sobresueldo_diario" data-key="${B.buildupSettingKey(roleId, 'sobresueldo_diario')}" value="${inputs.sobresueldo_diario}"></label>
+        <label>Horas extra estimadas/día<input type="number" min="0" step="0.5" data-role="${roleId}" data-field="horas_extra" data-key="${B.buildupSettingKey(roleId, 'horas_extra')}" value="${inputs.horas_extra}"></label>
+        <label>Provisión garantía (%)<input type="number" min="0" max="15" step="0.1" data-role="${roleId}" data-field="provision_garantia" data-key="${B.buildupSettingKey(roleId, 'provision_garantia')}" value="${inputs.provision_garantia}"></label>
+        <label>Horas jornada facturable<input type="number" min="0.01" step="0.5" data-role="${roleId}" data-field="horas_jornada" data-key="${B.buildupSettingKey(roleId, 'horas_jornada')}" value="${inputs.horas_jornada}"></label>
+      </div>
+      <div class="sq-buildup-outputs" data-role="${roleId}" style="margin-top:8px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;font-size:0.82rem;"></div>
+      <div class="sq-buildup-breakdown hidden" data-role="${roleId}" style="margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:0.8rem;color:var(--muted);"></div>
+    `;
+    container.appendChild(card);
+
+    // Ensure defaults used if settings missing (new installs get seed; existing DBs get ON CONFLICT insert on restart).
+    for (const field of B.BUILDUP_FIELD_KEYS) {
+      const key = B.buildupSettingKey(roleId, field);
+      if (settingsMap[key] === undefined) {
+        const inp = card.querySelector(`input[data-key="${key}"]`);
+        if (inp) inp.value = String(defaults[field]);
+      }
+    }
+  }
+
+  container.querySelectorAll('input[data-field]').forEach((inp) => {
+    inp.addEventListener('input', () => {
+      sanitizeSqBuildupInput(inp);
+      refreshSqBuildupOutputs();
+    });
+  });
+  container.querySelectorAll('.sq-buildup-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const panel = container.querySelector(`.sq-buildup-breakdown[data-role="${btn.dataset.role}"]`);
+      if (!panel) return;
+      panel.classList.toggle('hidden');
+      btn.textContent = panel.classList.contains('hidden') ? 'Ver desglose' : 'Ocultar desglose';
+    });
+  });
+
+  refreshSqBuildupOutputs();
+}
+
+function sanitizeSqBuildupInput(inp) {
+  const field = inp.dataset.field;
+  let n = Number(inp.value);
+  if (!Number.isFinite(n) || n < 0) n = 0;
+  if (field === 'factor_prestaciones' && n < 1) n = 1;
+  if (field === 'provision_garantia') n = Math.min(15, Math.max(0, n));
+  if (field === 'horas_jornada' && n <= 0) n = 0.01;
+  if (String(n) !== inp.value && inp.value !== '') inp.value = String(n);
+}
+
+function collectSqBuildupRoleStates() {
+  const B = sqBuildupApi();
+  const rates = sqGetCurrentRates();
+  const rateByRole = {
+    programador: rates.progRate,
+    tecnico: rates.techRate,
+    ayudante: rates.helperRate,
+  };
+  return B.ROLE_IDS.map((roleId) => {
+    const meta = B.ROLE_META[roleId];
+    const card = document.querySelector(`#sq-buildup-section .sq-buildup-role[data-role="${roleId}"]`);
+    const raw = {};
+    for (const field of B.BUILDUP_FIELD_KEYS) {
+      const inp = card && card.querySelector(`input[data-field="${field}"]`);
+      raw[field] = inp ? Number(inp.value) : B.BUILDUP_FIELD_DEFAULTS[roleId][field];
+    }
+    const calc = B.calculateRoleBuildup(raw);
+    const cushion = B.commercialCushion(rateByRole[roleId], calc.tarifa_piso, calc.inputs.horas_jornada);
+    return {
+      roleId,
+      label: meta.label,
+      rateKey: meta.rateKey,
+      calc,
+      tarifa_vigente: rateByRole[roleId],
+      tarifa_piso: calc.tarifa_piso,
+      cushion,
+    };
+  });
+}
+
+function refreshSqBuildupOutputs() {
+  const B = sqBuildupApi();
+  if (!B || !document.getElementById('sq-buildup-section')) return;
+  const fmt = (v) => money.format(v);
+  for (const state of collectSqBuildupRoleStates()) {
+    const out = document.querySelector(`#sq-buildup-section .sq-buildup-outputs[data-role="${state.roleId}"]`);
+    const br = document.querySelector(`#sq-buildup-section .sq-buildup-breakdown[data-role="${state.roleId}"]`);
+    if (!out) continue;
+    const ok = state.cushion.is_above_or_equal;
+    const color = ok ? 'var(--success)' : 'var(--danger)';
+    const sign = state.cushion.per_hour >= 0 ? '+' : '';
+    out.innerHTML = `
+      <div><span style="color:var(--muted);">Costo día-hombre</span><div style="font-weight:600;">${fmt(state.calc.costo_dia_hombre)}</div></div>
+      <div><span style="color:var(--muted);">Tarifa piso</span><div style="font-weight:600;">${fmt(state.tarifa_piso)}/h</div></div>
+      <div><span style="color:var(--muted);">Tarifa vigente</span><div style="font-weight:600;">${fmt(state.tarifa_vigente)}/h</div></div>
+      <div><span style="color:var(--muted);">Colchón comercial</span><div style="font-weight:700;color:${color};">${sign}${fmt(state.cushion.per_hour)}/h · ${sign}${fmt(state.cushion.per_day)}/día</div></div>
+    `;
+    if (br) {
+      const c = state.calc;
+      br.innerHTML = `
+        <div>Base diaria: ${fmt(c.costo_diario_base)} → cargada (×${c.inputs.factor_prestaciones}): ${fmt(c.costo_diario_cargado)}</div>
+        <div>+ Sobresueldo: ${fmt(c.inputs.sobresueldo_diario)}</div>
+        <div>+ Extras (${c.inputs.horas_extra} h × ${fmt(c.tarifa_hora_extra)}): ${fmt(c.costo_extras_dia)}</div>
+        <div>= Subtotal día: ${fmt(c.subtotal_dia)}</div>
+        <div>+ Provisión ${c.inputs.provision_garantia}%: ${fmt(c.provision_dia)}</div>
+        <div><strong>Costo día-hombre: ${fmt(c.costo_dia_hombre)}</strong> → piso ${fmt(c.tarifa_piso)}/h (${c.inputs.horas_jornada} h)</div>
+      `;
+    }
+  }
+}
+
+function updateSqUnderfloorWarning() {
+  const el = document.getElementById('sq-underfloor-warning');
+  const B = sqBuildupApi();
+  if (!el || !B || !sqConfig) return;
+  const map = sqSettingsMapFromConfig();
+  const rates = {
+    programador: Number(document.getElementById('sq-prog-rate')?.value ?? map.tarifa_programador_hora ?? 300),
+    tecnico: Number(document.getElementById('sq-tech-rate')?.value ?? map.tarifa_tecnico_hora ?? 250),
+    ayudante: Number(document.getElementById('sq-helper-rate')?.value ?? map.tarifa_ayudante_hora ?? 175),
+  };
+  const under = [];
+  for (const roleId of B.ROLE_IDS) {
+    const inputs = B.parseBuildupInputsFromSettings(map, roleId);
+    const calc = B.calculateRoleBuildup(inputs);
+    if (rates[roleId] < calc.tarifa_piso) {
+      under.push(B.ROLE_META[roleId].label.split('/')[0]);
+    }
+  }
+  if (!under.length) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  const roles = under.length === 1 ? under[0] : under.slice(0, -1).join(', ') + ' y ' + under[under.length - 1];
+  el.textContent = `La tarifa de ${roles} está por debajo del costo real; la utilidad mostrada está sobreestimada.`;
+  el.classList.remove('hidden');
+}
+
+function sqBuildImpactScenario() {
+  const B = sqBuildupApi();
+  const num = (id) => Math.max(0, Number(document.getElementById(id).value) || 0);
+  const map = sqSettingsMapFromConfig();
+  const hoursPerDay = Number(map.horas_por_dia_servicio) || 9;
+  const getHours = (prefix) => {
+    const mode = document.getElementById(prefix + '-mode').value;
+    const time = num(prefix + '-time');
+    return mode === 'dias' ? time * hoursPerDay : time;
+  };
+  const progQty = num('sq-prog-qty');
+  const techQty = num('sq-tech-qty');
+  const helperQty = num('sq-helper-qty');
+  const progHours = getHours('sq-prog');
+  const techHours = getHours('sq-tech');
+  const helperHours = getHours('sq-helper');
+  const hasFormQuote = (progQty + techQty + helperQty) > 0 && (progHours + techHours + helperHours) > 0;
+
+  const selectedType = sqConfig?.serviceTypes?.find((t) => t.id === Number(document.getElementById('sq-service-type').value));
+  const margin = selectedType ? selectedType.margin : B.REFERENCE_QUOTE.margin;
+
+  if (hasFormQuote) {
+    let transport = 0;
+    const transportType = document.getElementById('sq-transport-type').value;
+    const rates = sqGetCurrentRates();
+    if (transportType === 'vehiculo') {
+      const suma = (progQty * rates.progRate) + (techQty * rates.techRate) + (helperQty * rates.helperRate);
+      const travelRate = suma > 0 ? roundUpToNearestTen(suma / 3) : 0;
+      transport = num('sq-travel-hours') * travelRate + num('sq-km') * num('sq-km-rate');
+    } else {
+      transport = (num('sq-flight-persons') * num('sq-flight-cost')) + num('sq-flight-other');
+    }
+    const totalPersonas = progQty + techQty + helperQty;
+    const viaticos = (num('sq-hotel-nights') * num('sq-hotel-rate')) +
+      (num('sq-meal-rate') * totalPersonas * num('sq-meal-days') * num('sq-meals-per-day'));
+    return {
+      usingReference: false,
+      progQty, techQty, helperQty,
+      progHours, techHours, helperHours,
+      transport,
+      viaticos,
+      otherCosts: num('sq-other-costs'),
+      margin,
+    };
+  }
+
+  const ref = B.REFERENCE_QUOTE;
+  const persons = ref.progQty + ref.techQty + ref.helperQty;
+  const viaticos = (ref.hotelNights * ref.hotelRate) + (ref.mealRate * persons * ref.mealDays * ref.mealsPerDay);
+  return {
+    usingReference: true,
+    progQty: ref.progQty,
+    techQty: ref.techQty,
+    helperQty: ref.helperQty,
+    progHours: ref.hoursPerRole,
+    techHours: ref.hoursPerRole,
+    helperHours: ref.hoursPerRole,
+    transport: ref.transport,
+    viaticos,
+    otherCosts: ref.otherCosts,
+    margin: ref.margin,
+  };
+}
+
+function hideSqBuildupPreview() {
+  sqBuildupPendingPlan = null;
+  const preview = document.getElementById('sq-buildup-preview');
+  if (preview) preview.classList.add('hidden');
+}
+
+function syncSqBuildupUndoButton() {
+  const btn = document.getElementById('sq-buildup-undo-btn');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !sqBuildupRateUndo);
+}
+
+function previewSqBuildupCorrection() {
+  const B = sqBuildupApi();
+  const states = collectSqBuildupRoleStates();
+  const plan = B.planUnderfloorCorrections(states);
+  sqBuildupPendingPlan = plan;
+  const preview = document.getElementById('sq-buildup-preview');
+  const summaryEl = document.getElementById('sq-buildup-preview-summary');
+  const impactEl = document.getElementById('sq-buildup-preview-impact');
+  summaryEl.textContent = B.formatCorrectionSummary(plan);
+
+  if (!plan.changes.length) {
+    impactEl.innerHTML = '<p class="muted" style="margin:0;">No se modificará ninguna tarifa.</p>';
+    preview.classList.remove('hidden');
+    return;
+  }
+
+  const rates = sqGetCurrentRates();
+  const beforeRates = { progRate: rates.progRate, techRate: rates.techRate, helperRate: rates.helperRate };
+  const afterRates = { ...beforeRates };
+  for (const c of plan.changes) {
+    if (c.roleId === 'programador') afterRates.progRate = c.to;
+    if (c.roleId === 'tecnico') afterRates.techRate = c.to;
+    if (c.roleId === 'ayudante') afterRates.helperRate = c.to;
+  }
+  const scenario = sqBuildImpactScenario();
+  const impact = B.estimateCorrectionImpact(beforeRates, afterRates, scenario);
+  const fmt = (v) => money.format(v);
+  const fmtPct = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+  const src = scenario.usingReference
+    ? 'Proyecto tipo de referencia (1 prog + 1 téc + 2 ayud. × 10 días × 9 h).'
+    : 'Cotización actualmente cargada en el formulario.';
+  impactEl.innerHTML = `
+    <p class="muted" style="margin:0 0 6px 0;">${src}</p>
+    <ul style="margin:0;padding-left:18px;">
+      <li>Δ subtotal mano de obra: <strong>${fmt(impact.deltaLabor)}</strong> (${fmtPct(impact.deltaLaborPct)})</li>
+      <li>Δ precio antes de IVA: <strong>${fmt(impact.deltaPrice)}</strong> (${fmtPct(impact.deltaPricePct)})</li>
+      <li>Δ total final: <strong>${fmt(impact.deltaTotal)}</strong> (${fmtPct(impact.deltaTotalPct)})</li>
+    </ul>
+  `;
+  preview.classList.remove('hidden');
+}
+
+function confirmSqBuildupCorrection() {
+  const B = sqBuildupApi();
+  const plan = sqBuildupPendingPlan || B.planUnderfloorCorrections(collectSqBuildupRoleStates());
+  if (!plan.changes.length) {
+    hideSqBuildupPreview();
+    document.getElementById('sq-config-message').textContent = 'No hay tarifas bajo costo que corregir.';
+    return;
+  }
+
+  const rates = sqGetCurrentRates();
+  sqBuildupRateUndo = { ...rates };
+  const next = { ...rates };
+  for (const c of plan.changes) {
+    // Explicitly raise only; never assign a lower value.
+    if (c.to > c.from) {
+      if (c.roleId === 'programador') next.progRate = c.to;
+      if (c.roleId === 'tecnico') next.techRate = c.to;
+      if (c.roleId === 'ayudante') next.helperRate = c.to;
+    }
+  }
+  sqApplyRatesToUi(next);
+  hideSqBuildupPreview();
+  syncSqBuildupUndoButton();
+  document.getElementById('sq-config-message').textContent =
+    'Tarifas bajo costo corregidas en el formulario. Usa «Guardar configuración» para persistir, o «Deshacer corrección» en esta sesión.';
+}
+
+function undoSqBuildupCorrection() {
+  if (!sqBuildupRateUndo) return;
+  sqApplyRatesToUi(sqBuildupRateUndo);
+  sqBuildupRateUndo = null;
+  syncSqBuildupUndoButton();
+  hideSqBuildupPreview();
+  document.getElementById('sq-config-message').textContent =
+    'Corrección deshecha en esta sesión. Guarda la configuración si necesitas persistir las tarifas restauradas.';
 }
 
 // ===================== END SERVICE QUOTER MODULE =====================

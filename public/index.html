@@ -1513,6 +1513,8 @@
               </div>
             </div>
 
+            <div id="sq-underfloor-warning" class="hidden" role="status" style="margin:0 0 12px 0;padding:10px 12px;border:1px solid var(--danger);border-radius:8px;background:rgba(180,35,24,0.08);color:var(--danger);font-size:0.9rem;"></div>
+
             <div class="grid-form" style="grid-template-columns:1fr 1fr;gap:16px;">
               <!-- General Context + Service Type -->
               <fieldset style="border:1px solid var(--border);border-radius:8px;padding:12px;">
@@ -1618,7 +1620,7 @@
 
           <!-- Configuration Modal -->
           <div id="sq-config-modal" class="modal-overlay hidden" style="background:rgba(0,0,0,0.7);">
-            <div class="modal" style="max-width:700px;background:#fff;border-radius:12px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto;">
+            <div class="modal" style="max-width:920px;background:#fff;border-radius:12px;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto;">
               <h2>Configuración del Cotizador</h2>
               <div id="sq-config-content">
                 <div style="margin-bottom:16px;">
@@ -1631,6 +1633,23 @@
                     <input id="sq-new-type-name" type="text" placeholder="Nuevo tipo" style="flex:1;">
                     <input id="sq-new-type-margin" type="number" min="0" max="0.99" step="0.01" placeholder="0.60" style="width:80px;">
                     <button id="sq-add-type-btn" type="button" class="secondary">Agregar</button>
+                  </div>
+                </div>
+                <div style="margin-bottom:16px;">
+                  <h3 style="margin:0 0 4px 0;">Build-up de tarifas por rol</h3>
+                  <p class="muted" style="margin:0 0 10px 0;font-size:0.85rem;">Calcula el costo real (piso) por rol. Solo sube tarifas bajo costo; el colchón comercial positivo no se toca.</p>
+                  <div id="sq-buildup-section"></div>
+                  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center;">
+                    <button id="sq-buildup-correct-btn" type="button">Corregir tarifas bajo costo</button>
+                    <button id="sq-buildup-undo-btn" class="secondary hidden" type="button">Deshacer corrección</button>
+                  </div>
+                  <div id="sq-buildup-preview" class="hidden" style="margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);font-size:0.9rem;">
+                    <p id="sq-buildup-preview-summary" style="margin:0 0 8px 0;"></p>
+                    <div id="sq-buildup-preview-impact" style="margin-bottom:10px;"></div>
+                    <div style="display:flex;gap:8px;">
+                      <button id="sq-buildup-confirm-btn" type="button">Confirmar corrección</button>
+                      <button id="sq-buildup-cancel-preview-btn" class="secondary" type="button">Cancelar</button>
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -2433,7 +2452,8 @@
       </div>
     </div>
 
-    <script src="/app.js?v=commissions-pg-migration-20260603e"></script>
+    <script src="/service-quoter-buildup.js?v=buildup-tarifas-20260717"></script>
+    <script src="/app.js?v=buildup-tarifas-20260717"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>
