@@ -1950,8 +1950,29 @@ body.scroll-lock {
   box-shadow: inset 3px 0 0 var(--primary);
 }
 
+#projects-table tbody tr.row-last-worked {
+  background: #fff6e0;
+  box-shadow: inset 3px 0 0 #e0a800;
+  transition: background-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+#projects-table tbody tr.row-last-worked.row-selected {
+  background: #e8efff;
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
 [data-theme="dark"] #projects-table tbody tr.row-selected {
   background: rgba(79, 140, 255, 0.15);
+}
+
+[data-theme="dark"] #projects-table tbody tr.row-last-worked {
+  background: rgba(224, 168, 0, 0.18);
+  box-shadow: inset 3px 0 0 #e0a800;
+}
+
+[data-theme="dark"] #projects-table tbody tr.row-last-worked.row-selected {
+  background: rgba(79, 140, 255, 0.15);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 
 @media (max-width: 768px) {
