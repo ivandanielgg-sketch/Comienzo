@@ -5224,6 +5224,7 @@ app.get('/api/service-quoter/settings', requireAuth, requirePermission('serviceQ
 
 // PUT /api/service-quoter/settings - Update settings (requires admin password)
 app.put('/api/service-quoter/settings', requireAuth, requirePermission('serviceQuoter', 'configure'), (req, res) => {
+  const { getBuildupSettingDefaults } = require('./serviceQuoterBuildup');
   const { settings, adminPassword } = req.body;
   if (!settings || typeof settings !== 'object') {
     return res.status(400).json({ message: 'Se requiere un objeto settings con las claves a actualizar.' });
@@ -5242,14 +5243,31 @@ app.put('/api/service-quoter/settings', requireAuth, requirePermission('serviceQ
   const afterSettings = {};
   const existingRows = db.prepare("SELECT key, value FROM service_quote_settings WHERE category != 'importacion'").all();
   const existingMap = Object.fromEntries(existingRows.map((r) => [r.key, r.value]));
+  const knownBuildup = Object.fromEntries(getBuildupSettingDefaults().map((r) => [r.key, r]));
 
   const updateStmt = db.prepare(
     'UPDATE service_quote_settings SET value = ?, updated_by_user_id = ?, updated_by_name = ?, updated_at = ? WHERE key = ?',
   );
+  const insertStmt = db.prepare(
+    `INSERT INTO service_quote_settings (key, value, label, category, updated_by_user_id, updated_by_name, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
 
   const updateAll = db.transaction(() => {
     for (const [key, value] of Object.entries(settings)) {
-      if (existingMap[key] === undefined) continue;
+      if (existingMap[key] === undefined) {
+        // Allow first-time persistence of build-up keys on DBs seeded before this module.
+        if (!knownBuildup[key]) continue;
+        const meta = knownBuildup[key];
+        insertStmt.run(
+          key, String(value), meta.label, meta.category,
+          audit.updated_by_user_id, audit.updated_by_name, audit.updated_at,
+        );
+        beforeSettings[key] = null;
+        afterSettings[key] = String(value);
+        existingMap[key] = String(value);
+        continue;
+      }
       if (String(value) === existingMap[key]) continue;
       beforeSettings[key] = existingMap[key];
       afterSettings[key] = String(value);
