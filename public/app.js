@@ -1133,6 +1133,10 @@ async function applyProjectListUpdate(updatedProject, { remove = false, markWork
     return;
   }
 
+  if (markWorked) {
+    state.lastWorkedProjectId = id;
+  }
+
   if (index >= 0) {
     adjustProjectsSummary(prev, updatedProject);
     state.projects[index] = updatedProject;
@@ -1144,10 +1148,6 @@ async function applyProjectListUpdate(updatedProject, { remove = false, markWork
         getRowId: (project) => project.id,
       });
     }
-  }
-
-  if (markWorked) {
-    state.lastWorkedProjectId = id;
   }
 
   if (state.selectedProjectId === id) {
