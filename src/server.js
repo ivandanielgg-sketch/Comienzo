@@ -1446,6 +1446,42 @@ app.delete('/api/closed-projects/:id', requireAuth, requirePermission('closedPro
   }
 });
 
+app.post('/api/closed-projects/:id/restore', requireAuth, requirePermission('closedProjects', 'restore'), (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) {
+      throw badRequest('Id de proyecto invalido.');
+    }
+
+    const project = getProjectOrFail(id);
+    if (!project.closed_at) {
+      throw badRequest('El proyecto no esta cerrado.');
+    }
+
+    const audit = updatedByFields(req);
+    db.prepare(
+      `UPDATE projects
+       SET closed_at = NULL, updated_at = ?, updated_by_user_id = ?, updated_by_name = ?
+       WHERE id = ? AND closed_at IS NOT NULL`,
+    ).run(audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, id);
+
+    logAuditEvent(db, {
+      req,
+      action: 'restore',
+      module: 'projects',
+      entityType: 'project',
+      entityId: id,
+      entityLabel: project.quote_number,
+      before: { closed_at: project.closed_at },
+      after: { closed_at: null },
+    });
+
+    res.json(mapProject(getProjectOrFail(id), getExchangeRateMap()));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/projects/:id/payments', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
     getProjectOrFail(req.params.id);
