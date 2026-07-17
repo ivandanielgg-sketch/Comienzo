@@ -988,7 +988,7 @@ function renderProjects() {
     pageState: state.projectsPag,
     renderActions: (project) => `
       <div class="row-actions">
-        <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Eliminar</button>
+        <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Cerrar proyecto</button>
         <button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button>
       </div>`,
     rowClass: (project) => (
@@ -1012,6 +1012,7 @@ function renderClosedProjects() {
     pageState: state.closedPag,
     renderActions: (project) => `
       <div class="row-actions">
+        <button class="secondary" data-action="restore-closed-project" data-id="${project.id}" type="button">Restaurar</button>
         <button class="danger" data-action="delete-closed-project" data-id="${project.id}" type="button">Borrar definitivo</button>
         <button class="secondary" data-action="select-closed-project" data-id="${project.id}" type="button">Historial</button>
       </div>`,
@@ -1425,6 +1426,93 @@ function clearClosedSelection() {
   closedDetailPanel.classList.add('hidden');
 }
 
+function projectPedidoClienteLabel(project) {
+  const pedido = project.order_number || project.quote_number || `#${project.id}`;
+  const cliente = project.client_name || 'Sin cliente';
+  return `${pedido} — ${cliente}`;
+}
+
+let activeUndoToastTimer = null;
+
+function dismissUndoToast() {
+  if (activeUndoToastTimer) {
+    clearTimeout(activeUndoToastTimer);
+    activeUndoToastTimer = null;
+  }
+  const existing = document.querySelector('.undo-toast');
+  if (existing) {
+    existing.remove();
+  }
+}
+
+function showUndoToast(message, onUndo) {
+  dismissUndoToast();
+  const toast = document.createElement('div');
+  toast.className = 'undo-toast';
+  toast.setAttribute('role', 'status');
+
+  const text = document.createElement('span');
+  text.className = 'undo-toast-message';
+  text.textContent = message;
+
+  const undoButton = document.createElement('button');
+  undoButton.type = 'button';
+  undoButton.className = 'undo-toast-action';
+  undoButton.textContent = 'Deshacer';
+  undoButton.addEventListener('click', async () => {
+    dismissUndoToast();
+    try {
+      await onUndo();
+    } catch (error) {
+      window.alert(error.message);
+    }
+  });
+
+  toast.appendChild(text);
+  toast.appendChild(undoButton);
+  document.body.appendChild(toast);
+
+  activeUndoToastTimer = setTimeout(() => {
+    dismissUndoToast();
+  }, 8000);
+}
+
+async function performRestoreClosedProject(projectId) {
+  const id = Number(projectId);
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error('Id de proyecto invalido.');
+  }
+
+  await api(`/api/closed-projects/${id}/restore`, { method: 'POST', body: {} });
+
+  if (state.selectedClosedProjectId === id) {
+    clearClosedSelection();
+  }
+
+  await loadProjects();
+  await loadClosedProjects();
+}
+
+async function restoreClosedProject(projectId) {
+  const project = state.closedProjects.find((item) => item.id === Number(projectId));
+  if (!project) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `¿Restaurar el proyecto ${projectPedidoClienteLabel(project)}?`,
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await performRestoreClosedProject(project.id);
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
 async function deleteProject(projectId) {
   const project = state.projects.find((item) => item.id === Number(projectId));
   if (!project) {
@@ -1432,7 +1520,7 @@ async function deleteProject(projectId) {
   }
 
   const confirmed = window.confirm(
-    `Se cerrara el proyecto #${project.id} (${project.quote_number}) y se movera a Proyectos Cerrados.`,
+    `¿Cerrar el proyecto ${projectPedidoClienteLabel(project)}? Podrás restaurarlo desde Proyectos Cerrados.`,
   );
   if (!confirmed) {
     return;
@@ -1455,6 +1543,10 @@ async function deleteProject(projectId) {
 
     await loadProjects();
     await loadClosedProjects();
+
+    showUndoToast(`Proyecto ${projectPedidoClienteLabel(project)} cerrado.`, () =>
+      performRestoreClosedProject(project.id),
+    );
   } catch (error) {
     window.alert(error.message);
   }
@@ -1767,6 +1859,12 @@ closedProjectsTable.addEventListener('click', (event) => {
   const selectButton = event.target.closest('button[data-action="select-closed-project"]');
   if (selectButton) {
     selectClosedProject(selectButton.dataset.id);
+    return;
+  }
+
+  const restoreButton = event.target.closest('button[data-action="restore-closed-project"]');
+  if (restoreButton) {
+    restoreClosedProject(restoreButton.dataset.id);
     return;
   }
 

@@ -2167,3 +2167,42 @@ body.scroll-lock {
     gap: 4px;
   }
 }
+
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(920px, calc(100vw - 24px));
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #1f2937;
+  color: #f9fafb;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.28);
+}
+
+.undo-toast-message {
+  flex: 1;
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.undo-toast-action {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #111827;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.undo-toast-action:hover {
+  background: #e5e7eb;
+}

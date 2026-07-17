@@ -2,7 +2,7 @@
 
 const MODULES = {
   projects: ['view', 'create', 'edit', 'delete', 'close'],
-  closedProjects: ['view', 'delete'],
+  closedProjects: ['view', 'delete', 'restore'],
   reports: ['view', 'create', 'edit', 'delete', 'print'],
   reportsArchive: ['view', 'edit', 'delete', 'print'],
   vacations: ['view', 'create', 'edit', 'delete'],
