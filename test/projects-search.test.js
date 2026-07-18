@@ -21,6 +21,8 @@ function buildProjectListSearchColumns() {
     'p.quote_number',
     'p.order_number',
     'p.purchase_order_number',
+    'p.invoice_number',
+    'p.invoice_payment_status',
     'p.client_name',
     'p.project_description',
     'p.status',

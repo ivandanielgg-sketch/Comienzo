@@ -38,6 +38,7 @@ function ensurePostgresColumns(database) {
   const alters = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'",
     'ALTER TABLE financial_settings ADD COLUMN IF NOT EXISTS include_manual_payroll INTEGER NOT NULL DEFAULT 1',
+    'ALTER TABLE projects ADD COLUMN IF NOT EXISTS invoice_payment_status TEXT',
   ];
   for (const sql of alters) {
     try {

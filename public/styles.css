@@ -504,6 +504,26 @@ th.col-number {
   color: #b54708;
 }
 
+.badge.invoice-payment-pendiente {
+  background: #fef0c7;
+  color: #b54708;
+}
+
+.badge.invoice-payment-vencida {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.badge.invoice-payment-pagada {
+  background: #dcfae6;
+  color: #087443;
+}
+
+.badge.invoice-payment-none {
+  background: #f2f4f7;
+  color: #667085;
+}
+
 .badge.risk-alto {
   background: #fee4e2;
   color: var(--danger);
