@@ -461,10 +461,27 @@ function statusBadgeClass(status) {
   return `status-${s}`;
 }
 
+function invoicePaymentStatusBadgeClass(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'pagada') return 'invoice-payment-pagada';
+  if (s === 'vencida') return 'invoice-payment-vencida';
+  if (s === 'pendiente') return 'invoice-payment-pendiente';
+  return 'invoice-payment-none';
+}
+
+function renderInvoicePaymentStatusBadge(status) {
+  if (!status) {
+    return '<span class="muted">—</span>';
+  }
+  return `<span class="badge ${invoicePaymentStatusBadgeClass(status)}">${escapeHtml(status)}</span>`;
+}
+
 const projectColumns = [
   { key: 'id', label: 'ID', type: 'number', sortable: true },
   { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true },
   { key: 'order_number', label: 'N. Pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
+  { key: 'invoice_number', label: 'Factura', type: 'text', sortable: true, render: (p) => escapeHtml(p.invoice_number || '—') },
+  { key: 'invoice_payment_status', label: 'Estatus pago', type: 'select', sortable: true, filterOptions: ['Pendiente', 'Pagada'].map((value) => ({ value, label: value })), render: (p) => renderInvoicePaymentStatusBadge(p.invoice_payment_status) },
   { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
   { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
   { key: 'status', label: 'Estado', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status ${statusBadgeClass(p.status)}">${escapeHtml(p.status)}</span>` },
@@ -1558,6 +1575,21 @@ async function loadFailureReports(projectId, listElement) {
   }
 }
 
+function toggleInvoicePaidAtField() {
+  const statusSelect = projectForm.elements.invoice_payment_status;
+  const paidAtField = document.getElementById('invoice-paid-at-field');
+  const paidAtInput = projectForm.elements.invoice_paid_at;
+  if (!statusSelect || !paidAtField || !paidAtInput) {
+    return;
+  }
+  const isPaid = statusSelect.value === 'Pagada';
+  paidAtField.classList.toggle('hidden', !isPaid);
+  paidAtInput.required = isPaid;
+  if (!isPaid) {
+    paidAtInput.value = '';
+  }
+}
+
 function fillProjectForm(project) {
   projectFormTitle.textContent = `Editar proyecto #${project.id}`;
   populateProjectStaffSelects(project.tecnico_id, project.vendedor_id);
@@ -1584,8 +1616,17 @@ function fillProjectForm(project) {
   projectForm.elements.promised_delivery_date.value = project.promised_delivery_date;
   projectForm.elements.status.value = project.status;
   projectForm.elements.risk.value = project.risk;
+  projectForm.elements.invoice_number.value = project.invoice_number || '';
+  projectForm.elements.invoice_date.value = project.invoice_date || '';
+  projectForm.elements.due_date.value = project.due_date || '';
+  const storedPaymentStatus = project.invoice_payment_status_stored
+    || (project.invoice_payment_status === 'Vencida' ? 'Pendiente' : project.invoice_payment_status)
+    || '';
+  projectForm.elements.invoice_payment_status.value = storedPaymentStatus;
+  projectForm.elements.invoice_paid_at.value = project.invoice_paid_at || '';
   projectForm.elements.observations.value = project.observations || '';
   togglePurchaseOrder();
+  toggleInvoicePaidAtField();
   setMessage(projectMessage, '');
 }
 
@@ -1598,8 +1639,15 @@ function resetProjectForm() {
   projectForm.elements.total_invoiced_currency.value = 'MXN';
   projectForm.elements.progress_percent.value = 0;
   projectForm.elements.fecha_vencimiento.value = addDaysToDateInput(null, 30);
+  if (projectForm.elements.invoice_payment_status) {
+    projectForm.elements.invoice_payment_status.value = '';
+  }
+  if (projectForm.elements.invoice_paid_at) {
+    projectForm.elements.invoice_paid_at.value = '';
+  }
   populateProjectStaffSelects();
   togglePurchaseOrder();
+  toggleInvoicePaidAtField();
   setMessage(projectMessage, '');
 }
 
@@ -1858,6 +1906,18 @@ function renderDetail(project) {
   );
   document.querySelector('#detail-pending').textContent = money.format(project.pending_collection);
   document.querySelector('#detail-progress').textContent = formatPercent(project.progress_percent);
+  const detailInvoiceNumber = document.querySelector('#detail-invoice-number');
+  if (detailInvoiceNumber) detailInvoiceNumber.textContent = project.invoice_number || '—';
+  const detailInvoiceDate = document.querySelector('#detail-invoice-date');
+  if (detailInvoiceDate) detailInvoiceDate.textContent = project.invoice_date || '—';
+  const detailInvoiceDue = document.querySelector('#detail-invoice-due');
+  if (detailInvoiceDue) detailInvoiceDue.textContent = project.due_date || '—';
+  const detailInvoicePaymentStatus = document.querySelector('#detail-invoice-payment-status');
+  if (detailInvoicePaymentStatus) {
+    detailInvoicePaymentStatus.innerHTML = renderInvoicePaymentStatusBadge(project.invoice_payment_status);
+  }
+  const detailInvoicePaidAt = document.querySelector('#detail-invoice-paid-at');
+  if (detailInvoicePaidAt) detailInvoicePaidAt.textContent = project.invoice_paid_at || '—';
 
   const drl = document.querySelector('#detail-reports-list');
   if (drl && typeof renderDetailReports === 'function') {
@@ -2022,6 +2082,9 @@ projectForm.addEventListener('submit', async (event) => {
 
 newProjectButton.addEventListener('click', clearSelection);
 purchaseOrderNotApplicable.addEventListener('change', togglePurchaseOrder);
+if (projectForm.elements.invoice_payment_status) {
+  projectForm.elements.invoice_payment_status.addEventListener('change', toggleInvoicePaidAtField);
+}
 newUserButton.addEventListener('click', resetUserForm);
 
 projectsTable.addEventListener('click', (event) => {

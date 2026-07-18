@@ -56,6 +56,8 @@ const PORT = process.env.PORT || 3000;
 
 const VALID_STATUSES = ['Pendiente', 'En Proceso', 'Terminado'];
 const VALID_RISKS = ['Alto', 'Medio', 'Bajo'];
+const VALID_INVOICE_PAYMENT_STATUSES_STORED = ['Pendiente', 'Pagada'];
+const INVOICE_NUMBER_MAX_LENGTH = 50;
 const VALID_EMPLOYEE_FILTERS = ['all', 'active', 'inactive'];
 const VALID_ECOVIS_STATUSES = ['pendiente', 'parcialmente_pagado', 'pagado', 'cancelado'];
 const VALID_PAYMENT_STATUSES = ['asignado', 'parcial', 'cancelado'];
@@ -239,6 +241,75 @@ function optionalText(body, field) {
   return value || null;
 }
 
+function optionalDate(body, field, label) {
+  const value = optionalText(body, field);
+  if (!value) {
+    return null;
+  }
+  if (!isValidDate(value)) {
+    throw badRequest(`${label} no es una fecha valida.`);
+  }
+  return value;
+}
+
+function todayIsoDateCdmx() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+}
+
+function resolveInvoicePaymentStatus(row) {
+  const stored = row.invoice_payment_status || null;
+  if (!stored || stored === 'Pagada') {
+    return stored;
+  }
+  if (
+    stored === 'Pendiente' &&
+    row.due_date &&
+    isValidDate(row.due_date) &&
+    row.due_date < todayIsoDateCdmx()
+  ) {
+    return 'Vencida';
+  }
+  return stored;
+}
+
+function normalizeInvoicePaymentFields(body) {
+  const invoiceNumber = optionalText(body, 'invoice_number');
+  if (invoiceNumber && invoiceNumber.length > INVOICE_NUMBER_MAX_LENGTH) {
+    throw badRequest(`Numero de factura no puede exceder ${INVOICE_NUMBER_MAX_LENGTH} caracteres.`);
+  }
+
+  const invoiceDate = optionalDate(body, 'invoice_date', 'Fecha de factura');
+  const dueDate = optionalDate(body, 'due_date', 'Fecha de vencimiento de la factura');
+
+  let invoicePaymentStatus = optionalText(body, 'invoice_payment_status');
+  if (invoicePaymentStatus === 'Vencida') {
+    invoicePaymentStatus = 'Pendiente';
+  }
+  if (invoicePaymentStatus && !VALID_INVOICE_PAYMENT_STATUSES_STORED.includes(invoicePaymentStatus)) {
+    throw badRequest('Estatus de pago no es valido.');
+  }
+  if (!invoicePaymentStatus) {
+    invoicePaymentStatus = null;
+  }
+
+  let invoicePaidAt = optionalDate(body, 'invoice_paid_at', 'Fecha de pago');
+  if (invoicePaymentStatus === 'Pagada') {
+    if (!invoicePaidAt) {
+      throw badRequest('Fecha de pago es obligatoria cuando el estatus es Pagada.');
+    }
+  } else {
+    invoicePaidAt = null;
+  }
+
+  return {
+    invoice_number: invoiceNumber,
+    invoice_date: invoiceDate,
+    due_date: dueDate,
+    invoice_payment_status: invoicePaymentStatus,
+    invoice_paid_at: invoicePaidAt,
+  };
+}
+
 function parseDecimal(value) {
   if (typeof value === 'number') {
     return value;
@@ -388,6 +459,7 @@ function normalizeProject(body, { existingRow = null } = {}) {
     ? null
     : requiredText(body, 'purchase_order_number', 'Numero de Orden de Compra');
   const staff = resolveProjectStaff(body);
+  const invoiceFields = normalizeInvoicePaymentFields(body);
 
   return {
     quote_number: requiredText(body, 'quote_number', 'Numero de cotizacion'),
@@ -423,6 +495,7 @@ function normalizeProject(body, { existingRow = null } = {}) {
     status: enumValue(body, 'status', 'Estado', VALID_STATUSES),
     risk: enumValue(body, 'risk', 'Riesgo', VALID_RISKS),
     observations: optionalText(body, 'observations'),
+    ...invoiceFields,
   };
 }
 
@@ -592,6 +665,12 @@ function mapProject(row, exchangeRates = getExchangeRateMap()) {
       ? 'No Aplica'
       : row.purchase_order_number,
     fecha_vencimiento: row.fecha_vencimiento || null,
+    invoice_number: row.invoice_number || null,
+    invoice_date: row.invoice_date || null,
+    due_date: row.due_date || null,
+    invoice_payment_status_stored: row.invoice_payment_status || null,
+    invoice_payment_status: resolveInvoicePaymentStatus(row),
+    invoice_paid_at: row.invoice_paid_at || null,
     tecnico_id: row.tecnico_id || null,
     vendedor_id: row.vendedor_id || null,
     tecnico_nombre: tecnico?.full_name || row.technician_name,
@@ -794,6 +873,8 @@ const PROJECT_SORTS = {
   seller: 'p.seller',
   technician_name: 'p.technician_name',
   fecha_vencimiento: 'p.fecha_vencimiento',
+  invoice_number: 'p.invoice_number',
+  invoice_payment_status: 'p.invoice_payment_status',
   promised_delivery_date: 'p.promised_delivery_date',
   closed_at: 'p.closed_at',
   total_invoiced_mxn: PROJECT_INVOICED_SQL,
@@ -814,6 +895,12 @@ const PROJECT_FILTERS = {
   seller: { type: 'text', column: 'p.seller' },
   technician_name: { type: 'text', column: 'p.technician_name' },
   fecha_vencimiento: { type: 'date', column: 'p.fecha_vencimiento' },
+  invoice_number: { type: 'text', column: 'p.invoice_number' },
+  invoice_payment_status: {
+    type: 'select',
+    column: 'p.invoice_payment_status',
+    options: VALID_INVOICE_PAYMENT_STATUSES_STORED,
+  },
   promised_delivery_date: { type: 'date', column: 'p.promised_delivery_date' },
   closed_at: { type: 'date', column: 'date(p.closed_at)' },
   total_invoiced_mxn: { type: 'currency', column: PROJECT_INVOICED_SQL },
@@ -829,6 +916,8 @@ function buildProjectListSearchColumns() {
     'p.quote_number',
     'p.order_number',
     'p.purchase_order_number',
+    'p.invoice_number',
+    'p.invoice_payment_status',
     'p.client_name',
     'p.project_description',
     'p.status',
@@ -1335,6 +1424,11 @@ app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), 
           status,
           risk,
           observations,
+          invoice_number,
+          invoice_date,
+          due_date,
+          invoice_payment_status,
+          invoice_paid_at,
           created_at,
           updated_at,
           created_by_user_id,
@@ -1359,6 +1453,11 @@ app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), 
           @status,
           @risk,
           @observations,
+          @invoice_number,
+          @invoice_date,
+          @due_date,
+          @invoice_payment_status,
+          @invoice_paid_at,
           @created_at,
           @updated_at,
           @created_by_user_id,
@@ -1400,6 +1499,11 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
         status = @status,
         risk = @risk,
         observations = @observations,
+        invoice_number = @invoice_number,
+        invoice_date = @invoice_date,
+        due_date = @due_date,
+        invoice_payment_status = @invoice_payment_status,
+        invoice_paid_at = @invoice_paid_at,
         updated_at = @updated_at,
         updated_by_user_id = @updated_by_user_id,
         updated_by_name = @updated_by_name

@@ -431,6 +431,7 @@ function migrate(database) {
   ensureColumn(database, 'projects', 'invoice_date_na', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'projects', 'due_date', 'TEXT');
   ensureColumn(database, 'projects', 'invoice_number', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_payment_status', 'TEXT');
 
   // KPI tracking fields (Tablero KPIs Fase 1)
   ensureColumn(database, 'employees', 'primary_department', 'TEXT');

@@ -203,6 +203,30 @@
                     <option>Bajo</option>
                   </select>
                 </label>
+                <label>
+                  Numero de factura
+                  <input name="invoice_number" type="text" maxlength="50" autocomplete="off" placeholder="Ej. 2250" />
+                </label>
+                <label>
+                  Fecha de factura
+                  <input name="invoice_date" type="date" />
+                </label>
+                <label>
+                  Vencimiento de factura
+                  <input name="due_date" type="date" />
+                </label>
+                <label>
+                  Estatus de pago
+                  <select name="invoice_payment_status" id="invoice-payment-status">
+                    <option value="">Sin definir</option>
+                    <option value="Pendiente">Pendiente</option>
+                    <option value="Pagada">Pagada</option>
+                  </select>
+                </label>
+                <label id="invoice-paid-at-field" class="hidden">
+                  Fecha de pago
+                  <input name="invoice_paid_at" type="date" />
+                </label>
                 <label class="full">
                   Observaciones
                   <textarea name="observations" rows="3"></textarea>
@@ -220,7 +244,7 @@
                 </div>
               </div>
               <div class="search-row" style="margin-bottom:10px;">
-                <input id="projects-search" type="text" placeholder="Buscar proyectos..." />
+                <input id="projects-search" type="text" placeholder="Buscar por pedido, factura, cliente..." />
               </div>
               <div class="table-wrapper">
                 <table>
@@ -278,6 +302,11 @@
                   <article><span>Total facturado</span><strong id="detail-invoiced"></strong></article>
                   <article><span>Pendiente de cobro</span><strong id="detail-pending"></strong></article>
                   <article><span>Avance</span><strong id="detail-progress"></strong></article>
+                  <article><span>Numero de factura</span><strong id="detail-invoice-number"></strong></article>
+                  <article><span>Fecha de factura</span><strong id="detail-invoice-date"></strong></article>
+                  <article><span>Vencimiento de factura</span><strong id="detail-invoice-due"></strong></article>
+                  <article><span>Estatus de pago</span><strong id="detail-invoice-payment-status"></strong></article>
+                  <article><span>Fecha de pago</span><strong id="detail-invoice-paid-at"></strong></article>
                 </div>
 
                 <div class="detail-reports-section" style="margin-bottom:16px;">
