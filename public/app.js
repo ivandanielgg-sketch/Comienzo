@@ -134,6 +134,8 @@ state.ecovisStatementFrom = '';
 state.ecovisStatementTo = '';
 state.selectedEcovisPaymentId = null;
 state.tableSort = {};
+state.tableSort.projects = { sortBy: 'order_number', sortOrder: 'asc' };
+state.lastWorkedProjectId = null;
 
 const loginView = document.querySelector('#login-view');
 const appView = document.querySelector('#app-view');
@@ -320,6 +322,29 @@ function resetTableControls(tableKey) {
   state.tableSort[tableKey] = { sortBy: '', sortOrder: 'asc' };
 }
 
+function preserveWindowScroll(fn) {
+  const scrollY = window.scrollY;
+  const bodyLocked = document.body.classList.contains('scroll-lock');
+  fn();
+  if (!bodyLocked) {
+    window.scrollTo(0, scrollY);
+  }
+}
+
+function buildDataTableRowHtml(columns, row, { renderActions, rowClass, getRowId } = {}) {
+  const visibleColumns = columns.filter((column) => column.visible !== false);
+  const cells = visibleColumns.map((column) => {
+    const raw = row[column.key];
+    const value = column.render ? column.render(row) : escapeHtml(raw ?? '');
+    const colClass = column.type ? `col-${column.type}` : '';
+    return `<td class="${colClass}">${value}</td>`;
+  }).join('');
+  const actions = `<td class="col-actions">${renderActions ? renderActions(row) : ''}</td>`;
+  const cssClass = rowClass ? rowClass(row) : '';
+  const idAttr = getRowId ? ` data-row-id="${escapeHtml(String(getRowId(row)))}"` : '';
+  return `<tr class="${escapeHtml(cssClass)}"${idAttr}>${cells}${actions}</tr>`;
+}
+
 function renderDataTable({
   tableBody,
   tableKey,
@@ -334,43 +359,46 @@ function renderDataTable({
   pageState,
   renderActions,
   rowClass,
+  getRowId,
 }) {
   const table = tableBody.closest('table');
   const thead = table.querySelector('thead');
   const sort = getTableSort(tableKey);
   const visibleColumns = columns.filter((column) => column.visible !== false);
   const hasActionColumn = true;
+  const scrollParent = table.closest('.table-wrapper');
+  const scrollLeft = scrollParent ? scrollParent.scrollLeft : 0;
 
-  thead.innerHTML = `
-    <tr>
-      ${visibleColumns.map((column) => {
-        const isSorted = sort.sortBy === column.key;
-        const sortIcon = !column.sortable ? '' : (!isSorted ? '↕' : (sort.sortOrder === 'desc' ? '↓' : '↑'));
-        const colClass = column.type ? `col-${column.type}` : '';
-        return `<th class="${colClass}">
-          <button class="datatable-sort" type="button" data-sort-key="${escapeHtml(column.key)}" ${column.sortable ? '' : 'disabled'}>
-            ${escapeHtml(column.label)} <span>${sortIcon}</span>
-          </button>
-        </th>`;
-      }).join('')}
-      ${hasActionColumn ? '<th class="col-actions"></th>' : ''}
-    </tr>
-  `;
+  preserveWindowScroll(() => {
+    thead.innerHTML = `
+      <tr>
+        ${visibleColumns.map((column) => {
+          const isSorted = sort.sortBy === column.key;
+          const sortIcon = !column.sortable ? '' : (!isSorted ? '↕' : (sort.sortOrder === 'desc' ? '↓' : '↑'));
+          const colClass = column.type ? `col-${column.type}` : '';
+          return `<th class="${colClass}">
+            <button class="datatable-sort" type="button" data-sort-key="${escapeHtml(column.key)}" ${column.sortable ? '' : 'disabled'}>
+              ${escapeHtml(column.label)} <span>${sortIcon}</span>
+            </button>
+          </th>`;
+        }).join('')}
+        ${hasActionColumn ? '<th class="col-actions"></th>' : ''}
+      </tr>
+    `;
 
-  if (!data.length) {
-    tableBody.innerHTML = `<tr><td colspan="${visibleColumns.length + (hasActionColumn ? 1 : 0)}" class="muted">${isFiltered ? filteredEmptyMessage : emptyMessage}</td></tr>`;
-  } else {
-    tableBody.innerHTML = data.map((row) => {
-      const cells = visibleColumns.map((column) => {
-        const raw = row[column.key];
-        const value = column.render ? column.render(row) : escapeHtml(raw ?? '');
-        const colClass = column.type ? `col-${column.type}` : '';
-        return `<td class="${colClass}">${value}</td>`;
-      }).join('');
-      const actions = hasActionColumn ? `<td class="col-actions">${renderActions ? renderActions(row) : ''}</td>` : '';
-      const cssClass = rowClass ? rowClass(row) : '';
-      return `<tr class="${escapeHtml(cssClass)}">${cells}${actions}</tr>`;
-    }).join('');
+    if (!data.length) {
+      tableBody.innerHTML = `<tr><td colspan="${visibleColumns.length + (hasActionColumn ? 1 : 0)}" class="muted">${isFiltered ? filteredEmptyMessage : emptyMessage}</td></tr>`;
+    } else {
+      tableBody.innerHTML = data.map((row) => buildDataTableRowHtml(columns, row, {
+        renderActions,
+        rowClass,
+        getRowId,
+      })).join('');
+    }
+  });
+
+  if (scrollParent) {
+    scrollParent.scrollLeft = scrollLeft;
   }
 
   thead.querySelectorAll('[data-sort-key]').forEach((button) => {
@@ -967,12 +995,173 @@ async function loadClosedProjects() {
   }
 }
 
-function renderProjects() {
+function roundMoneyValue(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function renderProjectsSummary() {
   const summary = state.projectsSummary || {};
   document.querySelector('#stat-projects').textContent = summary.totalProjects ?? 0;
   document.querySelector('#stat-charged').textContent = money.format(summary.totalCharged ?? 0);
   document.querySelector('#stat-spent').textContent = money.format(summary.totalSpent ?? 0);
   document.querySelector('#stat-pending').textContent = money.format(summary.totalPending ?? 0);
+}
+
+function projectRowActions(project) {
+  return `
+      <div class="row-actions">
+        <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Cerrar proyecto</button>
+        <button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button>
+      </div>`;
+}
+
+function projectRowClass(project) {
+  const classes = [];
+  if (state.projectDrawerOpen && state.selectedProjectId === project.id) {
+    classes.push('row-selected');
+  }
+  if (state.lastWorkedProjectId === project.id) {
+    classes.push('row-last-worked');
+  }
+  return classes.join(' ');
+}
+
+function syncProjectsRowClasses() {
+  if (!projectsTable) {
+    return;
+  }
+  projectsTable.querySelectorAll('tbody tr[data-row-id]').forEach((tr) => {
+    const id = Number(tr.dataset.rowId);
+    tr.classList.toggle('row-selected', Boolean(state.projectDrawerOpen && state.selectedProjectId === id));
+    tr.classList.toggle('row-last-worked', state.lastWorkedProjectId === id);
+  });
+}
+
+function adjustProjectsSummary(prev, next, { removed = false } = {}) {
+  const summary = { ...(state.projectsSummary || {}) };
+  if (removed && prev) {
+    summary.totalProjects = Math.max(0, (summary.totalProjects ?? 0) - 1);
+    summary.totalCharged = roundMoneyValue((summary.totalCharged ?? 0) - (prev.total_charged || 0));
+    summary.totalSpent = roundMoneyValue((summary.totalSpent ?? 0) - (prev.spent || 0));
+    summary.totalPending = roundMoneyValue(
+      (summary.totalPending ?? 0)
+      - ((prev.total_invoiced_mxn || 0) - (prev.total_charged || 0)),
+    );
+  } else if (prev && next) {
+    summary.totalCharged = roundMoneyValue(
+      (summary.totalCharged ?? 0) + (next.total_charged || 0) - (prev.total_charged || 0),
+    );
+    summary.totalSpent = roundMoneyValue(
+      (summary.totalSpent ?? 0) + (next.spent || 0) - (prev.spent || 0),
+    );
+    summary.totalPending = roundMoneyValue(
+      (summary.totalPending ?? 0)
+      + ((next.total_invoiced_mxn || 0) - (next.total_charged || 0))
+      - ((prev.total_invoiced_mxn || 0) - (prev.total_charged || 0)),
+    );
+  }
+  state.projectsSummary = summary;
+  renderProjectsSummary();
+}
+
+function refreshProjectsPagination() {
+  const current = state.projectsPagination || defaultPagination;
+  const totalRecords = Math.max(0, current.totalRecords || 0);
+  const limit = state.projectsPag.limit || 15;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / limit) || 1);
+  if (state.projectsPag.page > totalPages) {
+    state.projectsPag.page = totalPages;
+  }
+  state.projectsPagination = {
+    ...current,
+    page: state.projectsPag.page,
+    limit,
+    totalRecords,
+    totalPages,
+    hasNextPage: state.projectsPag.page < totalPages,
+    hasPreviousPage: state.projectsPag.page > 1,
+  };
+  renderPaginationControls(
+    'projects-pagination',
+    state.projectsPagination,
+    (newPage) => { state.projectsPag.page = newPage; loadProjects(); },
+    (newLimit) => { state.projectsPag.limit = newLimit; state.projectsPag.page = 1; loadProjects(); },
+  );
+}
+
+async function applyProjectListUpdate(updatedProject, { remove = false, markWorked = true } = {}) {
+  const id = Number(updatedProject?.id);
+  if (!Number.isFinite(id)) {
+    return;
+  }
+
+  const index = state.projects.findIndex((project) => project.id === id);
+  const prev = index >= 0 ? state.projects[index] : null;
+
+  if (remove) {
+    if (prev) {
+      adjustProjectsSummary(prev, null, { removed: true });
+      state.projects = state.projects.filter((project) => project.id !== id);
+      if (state.projectsPagination) {
+        state.projectsPagination = {
+          ...state.projectsPagination,
+          totalRecords: Math.max(0, (state.projectsPagination.totalRecords || 0) - 1),
+        };
+      }
+      const tr = projectsTable?.querySelector(`tr[data-row-id="${id}"]`);
+      if (tr) {
+        tr.remove();
+      }
+    }
+
+    if (state.lastWorkedProjectId === id) {
+      state.lastWorkedProjectId = null;
+    }
+
+    if (!state.projects.length) {
+      if (state.projectsPag.page > 1) {
+        state.projectsPag.page -= 1;
+        await loadProjects();
+        return;
+      }
+      renderProjects();
+      return;
+    }
+
+    refreshProjectsPagination();
+    syncProjectsRowClasses();
+    return;
+  }
+
+  if (markWorked) {
+    state.lastWorkedProjectId = id;
+  }
+
+  if (index >= 0) {
+    adjustProjectsSummary(prev, updatedProject);
+    state.projects[index] = updatedProject;
+    const tr = projectsTable?.querySelector(`tr[data-row-id="${id}"]`);
+    if (tr) {
+      tr.outerHTML = buildDataTableRowHtml(projectColumns, updatedProject, {
+        renderActions: projectRowActions,
+        rowClass: projectRowClass,
+        getRowId: (project) => project.id,
+      });
+    }
+  }
+
+  if (state.selectedProjectId === id) {
+    fillProjectForm(updatedProject);
+    if (state.projectDrawerOpen) {
+      renderDetail(updatedProject);
+    }
+  }
+
+  syncProjectsRowClasses();
+}
+
+function renderProjects() {
+  renderProjectsSummary();
 
   renderDataTable({
     tableBody: projectsTable,
@@ -986,14 +1175,9 @@ function renderProjects() {
     isFiltered: Boolean(state.projectsSearch),
     onRefresh: loadProjects,
     pageState: state.projectsPag,
-    renderActions: (project) => `
-      <div class="row-actions">
-        <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Cerrar proyecto</button>
-        <button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button>
-      </div>`,
-    rowClass: (project) => (
-      state.projectDrawerOpen && state.selectedProjectId === project.id ? 'row-selected' : ''
-    ),
+    renderActions: projectRowActions,
+    rowClass: projectRowClass,
+    getRowId: (project) => project.id,
   });
 }
 
@@ -1165,7 +1349,7 @@ function openProjectDrawer() {
   projectDetailDrawer.classList.remove('hidden');
   projectDetailDrawer.setAttribute('aria-hidden', 'false');
   lockProjectDrawerBodyScroll();
-  renderProjects();
+  syncProjectsRowClasses();
 
   if (projectDrawerReleaseFocusTrap) {
     projectDrawerReleaseFocusTrap();
@@ -1195,7 +1379,7 @@ function closeProjectDrawer() {
   projectDetailDrawer.classList.add('hidden');
   projectDetailDrawer.setAttribute('aria-hidden', 'true');
   unlockProjectDrawerBodyScroll();
-  renderProjects();
+  syncProjectsRowClasses();
 
   if (projectDrawerReleaseFocusTrap) {
     projectDrawerReleaseFocusTrap();
@@ -1217,6 +1401,10 @@ function selectProject(projectId, focusReturnEl) {
   const project = state.projects.find((item) => item.id === Number(projectId));
   if (!project) {
     return;
+  }
+
+  if (state.lastWorkedProjectId != null && state.lastWorkedProjectId !== project.id) {
+    state.lastWorkedProjectId = null;
   }
 
   state.selectedProjectId = project.id;
@@ -1541,7 +1729,7 @@ async function deleteProject(projectId) {
       clearSelection();
     }
 
-    await loadProjects();
+    await applyProjectListUpdate(project, { remove: true, markWorked: false });
     await loadClosedProjects();
 
     showUndoToast(`Proyecto ${projectPedidoClienteLabel(project)} cerrado.`, () =>
@@ -1820,8 +2008,13 @@ projectForm.addEventListener('submit', async (event) => {
     });
 
     setMessage(projectMessage, 'Proyecto guardado correctamente.', true);
-    await loadProjects();
-    selectProject(savedProject.id);
+    if (id) {
+      await applyProjectListUpdate(savedProject);
+      selectProject(savedProject.id);
+    } else {
+      await loadProjects();
+      selectProject(savedProject.id);
+    }
   } catch (error) {
     setMessage(projectMessage, error.message);
   }
@@ -1906,13 +2099,13 @@ paymentForm.addEventListener('submit', async (event) => {
     return;
   }
 
-  await api(`/api/projects/${state.selectedProjectId}/payments`, {
+  const updatedProject = await api(`/api/projects/${state.selectedProjectId}/payments`, {
     method: 'POST',
     body: JSON.stringify(simpleFormPayload(paymentForm)),
   });
   paymentForm.reset();
   setDefaultDates();
-  await loadProjects();
+  await applyProjectListUpdate(updatedProject);
 });
 
 costForm.addEventListener('submit', async (event) => {
@@ -1921,13 +2114,13 @@ costForm.addEventListener('submit', async (event) => {
     return;
   }
 
-  await api(`/api/projects/${state.selectedProjectId}/costs`, {
+  const updatedProject = await api(`/api/projects/${state.selectedProjectId}/costs`, {
     method: 'POST',
     body: JSON.stringify(simpleFormPayload(costForm)),
   });
   costForm.reset();
   setDefaultDates();
-  await loadProjects();
+  await applyProjectListUpdate(updatedProject);
 });
 
 if (detailPanelClose) {
@@ -1962,11 +2155,11 @@ paymentsList.addEventListener('click', async (event) => {
   }
 
   try {
-    await api(`/api/projects/${state.selectedProjectId}/payments/${button.dataset.id}`, {
+    const updatedProject = await api(`/api/projects/${state.selectedProjectId}/payments/${button.dataset.id}`, {
       method: 'DELETE',
       body: JSON.stringify({ password }),
     });
-    await loadProjects();
+    await applyProjectListUpdate(updatedProject);
   } catch (error) {
     window.alert(error.message);
   }
@@ -1984,11 +2177,11 @@ costsList.addEventListener('click', async (event) => {
   }
 
   try {
-    await api(`/api/projects/${state.selectedProjectId}/costs/${button.dataset.id}`, {
+    const updatedProject = await api(`/api/projects/${state.selectedProjectId}/costs/${button.dataset.id}`, {
       method: 'DELETE',
       body: JSON.stringify({ password }),
     });
-    await loadProjects();
+    await applyProjectListUpdate(updatedProject);
   } catch (error) {
     window.alert(error.message);
   }

@@ -26,3 +26,19 @@ test('main table keeps general search and sends sort before pagination', () => {
   assert.match(appJs, /new URLSearchParams\(\{\s*page: state\.projectsPag\.page,\s*limit: state\.projectsPag\.limit,\s*search: state\.projectsSearch,\s*\.\.\.buildTableParams\('projects'\),/s);
   assert.match(appJs, /renderPaginationControls\(\s*paginationContainerId,/);
 });
+
+test('projects list defaults to order_number ascending and patches rows in place', () => {
+  assert.match(appJs, /state\.tableSort\.projects = \{ sortBy: 'order_number', sortOrder: 'asc' \}/);
+  assert.match(appJs, /async function applyProjectListUpdate/);
+  assert.match(appJs, /function preserveWindowScroll/);
+  assert.match(appJs, /row-last-worked/);
+  assert.match(appJs, /await applyProjectListUpdate\(updatedProject\)/);
+  assert.doesNotMatch(
+    appJs,
+    /paymentForm\.reset\(\);\s*setDefaultDates\(\);\s*await loadProjects\(\);/s,
+  );
+  assert.doesNotMatch(
+    appJs,
+    /costForm\.reset\(\);\s*setDefaultDates\(\);\s*await loadProjects\(\);/s,
+  );
+});
