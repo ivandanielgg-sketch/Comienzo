@@ -4,8 +4,6 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
-const { getDb } = require('../src/db');
-
 const DB_PATH = path.join(__dirname, '..', 'data', 'test-project-invoice-payment.db');
 const PORT = 3098;
 
@@ -82,16 +80,6 @@ function baseProjectPayload(overrides = {}) {
   };
 }
 
-test('invoice_payment_status column exists after migration', () => {
-  const db = getDb();
-  const columns = db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name);
-  assert.ok(columns.includes('invoice_payment_status'));
-  assert.ok(columns.includes('invoice_number'));
-  assert.ok(columns.includes('invoice_date'));
-  assert.ok(columns.includes('due_date'));
-  assert.ok(columns.includes('invoice_paid_at'));
-});
-
 test('project invoice payment fields via API', async (t) => {
   await t.before(async () => {
     for (const f of [DB_PATH, `${DB_PATH}-wal`, `${DB_PATH}-shm`]) {
@@ -109,6 +97,16 @@ test('project invoice payment fields via API', async (t) => {
       stdio: 'pipe',
     });
     await waitForServer();
+
+    const Database = require('better-sqlite3');
+    const db = new Database(DB_PATH, { readonly: true });
+    const columns = db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name);
+    db.close();
+    assert.ok(columns.includes('invoice_payment_status'));
+    assert.ok(columns.includes('invoice_number'));
+    assert.ok(columns.includes('invoice_date'));
+    assert.ok(columns.includes('due_date'));
+    assert.ok(columns.includes('invoice_paid_at'));
 
     const adminLogin = await request('POST', '/api/login', {
       username: 'admin',
