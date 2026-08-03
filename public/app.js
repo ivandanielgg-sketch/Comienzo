@@ -3764,6 +3764,35 @@ if (document.getElementById('ecovis-diagnostic-copy-json-btn')) {
     copyEcovisDiagnosticJson();
   });
 }
+if (document.getElementById('ecovis-diagnostic-cleanup-orphans-btn')) {
+  document.getElementById('ecovis-diagnostic-cleanup-orphans-btn').addEventListener('click', async () => {
+    const messageEl = document.getElementById('ecovis-diagnostic-message');
+    const orphanCount = ecovisDiagnosticData?.orphans?.count || 0;
+    const ok = window.confirm(
+      'Cancelar ' + orphanCount + ' movimientos huerfanos (is_cancelled=1) con motivo '
+      + '"Limpieza 2026-08: proyecto cancelado"?\n\nNo se borran datos. No se tocan aplicacion/cancelacion/saldo historicos de proyectos activos.',
+    );
+    if (!ok) return;
+    try {
+      const result = await api('/api/ecovis/diagnostic/cleanup-orphans', { method: 'POST', body: {} });
+      ecovisDiagnosticData = result.diagnostic || null;
+      if (ecovisDiagnosticData) renderEcovisDiagnostic(ecovisDiagnosticData);
+      await loadEcovisSummary();
+      if (messageEl) {
+        messageEl.textContent = 'Huerfanos cancelados: ' + (result.cancelled_count || 0)
+          + '. Saldo pendiente oficial: ' + formatMoney(result.pending_project_amount || 0);
+        messageEl.className = 'message success';
+      }
+    } catch (error) {
+      if (messageEl) {
+        messageEl.textContent = error.message || 'No se pudo cancelar huerfanos.';
+        messageEl.className = 'message error';
+      } else {
+        window.alert(error.message);
+      }
+    }
+  });
+}
 
 function formatEcovisSignedMoney(value, forceSign) {
   const num = Number(value) || 0;
@@ -3865,9 +3894,15 @@ function renderEcovisStatement(result) {
     const period = (statement.from || statement.to)
       ? ('Periodo: ' + (statement.from || '…') + ' → ' + (statement.to || '…') + ' · ')
       : '';
+    const official = statement.official_balance_pending_mxn != null
+      ? statement.official_balance_pending_mxn
+      : (result.summary && result.summary.pending_project_amount);
     meta.textContent = period
       + 'Saldo inicial: ' + money.format(statement.opening_balance || 0)
-      + ' · Saldo final: ' + money.format(statement.closing_balance || 0);
+      + ' · Saldo final: ' + money.format(statement.closing_balance || 0)
+      + (official != null
+        ? (' · Saldo pendiente oficial (proyectos): ' + money.format(official))
+        : '');
   }
 
   if (!rows.length) {
