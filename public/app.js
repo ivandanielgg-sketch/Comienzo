@@ -6774,11 +6774,7 @@ async function updateFinPayrollWeekRange() {
   try {
     const data = await api(`/api/financial/payroll/week-range?year=${year}&week_number=${weekNumber}`);
     rangeEl.textContent = data.range_label || data.label || `${data.week_start_date} – ${data.week_end_date}`;
-    if (data.attendance_week) {
-      form.elements.payroll_attendance_week_id.value = data.attendance_week.id;
-    } else if (!form.elements.id.value) {
-      form.elements.payroll_attendance_week_id.value = '';
-    }
+    form.elements.payroll_attendance_week_id.value = data.attendance_week ? data.attendance_week.id : '';
   } catch (err) {
     rangeEl.textContent = err.message || 'No se pudo calcular el rango de la semana.';
   }
