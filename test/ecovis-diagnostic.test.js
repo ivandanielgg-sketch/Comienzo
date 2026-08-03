@@ -285,3 +285,75 @@ test('diagnostic ignores cancelled movements', () => {
   assert.equal(result.duplicates.projects_with_duplicate_cargos, 0);
   assert.equal(result.proposed_cleanup_summary.total_movements_to_cancel, 0);
 });
+
+test('diagnostic breaks down all debe types and explains non-proyecto remainder', () => {
+  const projects = [
+    {
+      id: 1,
+      project_name: 'Alpha',
+      status: 'parcialmente_pagado',
+      is_cancelled: 0,
+      amount_mxn: 1000,
+      paid_amount_mxn: 400,
+      pending_amount_mxn: 600,
+    },
+  ];
+  const movements = [
+    {
+      id: 1,
+      movement_type: 'proyecto',
+      direction: 'ecovis_debe_a_revram',
+      related_project_id: 1,
+      amount_mxn: 1000,
+      is_cancelled: 0,
+      created_at: '2026-01-01T00:00:00.000Z',
+      movement_date: '2026-01-01',
+      description: 'cargo',
+    },
+    {
+      id: 2,
+      movement_type: 'aplicacion_a_proyecto',
+      direction: 'ecovis_debe_a_revram',
+      related_project_id: 1,
+      related_payment_id: 99,
+      amount_mxn: 400,
+      is_cancelled: 0,
+      created_at: '2026-01-02T00:00:00.000Z',
+      movement_date: '2026-01-02',
+      description: 'Aplicacion a Alpha',
+    },
+    {
+      id: 3,
+      movement_type: 'cancelacion',
+      direction: 'ecovis_debe_a_revram',
+      related_project_id: 1,
+      amount_mxn: 50,
+      is_cancelled: 0,
+      created_at: '2026-01-03T00:00:00.000Z',
+      movement_date: '2026-01-03',
+      description: 'memo',
+    },
+  ];
+
+  const result = generateEcovisIntegrityDiagnostic(projects, movements);
+  assert.equal(result.debe_by_type.total_amount_mxn, 1450);
+  assert.equal(result.debe_by_type.by_type.length, 3);
+  assert.equal(result.debe_by_type.unexplained_gap.remainder_mxn, 450);
+  assert.equal(result.debe_by_type.unexplained_gap.remainder_equals_non_proyecto_debe_mxn, 450);
+
+  const aplicacion = result.debe_by_type.by_type.find((r) => r.movement_type === 'aplicacion_a_proyecto');
+  assert.ok(aplicacion);
+  assert.equal(aplicacion.modeling_issue, true);
+  assert.match(aplicacion.code_origin, /allocations/);
+
+  const projectDetail = result.active_projects_debe.projects[0];
+  assert.equal(projectDetail.active_debe_count, 3);
+  assert.equal(projectDetail.movements.length, 3);
+  const appMov = projectDetail.movements.find((m) => m.id === 2);
+  assert.equal(appMov.proposed_action, 'none');
+  assert.equal(appMov.modeling_issue, true);
+  assert.equal(appMov.related_payment_id, 99);
+  const keepMov = projectDetail.movements.find((m) => m.id === 1);
+  assert.equal(keepMov.proposed_action, 'keep');
+  assert.ok(result.code_origins.cancelacion.modeling_issue);
+});

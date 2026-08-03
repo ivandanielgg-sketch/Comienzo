@@ -1042,7 +1042,7 @@
             <p class="ecovis-account-status" id="ecovis-account-status">Cuenta saldada</p>
             <p class="ecovis-account-amount" id="ecovis-account-amount"></p>
             <div class="ecovis-equation" id="ecovis-equation" title="">
-              <div class="ecovis-equation-row" title="Suma de montos MXN de proyectos activos no cancelados menos asignaciones tipo proyecto (ecovis_projects − ecovis_payment_allocations.allocation_type=proyecto).">
+              <div class="ecovis-equation-row" title="Saldo oficial: suma de pending_amount_mxn de proyectos ECOVIS no cancelados (no se calcula sumando movimientos por direction).">
                 <span>Nos deben por proyectos</span>
                 <strong id="ecovis-eq-pending">+$0.00</strong>
               </div>
@@ -1319,6 +1319,7 @@
                 <div class="row-actions">
                   <button id="ecovis-diagnostic-refresh-btn" class="secondary" type="button">Actualizar</button>
                   <button id="ecovis-diagnostic-copy-json-btn" class="secondary" type="button">Copiar JSON</button>
+                  <button id="ecovis-diagnostic-cleanup-orphans-btn" class="secondary" type="button">Cancelar huerfanos</button>
                 </div>
               </div>
               <p class="text-muted" style="margin: 0 0 0.75rem 0; font-size: 0.85rem;">
@@ -1328,7 +1329,31 @@
               <p id="ecovis-diagnostic-message" class="message"></p>
               <div id="ecovis-diagnostic-summary" class="ecovis-diagnostic-summary"></div>
 
-              <h3 class="ecovis-diagnostic-heading">Cargos duplicados por proyecto</h3>
+              <h3 class="ecovis-diagnostic-heading">Desglose debe por tipo (direction = ecovis_debe_a_revram)</h3>
+              <div id="ecovis-diagnostic-gap" class="ecovis-diagnostic-comparative"></div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Tipo</th>
+                      <th>Conteo</th>
+                      <th>Suma MXN</th>
+                      <th>% del total</th>
+                      <th>Issue modelado</th>
+                      <th>Origen en codigo</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-diagnostic-by-type-table"></tbody>
+                </table>
+              </div>
+
+              <h3 class="ecovis-diagnostic-heading">Movimientos debe por proyecto activo</h3>
+              <p class="text-muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+                Todos los movimientos activos con direction=debe ligados al proyecto (cualquier tipo). Accion propuesta: keep / cancel_duplicate / none.
+              </p>
+              <div id="ecovis-diagnostic-projects-debe" class="ecovis-diagnostic-projects-debe"></div>
+
+              <h3 class="ecovis-diagnostic-heading">Cargos duplicados tipo proyecto</h3>
               <div class="table-wrapper">
                 <table>
                   <thead>
@@ -1379,6 +1404,9 @@
                   <tbody id="ecovis-diagnostic-balance-projects-table"></tbody>
                 </table>
               </div>
+
+              <h3 class="ecovis-diagnostic-heading">Origen en codigo (por tipo)</h3>
+              <div id="ecovis-diagnostic-code-origins" class="ecovis-diagnostic-comparative"></div>
             </div>
           </div>
 
