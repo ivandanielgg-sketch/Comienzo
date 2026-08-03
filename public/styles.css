@@ -1338,6 +1338,68 @@ th.col-number {
 .ecovis-status-pagado { background: #dcfae6; color: #087443; }
 .ecovis-status-cancelado { background: #fee4e2; color: #b42318; }
 
+.ecovis-diagnostic-heading {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1rem;
+}
+
+.ecovis-diagnostic-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 0.75rem;
+}
+
+.ecovis-diagnostic-cards article {
+  background: rgba(15, 23, 42, 0.03);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  padding: 10px 12px;
+}
+
+.ecovis-diagnostic-cards article span {
+  display: block;
+  font-size: 0.8rem;
+  color: #475467;
+}
+
+.ecovis-diagnostic-cards article strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.15rem;
+}
+
+.ecovis-diagnostic-cards article small {
+  display: block;
+  margin-top: 2px;
+  color: #667085;
+  font-size: 0.78rem;
+}
+
+.ecovis-diagnostic-meta {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+.ecovis-diagnostic-comp-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.ecovis-diagnostic-flag {
+  color: #b54708;
+  font-weight: 600;
+}
+
+.ecovis-diagnostic-row-warn td {
+  background: #fffaeb;
+}
+
+.ecovis-diagnostic-total-row td {
+  border-top: 2px solid rgba(15, 23, 42, 0.15);
+}
+
 @media (max-width: 720px) {
   .ecovis-account-amount {
     font-size: 1.3rem;

@@ -39,6 +39,7 @@ const {
   calculateEcovisPaymentUnallocatedAmount,
   buildEcovisStatementLedger,
   buildEcovisAccountHeader,
+  generateEcovisIntegrityDiagnostic,
   STATEMENT_TYPE_LABELS,
 } = require('./ecovis');
 const { buildEcovisStatementExcel } = require('./ecovisStatementExport');
@@ -3734,6 +3735,32 @@ app.get('/api/ecovis/summary', requireAuth, requirePermission('ecovisAccount', '
     ...summary,
     header: buildEcovisAccountHeader(summary),
   });
+});
+
+app.get('/api/ecovis/diagnostic', requireAuth, requirePermission('ecovisAccount', 'view'), (req, res, next) => {
+  try {
+    const projects = db.prepare('SELECT * FROM ecovis_projects').all();
+    const movements = db.prepare('SELECT * FROM ecovis_movements').all();
+    const diagnostic = generateEcovisIntegrityDiagnostic(projects, movements);
+    logAuditEvent(db, {
+      req,
+      action: 'diagnostic',
+      module: 'ecovis',
+      entityType: 'ecovis_diagnostic',
+      entityLabel: 'Diagnostico ECOVIS',
+      metadata: {
+        read_only: true,
+        projects_with_duplicate_cargos: diagnostic.duplicates.projects_with_duplicate_cargos,
+        orphan_count: diagnostic.orphans.count,
+        balance_from_projects_pending_mxn: diagnostic.comparative.balance_from_projects_pending_mxn,
+        balance_from_movements_cargo_mxn: diagnostic.comparative.balance_from_movements_cargo_mxn,
+        difference_mxn: diagnostic.comparative.difference_mxn,
+      },
+    });
+    res.json(diagnostic);
+  } catch (error) {
+    next(error);
+  }
 });
 
 function loadEcovisStatementPayload(query) {
