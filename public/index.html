@@ -209,11 +209,31 @@
                 </label>
                 <label>
                   Fecha de factura
-                  <input name="invoice_date" type="date" />
+                  <input name="invoice_date" id="project-invoice-date" type="date" />
+                </label>
+                <label class="checkbox-row billing-na-row">
+                  <input name="invoice_date_na" id="project-invoice-date-na" type="checkbox" />
+                  Fecha de factura N/A
+                </label>
+                <label id="invoice-date-na-reason-field" class="full hidden">
+                  Motivo fecha N/A
+                  <input name="invoice_date_na_reason" id="project-invoice-date-na-reason" type="text" maxlength="200" autocomplete="off" placeholder="Motivo corto" />
+                </label>
+                <label>
+                  Dias de credito
+                  <input name="credit_days" id="project-credit-days" type="number" min="0" max="3650" step="1" inputmode="numeric" placeholder="0 = contado" />
+                </label>
+                <label class="checkbox-row billing-na-row">
+                  <input name="credit_days_na" id="project-credit-days-na" type="checkbox" />
+                  Dias de credito N/A
+                </label>
+                <label id="credit-days-na-reason-field" class="full hidden">
+                  Motivo dias N/A
+                  <input name="credit_days_na_reason" id="project-credit-days-na-reason" type="text" maxlength="200" autocomplete="off" placeholder="Motivo corto" />
                 </label>
                 <label>
                   Vencimiento de factura
-                  <input name="due_date" type="date" />
+                  <input name="due_date" id="project-due-date" type="date" readonly tabindex="-1" title="Se calcula automatico: fecha factura + dias de credito" />
                 </label>
                 <label>
                   Estatus de pago
@@ -304,6 +324,7 @@
                   <article><span>Avance</span><strong id="detail-progress"></strong></article>
                   <article><span>Numero de factura</span><strong id="detail-invoice-number"></strong></article>
                   <article><span>Fecha de factura</span><strong id="detail-invoice-date"></strong></article>
+                  <article><span>Dias de credito</span><strong id="detail-credit-days"></strong></article>
                   <article><span>Vencimiento de factura</span><strong id="detail-invoice-due"></strong></article>
                   <article><span>Estatus de pago</span><strong id="detail-invoice-payment-status"></strong></article>
                   <article><span>Fecha de pago</span><strong id="detail-invoice-paid-at"></strong></article>
@@ -1825,6 +1846,7 @@
             <button id="fin-subtab-statement" class="secondary active" type="button">Estado de Resultados</button>
             <button id="fin-subtab-payable" class="secondary" type="button">Cuentas por Pagar</button>
             <button id="fin-subtab-receivable" class="secondary" type="button">Cuentas por Cobrar</button>
+            <button id="fin-subtab-aging" class="secondary" type="button">Antigüedad de saldos</button>
             <button id="fin-subtab-bank" class="secondary" type="button">Bancos</button>
             <button id="fin-subtab-opex" class="secondary" type="button">Gastos de operación</button>
             <button id="fin-subtab-adjustments" class="secondary" type="button">Ajustes</button>
@@ -1865,6 +1887,23 @@
             <div class="panel">
               <div class="panel-header"><h2>Cuentas por Cobrar</h2></div>
               <div id="fin-ar-list"></div>
+            </div>
+          </div>
+
+          <div id="fin-aging-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header aging-report-header">
+                <div>
+                  <h2>Antigüedad de saldos</h2>
+                  <p class="muted">Saldo pendiente por cliente, buckets según configuración de KPIs. La columna «Sin fecha de factura» es la lista de captura histórica.</p>
+                </div>
+                <div class="aging-report-actions">
+                  <button id="fin-aging-refresh" type="button" class="secondary">Actualizar</button>
+                  <button id="fin-aging-export-csv" type="button" class="secondary">Exportar CSV</button>
+                  <button id="fin-aging-print" type="button" class="secondary">Imprimir</button>
+                </div>
+              </div>
+              <div id="fin-aging-list" class="aging-report-body"></div>
             </div>
           </div>
 

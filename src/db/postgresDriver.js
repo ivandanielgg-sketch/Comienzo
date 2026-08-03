@@ -89,6 +89,21 @@ function ensurePostgresColumns(database) {
 
   const { migrateCommissionsPostgres } = require('./commissionsPostgresMigration');
   migrateCommissionsPostgres(database);
+
+  const billingReasonAlters = [
+    'ALTER TABLE projects ADD COLUMN IF NOT EXISTS invoice_date_na_reason TEXT',
+    'ALTER TABLE projects ADD COLUMN IF NOT EXISTS credit_days_na_reason TEXT',
+  ];
+  for (const sql of billingReasonAlters) {
+    try {
+      database.exec(sql);
+    } catch (_) {
+      /* idempotent */
+    }
+  }
+
+  const { migrateClosedProjectsStatus } = require('./closedProjectsStatusMigration');
+  migrateClosedProjectsStatus(database);
 }
 
 

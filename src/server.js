@@ -48,6 +48,8 @@ const { formatDateTimeCDMX } = require('./dateHelper');
 const { hasPermission, loadUserPermissions, saveUserPermissions, getDefaultPermissionsForRole, MODULES, isAdminOnlyModule } = require('./permissions');
 const { registerNewModules, updateSessionActivity, closeSessionActivity } = require("./newModules");
 const { registerKpiRoutes } = require('./kpisRoutes');
+const { loadKpiSettings } = require('./kpis');
+const { buildAgingReport, agingReportToCsv } = require('./agingReport');
 const { calculate: calculateEmissions, validateInput: validateEmissionsInput, FUEL_LIBRARY } = require('./lib/combustion');
 const { ATTENDANCE_STATUSES, VALID_STATUS_CODES, VALID_WEEK_STATUSES, DAY_COLUMNS, calculateWeekRange, calculateAttendanceSummary, generateDefaultAttendance, validateStatusCode, employeeHasOutsideWork } = require('./attendance');
 
@@ -59,6 +61,8 @@ const VALID_STATUSES = ['Pendiente', 'En Proceso', 'Terminado'];
 const VALID_RISKS = ['Alto', 'Medio', 'Bajo'];
 const VALID_INVOICE_PAYMENT_STATUSES_STORED = ['Pendiente', 'Pagada'];
 const INVOICE_NUMBER_MAX_LENGTH = 50;
+const NA_REASON_MAX_LENGTH = 200;
+const CREDIT_DAYS_MAX = 3650;
 const VALID_EMPLOYEE_FILTERS = ['all', 'active', 'inactive'];
 const VALID_ECOVIS_STATUSES = ['pendiente', 'parcialmente_pagado', 'pagado', 'cancelado'];
 const VALID_PAYMENT_STATUSES = ['asignado', 'parcial', 'cancelado'];
@@ -273,14 +277,82 @@ function resolveInvoicePaymentStatus(row) {
   return stored;
 }
 
-function normalizeInvoicePaymentFields(body) {
+function shortNaReason(body, field, label) {
+  const reason = optionalText(body, field);
+  if (!reason) {
+    throw badRequest(`${label} es obligatorio cuando marcas N/A.`);
+  }
+  if (reason.length > NA_REASON_MAX_LENGTH) {
+    throw badRequest(`${label} no puede exceder ${NA_REASON_MAX_LENGTH} caracteres.`);
+  }
+  return reason;
+}
+
+function computeInvoiceDueDate(invoiceDate, creditDays) {
+  if (!invoiceDate || !isValidDate(invoiceDate)) {
+    return null;
+  }
+  const days = Number(creditDays);
+  if (!Number.isFinite(days) || days < 0) {
+    return null;
+  }
+  return addDaysToIsoDate(invoiceDate, days);
+}
+
+function billingCaptureRequired(body, existingRow, invoiceNumber) {
+  const status = trim(body.status);
+  const becomingTerminado = status === 'Terminado'
+    && (!existingRow || existingRow.status !== 'Terminado');
+  return becomingTerminado || Boolean(invoiceNumber);
+}
+
+function normalizeInvoicePaymentFields(body, { existingRow = null, requireBilling = null } = {}) {
   const invoiceNumber = optionalText(body, 'invoice_number');
   if (invoiceNumber && invoiceNumber.length > INVOICE_NUMBER_MAX_LENGTH) {
     throw badRequest(`Numero de factura no puede exceder ${INVOICE_NUMBER_MAX_LENGTH} caracteres.`);
   }
 
-  const invoiceDate = optionalDate(body, 'invoice_date', 'Fecha de factura');
-  const dueDate = optionalDate(body, 'due_date', 'Fecha de vencimiento de la factura');
+  const invoiceDateNa = booleanValue(body, 'invoice_date_na');
+  const creditDaysNa = booleanValue(body, 'credit_days_na');
+
+  let invoiceDate = null;
+  let invoiceDateNaReason = null;
+  if (invoiceDateNa) {
+    invoiceDateNaReason = shortNaReason(body, 'invoice_date_na_reason', 'Motivo de fecha de factura N/A');
+  } else {
+    invoiceDate = optionalDate(body, 'invoice_date', 'Fecha de factura');
+  }
+
+  let creditDays = null;
+  let creditDaysNaReason = null;
+  if (creditDaysNa) {
+    creditDaysNaReason = shortNaReason(body, 'credit_days_na_reason', 'Motivo de dias de credito N/A');
+  } else if (body.credit_days !== undefined && body.credit_days !== null && String(body.credit_days).trim() !== '') {
+    creditDays = numberValue(body, 'credit_days', 'Dias de credito', { min: 0, max: CREDIT_DAYS_MAX });
+    creditDays = Math.round(creditDays);
+  }
+
+  const mustCapture = requireBilling == null
+    ? billingCaptureRequired(body, existingRow, invoiceNumber)
+    : Boolean(requireBilling);
+
+  if (mustCapture) {
+    if (!invoiceNumber) {
+      throw badRequest('Numero de factura es obligatorio al terminar o facturar el proyecto (o captura los datos de facturacion).');
+    }
+    if (!invoiceDateNa && !invoiceDate) {
+      throw badRequest('Fecha de factura es obligatoria, o marca N/A con un motivo corto.');
+    }
+    if (!creditDaysNa && creditDays === null) {
+      throw badRequest('Dias de credito son obligatorios, o marca N/A con un motivo corto.');
+    }
+  }
+
+  // due_date is always server-calculated; never accept manual edits
+  let dueDate = null;
+  if (!invoiceDateNa && !creditDaysNa && invoiceDate && creditDays !== null) {
+    dueDate = computeInvoiceDueDate(invoiceDate, creditDays);
+  }
 
   let invoicePaymentStatus = optionalText(body, 'invoice_payment_status');
   if (invoicePaymentStatus === 'Vencida') {
@@ -305,6 +377,11 @@ function normalizeInvoicePaymentFields(body) {
   return {
     invoice_number: invoiceNumber,
     invoice_date: invoiceDate,
+    invoice_date_na: invoiceDateNa,
+    invoice_date_na_reason: invoiceDateNaReason,
+    credit_days: creditDays,
+    credit_days_na: creditDaysNa,
+    credit_days_na_reason: creditDaysNaReason,
     due_date: dueDate,
     invoice_payment_status: invoicePaymentStatus,
     invoice_paid_at: invoicePaidAt,
@@ -460,7 +537,7 @@ function normalizeProject(body, { existingRow = null } = {}) {
     ? null
     : requiredText(body, 'purchase_order_number', 'Numero de Orden de Compra');
   const staff = resolveProjectStaff(body);
-  const invoiceFields = normalizeInvoicePaymentFields(body);
+  const invoiceFields = normalizeInvoicePaymentFields(body, { existingRow });
 
   return {
     quote_number: requiredText(body, 'quote_number', 'Numero de cotizacion'),
@@ -668,6 +745,11 @@ function mapProject(row, exchangeRates = getExchangeRateMap()) {
     fecha_vencimiento: row.fecha_vencimiento || null,
     invoice_number: row.invoice_number || null,
     invoice_date: row.invoice_date || null,
+    invoice_date_na: !!row.invoice_date_na,
+    invoice_date_na_reason: row.invoice_date_na_reason || null,
+    credit_days: row.credit_days_na ? null : (row.credit_days ?? null),
+    credit_days_na: !!row.credit_days_na,
+    credit_days_na_reason: row.credit_days_na_reason || null,
     due_date: row.due_date || null,
     invoice_payment_status_stored: row.invoice_payment_status || null,
     invoice_payment_status: resolveInvoicePaymentStatus(row),
@@ -1427,6 +1509,11 @@ app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), 
           observations,
           invoice_number,
           invoice_date,
+          invoice_date_na,
+          invoice_date_na_reason,
+          credit_days,
+          credit_days_na,
+          credit_days_na_reason,
           due_date,
           invoice_payment_status,
           invoice_paid_at,
@@ -1456,6 +1543,11 @@ app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), 
           @observations,
           @invoice_number,
           @invoice_date,
+          @invoice_date_na,
+          @invoice_date_na_reason,
+          @credit_days,
+          @credit_days_na,
+          @credit_days_na_reason,
           @due_date,
           @invoice_payment_status,
           @invoice_paid_at,
@@ -1502,6 +1594,11 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
         observations = @observations,
         invoice_number = @invoice_number,
         invoice_date = @invoice_date,
+        invoice_date_na = @invoice_date_na,
+        invoice_date_na_reason = @invoice_date_na_reason,
+        credit_days = @credit_days,
+        credit_days_na = @credit_days_na,
+        credit_days_na_reason = @credit_days_na_reason,
         due_date = @due_date,
         invoice_payment_status = @invoice_payment_status,
         invoice_paid_at = @invoice_paid_at,
@@ -1521,14 +1618,46 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
 app.delete('/api/projects/:id', requireAuth, requirePermission('projects', 'close'), (req, res, next) => {
   try {
     const before = getProjectOrFail(req.params.id);
+    if (before.closed_at) {
+      throw badRequest('El proyecto ya esta cerrado.');
+    }
     verifyAdminPassword(req.body);
+
+    const mapped = mapProject(before, getExchangeRateMap());
+    const pendingBalance = roundMoney(mapped.pending_collection || 0);
+    const confirmPending = req.body.confirm_pending_balance === true
+      || req.body.confirm_pending_balance === 'true'
+      || req.body.confirm_pending_balance === 1;
+
+    if (pendingBalance > 0.01 && !confirmPending) {
+      return res.status(409).json({
+        message: `Este proyecto tiene saldo pendiente de $${pendingBalance.toFixed(2)} y se va a archivar. ¿Confirmas?`,
+        requires_confirmation: true,
+        confirm_field: 'confirm_pending_balance',
+        pending_balance_mxn: pendingBalance,
+      });
+    }
+
     const audit = updatedByFields(req);
     db.prepare(
       `UPDATE projects
        SET closed_at = ?, updated_at = ?, updated_by_user_id = ?, updated_by_name = ?
        WHERE id = ? AND closed_at IS NULL`,
     ).run(audit.updated_at, audit.updated_at, audit.updated_by_user_id, audit.updated_by_name, Number(req.params.id));
-    logAuditEvent(db, { req, action: 'close', module: 'projects', entityType: 'project', entityId: Number(req.params.id), entityLabel: before.quote_number, before: { closed_at: null }, after: { closed_at: audit.updated_at } });
+    logAuditEvent(db, {
+      req,
+      action: 'close',
+      module: 'projects',
+      entityType: 'project',
+      entityId: Number(req.params.id),
+      entityLabel: before.quote_number,
+      before: { closed_at: null, pending_collection: pendingBalance },
+      after: { closed_at: audit.updated_at, pending_collection: pendingBalance },
+      metadata: {
+        pending_balance_mxn: pendingBalance,
+        confirmed_pending_balance: pendingBalance > 0.01,
+      },
+    });
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -7011,6 +7140,42 @@ app.get('/api/financial/accounts-receivable', requireAuth, requireAdminOnly, (re
   const d90plus = roundMoneyFin(data.filter((r) => r.days_overdue > 90).reduce((s, r) => s + r.pending_mxn, 0));
 
   res.json({ data, summary: { total_mxn: totalMxn, not_overdue: notOverdue, overdue, d1_30, d31_60, d61_90, d90plus } });
+});
+
+// --- Aging / Antigüedad de saldos (kpiSettings buckets in real time) ---
+
+app.get('/api/financial/aging-report', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const includeClosed = req.query.include_closed === '1' || req.query.include_closed === 'true';
+    const rateMap = getExchangeRateMap();
+    const sql = includeClosed
+      ? 'SELECT * FROM projects WHERE deleted_at IS NULL'
+      : "SELECT * FROM projects WHERE closed_at IS NULL AND deleted_at IS NULL";
+    const projects = db.prepare(sql).all();
+    const withPending = [];
+    for (const p of projects) {
+      const mapped = mapProject(p, rateMap);
+      if ((mapped.pending_collection || 0) > 0.01) {
+        withPending.push(mapped);
+      }
+    }
+
+    const settings = loadKpiSettings(db);
+    const asOf = optionalText(req.query, 'as_of');
+    const todayIso = asOf && isValidDate(asOf) ? asOf : todayIsoDateCdmx();
+    const report = buildAgingReport(withPending, settings, todayIso);
+
+    if (req.query.format === 'csv') {
+      const csv = agingReportToCsv(report);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="antiguedad-saldos.csv"');
+      return res.send(csv);
+    }
+
+    res.json(report);
+  } catch (error) {
+    next(error);
+  }
 });
 
 // --- Financial Statement Generation ---
