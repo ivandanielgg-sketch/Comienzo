@@ -1328,7 +1328,31 @@
               <p id="ecovis-diagnostic-message" class="message"></p>
               <div id="ecovis-diagnostic-summary" class="ecovis-diagnostic-summary"></div>
 
-              <h3 class="ecovis-diagnostic-heading">Cargos duplicados por proyecto</h3>
+              <h3 class="ecovis-diagnostic-heading">Desglose debe por tipo (direction = ecovis_debe_a_revram)</h3>
+              <div id="ecovis-diagnostic-gap" class="ecovis-diagnostic-comparative"></div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Tipo</th>
+                      <th>Conteo</th>
+                      <th>Suma MXN</th>
+                      <th>% del total</th>
+                      <th>Issue modelado</th>
+                      <th>Origen en codigo</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-diagnostic-by-type-table"></tbody>
+                </table>
+              </div>
+
+              <h3 class="ecovis-diagnostic-heading">Movimientos debe por proyecto activo</h3>
+              <p class="text-muted" style="margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+                Todos los movimientos activos con direction=debe ligados al proyecto (cualquier tipo). Accion propuesta: keep / cancel_duplicate / none.
+              </p>
+              <div id="ecovis-diagnostic-projects-debe" class="ecovis-diagnostic-projects-debe"></div>
+
+              <h3 class="ecovis-diagnostic-heading">Cargos duplicados tipo proyecto</h3>
               <div class="table-wrapper">
                 <table>
                   <thead>
@@ -1379,6 +1403,9 @@
                   <tbody id="ecovis-diagnostic-balance-projects-table"></tbody>
                 </table>
               </div>
+
+              <h3 class="ecovis-diagnostic-heading">Origen en codigo (por tipo)</h3>
+              <div id="ecovis-diagnostic-code-origins" class="ecovis-diagnostic-comparative"></div>
             </div>
           </div>
 

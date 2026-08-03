@@ -3506,23 +3506,35 @@ async function copyEcovisDiagnosticJson() {
 
 function renderEcovisDiagnostic(diagnostic) {
   const summaryEl = document.getElementById('ecovis-diagnostic-summary');
+  const byTypeBody = document.getElementById('ecovis-diagnostic-by-type-table');
+  const gapEl = document.getElementById('ecovis-diagnostic-gap');
+  const projectsDebeEl = document.getElementById('ecovis-diagnostic-projects-debe');
   const duplicatesBody = document.getElementById('ecovis-diagnostic-duplicates-table');
   const orphansBody = document.getElementById('ecovis-diagnostic-orphans-table');
   const comparativeEl = document.getElementById('ecovis-diagnostic-comparative');
   const balanceBody = document.getElementById('ecovis-diagnostic-balance-projects-table');
+  const originsEl = document.getElementById('ecovis-diagnostic-code-origins');
   if (!summaryEl || !duplicatesBody || !orphansBody || !comparativeEl || !balanceBody) return;
 
   const dup = diagnostic.duplicates || {};
   const orphans = diagnostic.orphans || {};
   const comp = diagnostic.comparative || {};
   const cleanup = diagnostic.proposed_cleanup_summary || {};
+  const debeByType = diagnostic.debe_by_type || {};
+  const activeDebe = diagnostic.active_projects_debe || {};
+  const codeOrigins = diagnostic.code_origins || {};
 
   summaryEl.innerHTML = `
     <div class="ecovis-diagnostic-cards">
       <article>
+        <span>Total debe activos</span>
+        <strong>${formatMoney(debeByType.total_amount_mxn || 0)}</strong>
+        <small>${debeByType.total_count || 0} movimientos</small>
+      </article>
+      <article>
         <span>Proyectos con cargos duplicados</span>
         <strong>${dup.projects_with_duplicate_cargos || 0}</strong>
-        <small>${dup.proposed_cancel_count || 0} movimientos a cancelar (propuesto)</small>
+        <small>${dup.proposed_cancel_count || 0} a cancelar (propuesto)</small>
       </article>
       <article>
         <span>Movimientos huerfanos</span>
@@ -3530,22 +3542,100 @@ function renderEcovisDiagnostic(diagnostic) {
         <small>${formatMoney(orphans.total_amount_mxn || 0)} MXN</small>
       </article>
       <article>
-        <span>Saldo por proyectos</span>
-        <strong>${formatMoney(comp.balance_from_projects_pending_mxn || 0)}</strong>
-        <small>${comp.projects_with_balance_count || 0} con pendiente</small>
-      </article>
-      <article>
-        <span>Diferencia (mov − proy)</span>
-        <strong>${formatMoney(comp.difference_mxn || 0)}</strong>
-        <small>Movimientos: ${formatMoney(comp.balance_from_movements_cargo_mxn || 0)}</small>
+        <span>Remanente no-proyecto</span>
+        <strong>${formatMoney(debeByType.unexplained_gap?.remainder_mxn || comp.non_proyecto_debe_sum_mxn || 0)}</strong>
+        <small>aplicacion / cancelacion / etc.</small>
       </article>
     </div>
     <p class="text-muted ecovis-diagnostic-meta">
       Generado: ${diagnostic.generated_at || '—'} ·
-      Limpieza propuesta total: ${cleanup.total_movements_to_cancel || 0} movimientos ·
+      Limpieza propuesta: ${cleanup.total_movements_to_cancel || 0} movimientos ·
+      Saldo proyectos: ${formatMoney(comp.balance_from_projects_pending_mxn || 0)} ·
       Solo lectura: ${diagnostic.read_only ? 'si' : 'no'}
     </p>
   `;
+
+  if (gapEl) {
+    const gap = debeByType.unexplained_gap || {};
+    gapEl.innerHTML = `
+      <ul class="ecovis-diagnostic-comp-list">
+        <li><strong>Total debe:</strong> ${formatMoney(gap.total_debe_mxn || 0)}</li>
+        <li><strong>Proyecto (no huerfano):</strong> ${formatMoney(gap.proyecto_non_orphan_mxn || 0)}</li>
+        <li><strong>Huerfanos:</strong> ${formatMoney(gap.orphan_debe_mxn || 0)}</li>
+        <li><strong>Remanente (otros tipos):</strong> ${formatMoney(gap.remainder_mxn || 0)}</li>
+        <li class="text-muted">${escapeHtml(gap.note || '')}</li>
+      </ul>
+    `;
+  }
+
+  if (byTypeBody) {
+    const typeRows = Array.isArray(debeByType.by_type) ? debeByType.by_type : [];
+    if (typeRows.length === 0) {
+      byTypeBody.innerHTML = '<tr><td colspan="6" class="empty-message">Sin movimientos debe activos.</td></tr>';
+    } else {
+      byTypeBody.innerHTML = typeRows.map((row) => `
+        <tr class="${row.modeling_issue ? 'ecovis-diagnostic-row-warn' : ''}">
+          <td>${escapeHtml(row.movement_type)}</td>
+          <td class="num">${row.count}</td>
+          <td class="num">${formatMoney(row.amount_mxn)}</td>
+          <td class="num">${row.pct_of_total}%</td>
+          <td>${row.modeling_issue ? '<span class="ecovis-diagnostic-flag">Si</span>' : 'No'}</td>
+          <td><code>${escapeHtml(row.code_origin || '')}</code><br><small>${escapeHtml(row.explanation || '')}</small></td>
+        </tr>
+      `).join('');
+    }
+  }
+
+  if (projectsDebeEl) {
+    const projects = Array.isArray(activeDebe.projects) ? activeDebe.projects : [];
+    const unlinked = activeDebe.unlinked_debe_movements || {};
+    if (projects.length === 0) {
+      projectsDebeEl.innerHTML = '<p class="empty-message">Ningun proyecto activo con movimientos debe.</p>';
+    } else {
+      projectsDebeEl.innerHTML = projects.map((p) => {
+        const movRows = (p.movements || []).map((m) => `
+          <tr class="${m.proposed_action && m.proposed_action !== 'keep' && m.proposed_action !== 'none' ? 'ecovis-diagnostic-row-warn' : ''} ${m.modeling_issue ? 'ecovis-diagnostic-row-issue' : ''}">
+            <td class="num">#${m.id}</td>
+            <td>${escapeHtml(m.movement_date || '')}</td>
+            <td>${escapeHtml(m.movement_type || '')}</td>
+            <td class="num">${formatMoney(m.amount_mxn)}</td>
+            <td>${escapeHtml(m.proposed_action || 'none')}</td>
+            <td>${m.modeling_issue ? 'Si' : 'No'}${m.related_payment_id != null ? `<br><small>pago #${m.related_payment_id}</small>` : ''}</td>
+            <td>${escapeHtml(m.description || '')}</td>
+          </tr>
+        `).join('');
+        const typeSummary = (p.by_movement_type || [])
+          .map((t) => `${t.movement_type}: ${t.count} (${formatMoney(t.amount_mxn)})`)
+          .join(' · ');
+        return `
+          <details class="ecovis-diagnostic-project-block">
+            <summary>
+              <strong>#${p.project_id} ${escapeHtml(p.project_name || '')}</strong>
+              · debe ${p.active_debe_count} mov / ${formatMoney(p.active_debe_amount_mxn)}
+              · proy ${formatMoney(p.project_amount_mxn)} · pend ${formatMoney(p.pending_amount_mxn)}
+              ${(p.proposed_cancel_movement_ids || []).length ? ` · cancelar: ${(p.proposed_cancel_movement_ids || []).join(', ')}` : ''}
+            </summary>
+            <p class="text-muted" style="margin: 0.35rem 0; font-size: 0.8rem;">${escapeHtml(typeSummary)}</p>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Mov</th><th>Fecha</th><th>Tipo</th><th>MXN</th><th>Accion propuesta</th><th>Issue</th><th>Descripcion</th>
+                  </tr>
+                </thead>
+                <tbody>${movRows}</tbody>
+              </table>
+            </div>
+          </details>
+        `;
+      }).join('') + (
+        unlinked.count
+          ? `<p class="text-muted" style="margin-top: 0.75rem;">Sin related_project_id: ${unlinked.count} mov / ${formatMoney(unlinked.total_amount_mxn || 0)}
+            (${(unlinked.by_type || []).map((t) => `${t.movement_type}: ${formatMoney(t.amount_mxn)}`).join(', ')})</p>`
+          : ''
+      );
+    }
+  }
 
   const dupRows = Array.isArray(dup.by_project) ? dup.by_project : [];
   if (dupRows.length === 0) {
@@ -3586,11 +3676,12 @@ function renderEcovisDiagnostic(diagnostic) {
   comparativeEl.innerHTML = `
     <ul class="ecovis-diagnostic-comp-list">
       <li><strong>Saldo por proyectos (pending_amount_mxn):</strong> ${formatMoney(comp.balance_from_projects_pending_mxn || 0)}</li>
-      <li><strong>Saldo por movimientos (cargos activos):</strong> ${formatMoney(comp.balance_from_movements_cargo_mxn || 0)}</li>
+      <li><strong>Saldo por movimientos (todos los debe activos):</strong> ${formatMoney(comp.balance_from_movements_cargo_mxn || 0)}</li>
       <li><strong>Diferencia (movimientos − proyectos):</strong> ${formatMoney(comp.difference_mxn || 0)}</li>
       <li><strong>Total proyectos activos (amount_mxn):</strong> ${formatMoney(comp.active_projects_total_mxn || 0)}</li>
-      <li><strong>Suma cargos tipo proyecto activos:</strong> ${formatMoney(comp.active_proyecto_cargos_sum_mxn || 0)}
+      <li><strong>Suma cargos tipo proyecto:</strong> ${formatMoney(comp.active_proyecto_cargos_sum_mxn || 0)}
         (diff vs totales: ${formatMoney(comp.active_proyecto_cargos_vs_projects_difference_mxn || 0)})</li>
+      <li><strong>Suma debe NO-proyecto:</strong> ${formatMoney(comp.non_proyecto_debe_sum_mxn || 0)}</li>
       <li><strong>Pagos recibidos con direction=neutral:</strong> ${comp.neutral_pago_recibido_count || 0}
         (${formatMoney(comp.neutral_pago_recibido_amount_mxn || 0)})</li>
     </ul>
@@ -3621,6 +3712,22 @@ function renderEcovisDiagnostic(diagnostic) {
         <td class="num"><strong>${formatMoney(totalPending)}</strong></td>
       </tr>
     `;
+  }
+
+  if (originsEl) {
+    const entries = Object.entries(codeOrigins);
+    if (entries.length === 0) {
+      originsEl.innerHTML = '<p class="empty-message">Sin origenes documentados.</p>';
+    } else {
+      originsEl.innerHTML = `<ul class="ecovis-diagnostic-comp-list">${entries.map(([type, info]) => `
+        <li>
+          <strong>${escapeHtml(type)}</strong>
+          ${info.modeling_issue ? ' <span class="ecovis-diagnostic-flag">issue modelado</span>' : ''}
+          — <code>${escapeHtml(info.endpoint || '')}</code><br>
+          <small>${escapeHtml(info.explanation || '')}</small>
+        </li>
+      `).join('')}</ul>`;
+    }
   }
 }
 

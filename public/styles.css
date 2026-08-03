@@ -1400,6 +1400,29 @@ th.col-number {
   border-top: 2px solid rgba(15, 23, 42, 0.15);
 }
 
+.ecovis-diagnostic-projects-debe {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 0.5rem;
+}
+
+.ecovis-diagnostic-project-block {
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  padding: 8px 10px;
+  background: rgba(15, 23, 42, 0.02);
+}
+
+.ecovis-diagnostic-project-block summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.ecovis-diagnostic-row-issue td {
+  background: #fff6ed;
+}
+
 @media (max-width: 720px) {
   .ecovis-account-amount {
     font-size: 1.3rem;
