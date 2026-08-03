@@ -6761,27 +6761,54 @@ function openFinModal(id) {
   if (el) el.classList.remove('hidden');
 }
 
+async function updateFinPayrollWeekRange() {
+  const form = document.getElementById('fin-payroll-form');
+  const rangeEl = document.getElementById('fin-payroll-week-range');
+  if (!form || !rangeEl) return;
+  const year = Number(form.elements.year.value);
+  const weekNumber = Number(form.elements.week_number.value);
+  if (!year || !weekNumber || weekNumber < 1 || weekNumber > 53) {
+    rangeEl.textContent = 'Selecciona año y semana para ver el rango de fechas.';
+    return;
+  }
+  try {
+    const data = await api(`/api/financial/payroll/week-range?year=${year}&week_number=${weekNumber}`);
+    rangeEl.textContent = data.range_label || data.label || `${data.week_start_date} – ${data.week_end_date}`;
+    if (data.attendance_week) {
+      form.elements.payroll_attendance_week_id.value = data.attendance_week.id;
+    } else if (!form.elements.id.value) {
+      form.elements.payroll_attendance_week_id.value = '';
+    }
+  } catch (err) {
+    rangeEl.textContent = err.message || 'No se pudo calcular el rango de la semana.';
+  }
+}
+
 async function openFinPayrollModal(row) {
   const form = document.getElementById('fin-payroll-form');
   const title = document.getElementById('fin-payroll-modal-title');
   const msg = document.getElementById('fin-payroll-form-message');
   const hint = document.getElementById('fin-payroll-weeks-hint');
+  const rangeEl = document.getElementById('fin-payroll-week-range');
   if (!form) return;
   form.reset();
   form.elements.id.value = '';
   form.elements.payroll_attendance_week_id.value = '';
   if (msg) msg.textContent = '';
+  if (hint) hint.textContent = '';
+  if (rangeEl) rangeEl.textContent = 'Selecciona año y semana para ver el rango de fechas.';
   const { year, month } = getFinOpexPeriod();
   title.textContent = row ? 'Editar nómina semanal' : 'Agregar nómina semanal';
   if (row) {
     form.elements.id.value = row.id;
+    form.elements.year.value = row.year || year;
     form.elements.week_number.value = row.week_number || '';
-    form.elements.week_start_date.value = row.week_start_date || '';
-    form.elements.week_end_date.value = row.week_end_date || '';
     form.elements.amount_original.value = row.amount_original || '';
     form.elements.notes.value = row.notes || '';
     form.elements.payroll_attendance_week_id.value = row.payroll_attendance_week_id || '';
+    await updateFinPayrollWeekRange();
   } else {
+    form.elements.year.value = year;
     try {
       const weeks = await api(`/api/financial/payroll/weeks-for-month?year=${year}&month=${month}`);
       if (weeks.data && weeks.data.length) {
@@ -6791,16 +6818,16 @@ async function openFinPayrollModal(row) {
         hint.innerHTML = `Semanas de asistencia del mes: ${escapeHtml(options)}. <button type="button" class="secondary" id="fin-payroll-preload-week">Usar primera semana libre</button>`;
         const preloadBtn = document.getElementById('fin-payroll-preload-week');
         if (preloadBtn) {
-          preloadBtn.addEventListener('click', () => {
+          preloadBtn.addEventListener('click', async () => {
             const first = weeks.data[0];
+            form.elements.year.value = first.year;
             form.elements.week_number.value = first.week_number;
-            form.elements.week_start_date.value = first.week_start_date;
-            form.elements.week_end_date.value = first.week_end_date;
             form.elements.payroll_attendance_week_id.value = first.id;
+            await updateFinPayrollWeekRange();
           });
         }
       } else {
-        hint.textContent = 'No hay semanas de asistencia registradas para este mes; captura las fechas manualmente.';
+        hint.textContent = 'No hay semanas de asistencia registradas para este mes; indica año y número de semana ISO.';
       }
     } catch (_) {
       hint.textContent = '';
@@ -6975,17 +7002,21 @@ if (document.getElementById('fin-new-opex-btn')) {
 });
 
 if (document.getElementById('fin-payroll-form')) {
-  document.getElementById('fin-payroll-form').addEventListener('submit', async (e) => {
+  const finPayrollForm = document.getElementById('fin-payroll-form');
+  const finPayrollYearInput = finPayrollForm.querySelector('input[name="year"]');
+  const finPayrollWeekInput = finPayrollForm.querySelector('input[name="week_number"]');
+  if (finPayrollYearInput) finPayrollYearInput.addEventListener('input', () => { updateFinPayrollWeekRange(); });
+  if (finPayrollWeekInput) finPayrollWeekInput.addEventListener('input', () => { updateFinPayrollWeekRange(); });
+
+  finPayrollForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
     const msg = document.getElementById('fin-payroll-form-message');
-    const { year, month } = getFinOpexPeriod();
+    const { month } = getFinOpexPeriod();
     const payload = {
-      year,
+      year: Number(form.elements.year.value),
       month,
       week_number: Number(form.elements.week_number.value),
-      week_start_date: form.elements.week_start_date.value,
-      week_end_date: form.elements.week_end_date.value,
       amount_original: Number(form.elements.amount_original.value),
       currency: 'MXN',
       notes: form.elements.notes.value || null,

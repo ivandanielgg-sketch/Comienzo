@@ -6338,31 +6338,114 @@ app.get('/api/financial/payroll/weeks-for-month', requireAuth, requireAdminOnly,
   } catch (error) { next(error); }
 });
 
+function payrollWeekRangeLabel(label) {
+  return String(label || '').replace(/^Semana \d+\.\s*/i, '').replace(/,/g, '');
+}
+
+function resolveManualPayrollWeekFields(body, { excludeId = null } = {}) {
+  const year = numberValue(body, 'year', 'Año', { min: 2020, max: 2100 });
+  const month = numberValue(body, 'month', 'Mes', { min: 1, max: 12 });
+  const weekNumber = numberValue(body, 'week_number', 'Número de semana', { min: 1, max: 53 });
+
+  let weekStartDate;
+  let weekEndDate;
+  let label;
+  try {
+    ({ weekStartDate, weekEndDate, label } = calculateWeekRange(year, weekNumber));
+  } catch (_error) {
+    throw badRequest('Año o número de semana inválidos.');
+  }
+
+  const duplicateSql = excludeId == null
+    ? 'SELECT id FROM manual_payroll_expenses WHERE year = ? AND week_number = ? AND deleted_at IS NULL'
+    : 'SELECT id FROM manual_payroll_expenses WHERE year = ? AND week_number = ? AND deleted_at IS NULL AND id != ?';
+  const duplicateParams = excludeId == null ? [year, weekNumber] : [year, weekNumber, excludeId];
+  const duplicate = db.prepare(duplicateSql).get(...duplicateParams);
+  if (duplicate) {
+    const error = badRequest(`Ya existe una nómina capturada para la semana ${weekNumber} de ${year}.`);
+    error.statusCode = 409;
+    throw error;
+  }
+
+  let attendanceWeekId = body.payroll_attendance_week_id != null && body.payroll_attendance_week_id !== ''
+    ? numberValue(body, 'payroll_attendance_week_id', 'Semana de asistencia', { min: 1 })
+    : null;
+  let attendanceTitle = null;
+  if (attendanceWeekId) {
+    const week = db.prepare(
+      "SELECT id, title, year, week_number, week_start_date, week_end_date FROM payroll_attendance_weeks WHERE id = ? AND deleted_at IS NULL AND status != 'cancelada'",
+    ).get(attendanceWeekId);
+    if (!week) throw badRequest('Semana de asistencia no encontrada.');
+    if (Number(week.year) !== year || Number(week.week_number) !== weekNumber) {
+      throw badRequest('La semana de asistencia no coincide con el año y número de semana indicados.');
+    }
+    attendanceTitle = week.title || null;
+  } else {
+    const attendanceWeek = db.prepare(
+      "SELECT id, title FROM payroll_attendance_weeks WHERE year = ? AND week_number = ? AND deleted_at IS NULL AND status != 'cancelada'",
+    ).get(year, weekNumber);
+    if (attendanceWeek) {
+      attendanceWeekId = attendanceWeek.id;
+      attendanceTitle = attendanceWeek.title || null;
+    }
+  }
+
+  const amountOriginal = numberValue(body, 'amount_original', 'Monto', { min: 0.01 });
+  const currency = currencyValue(body, 'currency', 'Moneda');
+  const notes = optionalText(body, 'notes');
+  const concept = optionalText(body, 'concept') || attendanceTitle || label;
+
+  return {
+    year,
+    month,
+    weekNumber,
+    weekStartDate,
+    weekEndDate,
+    label,
+    rangeLabel: payrollWeekRangeLabel(label),
+    attendanceWeekId,
+    amountOriginal,
+    currency,
+    notes,
+    concept,
+  };
+}
+
+app.get('/api/financial/payroll/week-range', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const year = numberValue(req.query, 'year', 'Año', { min: 2020, max: 2100 });
+    const weekNumber = numberValue(req.query, 'week_number', 'Número de semana', { min: 1, max: 53 });
+    let weekStartDate;
+    let weekEndDate;
+    let label;
+    try {
+      ({ weekStartDate, weekEndDate, label } = calculateWeekRange(year, weekNumber));
+    } catch (_error) {
+      throw badRequest('Año o número de semana inválidos.');
+    }
+    const attendanceWeek = db.prepare(
+      `SELECT id, year, week_number, week_start_date, week_end_date, title, status
+       FROM payroll_attendance_weeks
+       WHERE year = ? AND week_number = ? AND deleted_at IS NULL AND status != 'cancelada'`,
+    ).get(year, weekNumber) || null;
+    res.json({
+      year,
+      week_number: weekNumber,
+      week_start_date: weekStartDate,
+      week_end_date: weekEndDate,
+      label,
+      range_label: payrollWeekRangeLabel(label),
+      attendance_week: attendanceWeek,
+    });
+  } catch (error) { next(error); }
+});
+
 app.post('/api/financial/payroll', requireAuth, requireAdminOnly, (req, res, next) => {
   try {
-    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
-    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
-    const weekNumber = numberValue(req.body, 'week_number', 'Número de semana', { min: 1, max: 6 });
-    const weekStartDate = requiredDate(req.body, 'week_start_date', 'Fecha inicio');
-    const weekEndDate = requiredDate(req.body, 'week_end_date', 'Fecha fin');
-    if (weekStartDate > weekEndDate) throw badRequest('La fecha inicio no puede ser posterior a la fecha fin.');
-    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
-    const currency = currencyValue(req.body, 'currency', 'Moneda');
-    const notes = optionalText(req.body, 'notes');
-    const concept = optionalText(req.body, 'concept') || `Semana ${weekNumber}`;
-    let attendanceWeekId = req.body.payroll_attendance_week_id != null && req.body.payroll_attendance_week_id !== ''
-      ? numberValue(req.body, 'payroll_attendance_week_id', 'Semana de asistencia', { min: 1 })
-      : null;
-    if (attendanceWeekId) {
-      const week = db.prepare(
-        "SELECT id FROM payroll_attendance_weeks WHERE id = ? AND deleted_at IS NULL AND status != 'cancelada'",
-      ).get(attendanceWeekId);
-      if (!week) throw badRequest('Semana de asistencia no encontrada.');
-    }
-
+    const fields = resolveManualPayrollWeekFields(req.body);
     const rates = getExchangeRateMap();
-    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
-    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+    const exchangeRate = fields.currency === 'MXN' ? 1 : (rates[fields.currency] || 1);
+    const amountMxn = roundMoneyFin(fields.amountOriginal * exchangeRate);
 
     const audit = createdByFields(req);
     const result = db.prepare(
@@ -6372,12 +6455,12 @@ app.post('/api/financial/payroll', requireAuth, requireAdminOnly, (req, res, nex
          created_by_user_id, created_by_name, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      year, month, weekNumber, weekStartDate, weekEndDate, attendanceWeekId,
-      concept, amountOriginal, currency, exchangeRate, amountMxn, notes,
+      fields.year, fields.month, fields.weekNumber, fields.weekStartDate, fields.weekEndDate, fields.attendanceWeekId,
+      fields.concept, fields.amountOriginal, fields.currency, exchangeRate, amountMxn, fields.notes,
       audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at,
     );
 
-    logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'manual_payroll', entityId: result.lastInsertRowid, entityLabel: concept });
+    logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'manual_payroll', entityId: result.lastInsertRowid, entityLabel: fields.concept });
     res.status(201).json(db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ?').get(result.lastInsertRowid));
   } catch (error) { next(error); }
 });
@@ -6387,23 +6470,10 @@ app.put('/api/financial/payroll/:id', requireAuth, requireAdminOnly, (req, res, 
     const existing = db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
     if (!existing) throw badRequest('Registro de nómina no encontrado.');
 
-    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
-    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
-    const weekNumber = numberValue(req.body, 'week_number', 'Número de semana', { min: 1, max: 6 });
-    const weekStartDate = requiredDate(req.body, 'week_start_date', 'Fecha inicio');
-    const weekEndDate = requiredDate(req.body, 'week_end_date', 'Fecha fin');
-    if (weekStartDate > weekEndDate) throw badRequest('La fecha inicio no puede ser posterior a la fecha fin.');
-    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
-    const currency = currencyValue(req.body, 'currency', 'Moneda');
-    const notes = optionalText(req.body, 'notes');
-    const concept = optionalText(req.body, 'concept') || `Semana ${weekNumber}`;
-    let attendanceWeekId = req.body.payroll_attendance_week_id != null && req.body.payroll_attendance_week_id !== ''
-      ? numberValue(req.body, 'payroll_attendance_week_id', 'Semana de asistencia', { min: 1 })
-      : null;
-
+    const fields = resolveManualPayrollWeekFields(req.body, { excludeId: Number(req.params.id) });
     const rates = getExchangeRateMap();
-    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
-    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+    const exchangeRate = fields.currency === 'MXN' ? 1 : (rates[fields.currency] || 1);
+    const amountMxn = roundMoneyFin(fields.amountOriginal * exchangeRate);
     const audit = updatedByFields(req);
 
     db.prepare(
@@ -6413,14 +6483,14 @@ app.put('/api/financial/payroll/:id', requireAuth, requireAdminOnly, (req, res, 
          updated_by_user_id=?, updated_by_name=?, updated_at=?
        WHERE id=?`,
     ).run(
-      year, month, weekNumber, weekStartDate, weekEndDate, attendanceWeekId,
-      concept, amountOriginal, currency, exchangeRate, amountMxn, notes,
+      fields.year, fields.month, fields.weekNumber, fields.weekStartDate, fields.weekEndDate, fields.attendanceWeekId,
+      fields.concept, fields.amountOriginal, fields.currency, exchangeRate, amountMxn, fields.notes,
       audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id,
     );
 
     logAuditEvent(db, {
       req, action: 'update', module: 'financial', entityType: 'manual_payroll',
-      entityId: Number(req.params.id), entityLabel: concept, before: existing,
+      entityId: Number(req.params.id), entityLabel: fields.concept, before: existing,
     });
     res.json(db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ?').get(req.params.id));
   } catch (error) { next(error); }

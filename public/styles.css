@@ -2041,6 +2041,12 @@ body.scroll-lock {
   min-height: 44px;
 }
 
+#fin-payroll-week-range {
+  font-size: 16px;
+  line-height: 1.4;
+  margin: 0.25rem 0 0.5rem;
+}
+
 #fin-opex-section button,
 #fin-payroll-modal button,
 #fin-opex-modal button,
