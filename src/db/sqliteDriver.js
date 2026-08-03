@@ -432,6 +432,8 @@ function migrate(database) {
   ensureColumn(database, 'projects', 'due_date', 'TEXT');
   ensureColumn(database, 'projects', 'invoice_number', 'TEXT');
   ensureColumn(database, 'projects', 'invoice_payment_status', 'TEXT');
+  ensureColumn(database, 'projects', 'invoice_date_na_reason', 'TEXT');
+  ensureColumn(database, 'projects', 'credit_days_na_reason', 'TEXT');
 
   // KPI tracking fields (Tablero KPIs Fase 1)
   ensureColumn(database, 'employees', 'primary_department', 'TEXT');
@@ -1139,6 +1141,9 @@ function migrate(database) {
 
   const { migrateCommissionsFlow } = require('./commissionsFlowMigration');
   migrateCommissionsFlow(database);
+
+  const { migrateClosedProjectsStatus } = require('./closedProjectsStatusMigration');
+  migrateClosedProjectsStatus(database);
 }
 
 function seedDefaultEmployees(database) {

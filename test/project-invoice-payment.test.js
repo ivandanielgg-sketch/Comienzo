@@ -133,28 +133,68 @@ test('project invoice payment fields via API', async (t) => {
     assert.equal(created.body.invoice_paid_at, null);
   });
 
-  await t.test('saves invoice fields and computes Vencida', async () => {
+  await t.test('saves invoice fields, auto due_date, and computes Vencida', async () => {
     const created = await request('POST', '/api/projects', baseProjectPayload({
       quote_number: 'INV-2250',
       order_number: '762',
       invoice_number: '2250',
       invoice_date: '2026-01-01',
-      due_date: '2020-01-01',
+      credit_days: 15,
       invoice_payment_status: 'Pendiente',
     }), adminCookie);
     assert.equal(created.status, 201);
     assert.equal(created.body.invoice_number, '2250');
     assert.equal(created.body.invoice_date, '2026-01-01');
-    assert.equal(created.body.due_date, '2020-01-01');
+    assert.equal(created.body.credit_days, 15);
+    assert.equal(created.body.due_date, '2026-01-16');
     assert.equal(created.body.invoice_payment_status_stored, 'Pendiente');
     assert.equal(created.body.invoice_payment_status, 'Vencida');
     assert.equal(created.body.fecha_vencimiento, '2026-12-01');
+  });
+
+  await t.test('auto due_date for 15 credit days from 2026-07-20 is 2026-08-04', async () => {
+    const created = await request('POST', '/api/projects', baseProjectPayload({
+      quote_number: 'INV-DUE-CALC',
+      invoice_number: 'DUE-1',
+      invoice_date: '2026-07-20',
+      credit_days: 15,
+    }), adminCookie);
+    assert.equal(created.status, 201);
+    assert.equal(created.body.due_date, '2026-08-04');
+  });
+
+  await t.test('rejects Terminado without invoice date or N/A', async () => {
+    const created = await request('POST', '/api/projects', baseProjectPayload({
+      quote_number: 'INV-TERM-FAIL',
+      status: 'Terminado',
+      invoice_number: 'T-1',
+      credit_days: 10,
+    }), adminCookie);
+    assert.equal(created.status, 400);
+    assert.match(String(created.body.message || ''), /Fecha de factura/i);
+  });
+
+  await t.test('allows Terminado with invoice_date_na and reason', async () => {
+    const created = await request('POST', '/api/projects', baseProjectPayload({
+      quote_number: 'INV-TERM-NA',
+      status: 'Terminado',
+      invoice_number: 'T-NA',
+      invoice_date_na: true,
+      invoice_date_na_reason: 'Factura historica sin fecha',
+      credit_days: 0,
+    }), adminCookie);
+    assert.equal(created.status, 201);
+    assert.equal(created.body.invoice_date_na, true);
+    assert.equal(created.body.due_date, null);
+    assert.equal(created.body.credit_days, 0);
   });
 
   await t.test('requires payment date when status is Pagada', async () => {
     const created = await request('POST', '/api/projects', baseProjectPayload({
       quote_number: 'INV-PAID-FAIL',
       invoice_number: '2251',
+      invoice_date: '2026-02-01',
+      credit_days: 30,
       invoice_payment_status: 'Pagada',
     }), adminCookie);
     assert.equal(created.status, 400);
@@ -165,17 +205,18 @@ test('project invoice payment fields via API', async (t) => {
       quote_number: 'INV-PAID-OK',
       invoice_number: '2252',
       invoice_date: '2026-02-01',
-      due_date: '2026-03-01',
+      credit_days: 30,
       invoice_payment_status: 'Pendiente',
     }), adminCookie);
     assert.equal(created.status, 201);
+    assert.equal(created.body.due_date, '2026-03-03');
 
     const updated = await request('PUT', `/api/projects/${created.body.id}`, {
       ...baseProjectPayload({
         quote_number: 'INV-PAID-OK',
         invoice_number: '2252',
         invoice_date: '2026-02-01',
-        due_date: '2026-03-01',
+        credit_days: 30,
         invoice_payment_status: 'Pagada',
         invoice_paid_at: '2026-02-15',
       }),
@@ -195,6 +236,8 @@ test('project invoice payment fields via API', async (t) => {
     const tooLong = await request('POST', '/api/projects', baseProjectPayload({
       quote_number: 'INV-LONG',
       invoice_number: 'X'.repeat(51),
+      invoice_date: '2026-01-01',
+      credit_days: 0,
     }), adminCookie);
     assert.equal(tooLong.status, 400);
   });
@@ -204,15 +247,42 @@ test('project invoice payment fields via API', async (t) => {
       quote_number: 'INV-SEARCH',
       order_number: 'PED-SEARCH',
       invoice_number: '998877',
+      invoice_date: '2099-01-01',
+      credit_days: 0,
       invoice_payment_status: 'Pendiente',
-      due_date: '2099-01-01',
     }), adminCookie);
     assert.equal(created.status, 201);
+    assert.equal(created.body.due_date, '2099-01-01');
 
     const listed = await request('GET', '/api/projects?search=998877', null, adminCookie);
     assert.equal(listed.status, 200);
     const match = (listed.body.data || []).find((p) => p.id === created.body.id);
     assert.ok(match, 'project should appear when searching by invoice number');
     assert.equal(match.invoice_number, '998877');
+  });
+
+  await t.test('close with pending balance requires confirmation', async () => {
+    const created = await request('POST', '/api/projects', baseProjectPayload({
+      quote_number: 'INV-CLOSE-BAL',
+      invoice_number: 'CLOSE-1',
+      invoice_date: '2026-07-01',
+      credit_days: 0,
+      total_invoiced: 2500,
+      status: 'Terminado',
+    }), adminCookie);
+    assert.equal(created.status, 201);
+
+    const blocked = await request('DELETE', `/api/projects/${created.body.id}`, {
+      password: 'admin123',
+    }, adminCookie);
+    assert.equal(blocked.status, 409);
+    assert.equal(blocked.body.requires_confirmation, true);
+    assert.ok(blocked.body.pending_balance_mxn > 0);
+
+    const closed = await request('DELETE', `/api/projects/${created.body.id}`, {
+      password: 'admin123',
+      confirm_pending_balance: true,
+    }, adminCookie);
+    assert.equal(closed.status, 204);
   });
 });

@@ -2374,3 +2374,82 @@ body.scroll-lock {
 .undo-toast-action:hover {
   background: #e5e7eb;
 }
+
+/* Project billing N/A + aging report */
+.billing-na-row {
+  margin-top: 8px;
+}
+
+#project-due-date[readonly] {
+  background: #f3f4f6;
+  cursor: default;
+}
+
+.aging-report-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.aging-report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.aging-report-actions button {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.aging-summary-cards {
+  margin-bottom: 12px;
+}
+
+.aging-card-missing-date,
+.aging-col-missing,
+.aging-row-missing-date td {
+  background: #fff8e1;
+}
+
+.aging-missing-date-banner {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-left: 4px solid #f59e0b;
+  background: #fff8e1;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.aging-table-wrap {
+  margin-top: 8px;
+}
+
+.aging-client-row td {
+  background: #f8fafc;
+}
+
+.aging-total-row td {
+  border-top: 2px solid #334155;
+}
+
+#project-invoice-date,
+#project-credit-days,
+#project-invoice-date-na-reason,
+#project-credit-days-na-reason,
+#project-due-date {
+  font-size: 16px;
+  min-height: 44px;
+}
+
+@media (max-width: 720px) {
+  .aging-report-actions {
+    width: 100%;
+  }
+
+  .aging-report-actions button {
+    flex: 1 1 calc(50% - 8px);
+  }
+}

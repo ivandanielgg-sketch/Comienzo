@@ -789,6 +789,16 @@ function projectPayload() {
   }
   var ti = projectForm.elements.total_invoiced;
   if (ti && ti.getCurrencyValue) payload.total_invoiced = ti.getCurrencyValue();
+  payload.invoice_date_na = !!(projectForm.elements.invoice_date_na && projectForm.elements.invoice_date_na.checked);
+  payload.credit_days_na = !!(projectForm.elements.credit_days_na && projectForm.elements.credit_days_na.checked);
+  if (payload.invoice_date_na) {
+    payload.invoice_date = '';
+  }
+  if (payload.credit_days_na) {
+    payload.credit_days = '';
+  }
+  // due_date is calculated server-side; send blank to avoid stale client values
+  payload.due_date = '';
   return payload;
 }
 
@@ -1590,6 +1600,60 @@ function toggleInvoicePaidAtField() {
   }
 }
 
+function addDaysToIsoLocal(isoDate, days) {
+  if (!isoDate) return '';
+  const date = new Date(`${isoDate}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setDate(date.getDate() + Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function updateProjectDueDateField() {
+  const dueInput = projectForm.elements.due_date;
+  const dateInput = projectForm.elements.invoice_date;
+  const daysInput = projectForm.elements.credit_days;
+  const dateNa = projectForm.elements.invoice_date_na;
+  const daysNa = projectForm.elements.credit_days_na;
+  if (!dueInput) return;
+  if ((dateNa && dateNa.checked) || (daysNa && daysNa.checked) || !dateInput?.value || daysInput?.value === '') {
+    dueInput.value = '';
+    return;
+  }
+  const days = Number(daysInput.value);
+  if (!Number.isFinite(days) || days < 0) {
+    dueInput.value = '';
+    return;
+  }
+  dueInput.value = addDaysToIsoLocal(dateInput.value, days);
+}
+
+function toggleBillingNaFields() {
+  const dateNa = projectForm.elements.invoice_date_na;
+  const daysNa = projectForm.elements.credit_days_na;
+  const dateInput = projectForm.elements.invoice_date;
+  const daysInput = projectForm.elements.credit_days;
+  const dateReasonField = document.getElementById('invoice-date-na-reason-field');
+  const daysReasonField = document.getElementById('credit-days-na-reason-field');
+  const dateReason = projectForm.elements.invoice_date_na_reason;
+  const daysReason = projectForm.elements.credit_days_na_reason;
+
+  if (dateNa && dateInput) {
+    const on = dateNa.checked;
+    dateInput.disabled = on;
+    if (on) dateInput.value = '';
+    if (dateReasonField) dateReasonField.classList.toggle('hidden', !on);
+    if (!on && dateReason) dateReason.value = '';
+  }
+  if (daysNa && daysInput) {
+    const on = daysNa.checked;
+    daysInput.disabled = on;
+    if (on) daysInput.value = '';
+    if (daysReasonField) daysReasonField.classList.toggle('hidden', !on);
+    if (!on && daysReason) daysReason.value = '';
+  }
+  updateProjectDueDateField();
+}
+
 function fillProjectForm(project) {
   projectFormTitle.textContent = `Editar proyecto #${project.id}`;
   populateProjectStaffSelects(project.tecnico_id, project.vendedor_id);
@@ -1617,7 +1681,24 @@ function fillProjectForm(project) {
   projectForm.elements.status.value = project.status;
   projectForm.elements.risk.value = project.risk;
   projectForm.elements.invoice_number.value = project.invoice_number || '';
-  projectForm.elements.invoice_date.value = project.invoice_date || '';
+  if (projectForm.elements.invoice_date_na) {
+    projectForm.elements.invoice_date_na.checked = Boolean(project.invoice_date_na);
+  }
+  if (projectForm.elements.invoice_date_na_reason) {
+    projectForm.elements.invoice_date_na_reason.value = project.invoice_date_na_reason || '';
+  }
+  projectForm.elements.invoice_date.value = project.invoice_date_na ? '' : (project.invoice_date || '');
+  if (projectForm.elements.credit_days_na) {
+    projectForm.elements.credit_days_na.checked = Boolean(project.credit_days_na);
+  }
+  if (projectForm.elements.credit_days_na_reason) {
+    projectForm.elements.credit_days_na_reason.value = project.credit_days_na_reason || '';
+  }
+  if (projectForm.elements.credit_days) {
+    projectForm.elements.credit_days.value = project.credit_days_na || project.credit_days == null
+      ? ''
+      : String(project.credit_days);
+  }
   projectForm.elements.due_date.value = project.due_date || '';
   const storedPaymentStatus = project.invoice_payment_status_stored
     || (project.invoice_payment_status === 'Vencida' ? 'Pendiente' : project.invoice_payment_status)
@@ -1627,6 +1708,7 @@ function fillProjectForm(project) {
   projectForm.elements.observations.value = project.observations || '';
   togglePurchaseOrder();
   toggleInvoicePaidAtField();
+  toggleBillingNaFields();
   setMessage(projectMessage, '');
 }
 
@@ -1645,9 +1727,16 @@ function resetProjectForm() {
   if (projectForm.elements.invoice_paid_at) {
     projectForm.elements.invoice_paid_at.value = '';
   }
+  if (projectForm.elements.invoice_date_na) projectForm.elements.invoice_date_na.checked = false;
+  if (projectForm.elements.credit_days_na) projectForm.elements.credit_days_na.checked = false;
+  if (projectForm.elements.invoice_date_na_reason) projectForm.elements.invoice_date_na_reason.value = '';
+  if (projectForm.elements.credit_days_na_reason) projectForm.elements.credit_days_na_reason.value = '';
+  if (projectForm.elements.credit_days) projectForm.elements.credit_days.value = '';
+  if (projectForm.elements.due_date) projectForm.elements.due_date.value = '';
   populateProjectStaffSelects();
   togglePurchaseOrder();
   toggleInvoicePaidAtField();
+  toggleBillingNaFields();
   setMessage(projectMessage, '');
 }
 
@@ -1768,9 +1857,21 @@ async function deleteProject(projectId) {
   }
 
   try {
+    const closeBody = { password };
+    const pending = Number(project.pending_collection || 0);
+    if (pending > 0.01) {
+      const balanceConfirm = window.confirm(
+        `Este proyecto tiene saldo pendiente de $${pending.toFixed(2)} y se va a archivar. ¿Confirmas?`,
+      );
+      if (!balanceConfirm) {
+        return;
+      }
+      closeBody.confirm_pending_balance = true;
+    }
+
     await api(`/api/projects/${project.id}`, {
       method: 'DELETE',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify(closeBody),
     });
 
     if (state.selectedProjectId === project.id) {
@@ -1909,7 +2010,17 @@ function renderDetail(project) {
   const detailInvoiceNumber = document.querySelector('#detail-invoice-number');
   if (detailInvoiceNumber) detailInvoiceNumber.textContent = project.invoice_number || '—';
   const detailInvoiceDate = document.querySelector('#detail-invoice-date');
-  if (detailInvoiceDate) detailInvoiceDate.textContent = project.invoice_date || '—';
+  if (detailInvoiceDate) {
+    detailInvoiceDate.textContent = project.invoice_date_na
+      ? `N/A${project.invoice_date_na_reason ? ` (${project.invoice_date_na_reason})` : ''}`
+      : (project.invoice_date || '—');
+  }
+  const detailCreditDays = document.querySelector('#detail-credit-days');
+  if (detailCreditDays) {
+    detailCreditDays.textContent = project.credit_days_na
+      ? `N/A${project.credit_days_na_reason ? ` (${project.credit_days_na_reason})` : ''}`
+      : (project.credit_days != null ? String(project.credit_days) : '—');
+  }
   const detailInvoiceDue = document.querySelector('#detail-invoice-due');
   if (detailInvoiceDue) detailInvoiceDue.textContent = project.due_date || '—';
   const detailInvoicePaymentStatus = document.querySelector('#detail-invoice-payment-status');
@@ -2084,6 +2195,20 @@ newProjectButton.addEventListener('click', clearSelection);
 purchaseOrderNotApplicable.addEventListener('change', togglePurchaseOrder);
 if (projectForm.elements.invoice_payment_status) {
   projectForm.elements.invoice_payment_status.addEventListener('change', toggleInvoicePaidAtField);
+}
+if (projectForm.elements.invoice_date_na) {
+  projectForm.elements.invoice_date_na.addEventListener('change', toggleBillingNaFields);
+}
+if (projectForm.elements.credit_days_na) {
+  projectForm.elements.credit_days_na.addEventListener('change', toggleBillingNaFields);
+}
+if (projectForm.elements.invoice_date) {
+  projectForm.elements.invoice_date.addEventListener('change', updateProjectDueDateField);
+  projectForm.elements.invoice_date.addEventListener('input', updateProjectDueDateField);
+}
+if (projectForm.elements.credit_days) {
+  projectForm.elements.credit_days.addEventListener('change', updateProjectDueDateField);
+  projectForm.elements.credit_days.addEventListener('input', updateProjectDueDateField);
 }
 newUserButton.addEventListener('click', resetUserForm);
 
@@ -6810,7 +6935,7 @@ function showKpisTab() {
 }
 
 function switchFinSubtab(name) {
-  const sections = ['statement', 'payable', 'receivable', 'bank', 'opex', 'adjustments', 'archive', 'config'];
+  const sections = ['statement', 'payable', 'receivable', 'aging', 'bank', 'opex', 'adjustments', 'archive', 'config'];
   sections.forEach((s) => {
     const section = document.getElementById('fin-' + s + '-section');
     const btn = document.getElementById('fin-subtab-' + s);
@@ -6819,13 +6944,14 @@ function switchFinSubtab(name) {
   });
 }
 
-['statement', 'payable', 'receivable', 'bank', 'opex', 'adjustments', 'archive', 'config'].forEach((tab) => {
+['statement', 'payable', 'receivable', 'aging', 'bank', 'opex', 'adjustments', 'archive', 'config'].forEach((tab) => {
   const btn = document.getElementById('fin-subtab-' + tab);
   if (btn) btn.addEventListener('click', () => { switchFinSubtab(tab); loadFinSection(tab); });
 });
 
 async function loadFinSection(section) {
   if (section === 'receivable') await loadFinReceivable();
+  if (section === 'aging') await loadFinAgingReport();
   if (section === 'payable') await loadFinPayable();
   if (section === 'bank') await loadFinBank();
   if (section === 'opex') await loadFinOpex();
@@ -6957,6 +7083,106 @@ async function loadFinReceivable() {
     container.innerHTML = html;
   } catch (e) { console.error(e); }
 }
+
+let finAgingReportCache = null;
+
+async function loadFinAgingReport() {
+  const container = document.getElementById('fin-aging-list');
+  if (!container) return;
+  try {
+    const result = await api('/api/financial/aging-report');
+    finAgingReportCache = result;
+    const buckets = result.buckets || [];
+    const summary = result.summary || {};
+    const noDateBucket = summary.buckets?.no_invoice_date || { amount: 0, count: 0 };
+
+    let html = '<div class="ecovis-cards aging-summary-cards">';
+    html += `<div class="ecovis-card"><div class="ecovis-card-label">Total pendiente</div><div class="ecovis-card-value">${money.format(summary.total_pending_mxn || 0)}</div></div>`;
+    buckets.forEach((b) => {
+      const t = summary.buckets?.[b.key] || { amount: 0, count: 0 };
+      const highlight = b.key === 'no_invoice_date' ? ' aging-card-missing-date' : '';
+      html += `<div class="ecovis-card${highlight}"><div class="ecovis-card-label">${escapeHtml(b.label)}</div><div class="ecovis-card-value">${money.format(t.amount || 0)}</div><div class="muted">${t.count || 0} proy.</div></div>`;
+    });
+    html += '</div>';
+
+    if ((noDateBucket.amount || 0) > 0.01) {
+      html += `<p class="aging-missing-date-banner">Sin fecha de factura: ${money.format(noDateBucket.amount)} en ${noDateBucket.count} proyecto(s). Esta es la lista de trabajo de captura histórica.</p>`;
+    }
+
+    if (!result.clients || result.clients.length === 0) {
+      html += '<p class="empty-message">No hay proyectos con saldo pendiente.</p>';
+      container.innerHTML = html;
+      return;
+    }
+
+    html += '<div class="table-wrapper aging-table-wrap"><table class="data-table aging-table"><thead><tr>';
+    html += '<th>Cliente / Proyecto</th><th>Factura</th><th>Vencimiento</th><th>Días vencido</th>';
+    buckets.forEach((b) => {
+      html += `<th class="${b.key === 'no_invoice_date' ? 'aging-col-missing' : ''}">${escapeHtml(b.label)}</th>`;
+    });
+    html += '<th>Total</th></tr></thead><tbody>';
+
+    result.clients.forEach((client) => {
+      html += `<tr class="aging-client-row"><td colspan="${4 + buckets.length}"><strong>${escapeHtml(client.client_name)}</strong></td>`;
+      html += `<td><strong>${money.format(client.total_pending_mxn)}</strong></td></tr>`;
+      client.projects.forEach((p) => {
+        const rowClass = p.bucket === 'no_invoice_date' ? ' aging-row-missing-date' : '';
+        html += `<tr class="${rowClass}">`;
+        html += `<td>${escapeHtml(p.quote_number || '')} — ${escapeHtml(p.project_description || '')}</td>`;
+        html += `<td>${escapeHtml(p.invoice_number || '—')}</td>`;
+        html += `<td>${escapeHtml(p.due_date || (p.invoice_date_na || p.credit_days_na ? 'N/A' : '—'))}</td>`;
+        html += `<td>${p.days_overdue != null ? p.days_overdue : '—'}</td>`;
+        buckets.forEach((b) => {
+          const cell = p.bucket === b.key ? money.format(p.pending_mxn) : '';
+          html += `<td class="${b.key === 'no_invoice_date' ? 'aging-col-missing' : ''}">${cell}</td>`;
+        });
+        html += `<td>${money.format(p.pending_mxn)}</td></tr>`;
+      });
+    });
+
+    html += `<tr class="aging-total-row"><td colspan="${4 + buckets.length}"><strong>Total general</strong></td>`;
+    html += `<td><strong>${money.format(summary.total_pending_mxn || 0)}</strong></td></tr>`;
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+  } catch (e) {
+    console.error(e);
+    container.innerHTML = `<p class="empty-message">${escapeHtml(e.message || 'No se pudo cargar el reporte.')}</p>`;
+  }
+}
+
+function exportFinAgingCsv() {
+  window.location.href = '/api/financial/aging-report?format=csv';
+}
+
+function printFinAgingReport() {
+  const container = document.getElementById('fin-aging-list');
+  if (!container) return;
+  const win = window.open('', '_blank');
+  if (!win) {
+    window.alert('Permite ventanas emergentes para imprimir.');
+    return;
+  }
+  win.document.write(`<!doctype html><html><head><title>Antigüedad de saldos</title>
+    <style>
+      body{font-family:Georgia,serif;padding:16px;color:#1a1a1a}
+      table{width:100%;border-collapse:collapse;font-size:12px}
+      th,td{border:1px solid #ccc;padding:6px;text-align:left}
+      .aging-col-missing,.aging-row-missing-date{background:#fff3cd}
+      .aging-missing-date-banner{font-weight:bold;margin:12px 0}
+      .ecovis-cards{display:none}
+      @media print{body{padding:0}}
+    </style></head><body>
+    <h1>Antigüedad de saldos</h1>
+    <p>Al ${escapeHtml(finAgingReportCache?.as_of || '')}</p>
+    ${container.innerHTML}
+    <script>window.onload=function(){window.print()}<\/script>
+    </body></html>`);
+  win.document.close();
+}
+
+document.getElementById('fin-aging-refresh')?.addEventListener('click', () => loadFinAgingReport());
+document.getElementById('fin-aging-export-csv')?.addEventListener('click', () => exportFinAgingCsv());
+document.getElementById('fin-aging-print')?.addEventListener('click', () => printFinAgingReport());
 
 async function loadFinBank() {
   try {
