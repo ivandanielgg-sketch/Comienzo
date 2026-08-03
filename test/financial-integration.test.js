@@ -117,10 +117,7 @@ test('Financial Statements module integration', async (t) => {
     const { status, data } = await api('POST', '/api/financial/payroll', {
       year: 2026,
       month: 4,
-      week_number: 1,
-      week_start_date: '2026-04-01',
-      week_end_date: '2026-04-05',
-      concept: 'Nómina quincenal 1',
+      week_number: 14,
       amount_original: 120000,
       currency: 'MXN',
     });
@@ -128,7 +125,29 @@ test('Financial Statements module integration', async (t) => {
     assert.equal(data.amount_mxn, 120000);
     assert.equal(data.year, 2026);
     assert.equal(data.month, 4);
-    assert.equal(data.week_number, 1);
+    assert.equal(data.week_number, 14);
+    assert.equal(data.week_start_date, '2026-03-30');
+    assert.equal(data.week_end_date, '2026-04-05');
+  });
+
+  await t.test('reject duplicate payroll week', async () => {
+    const { status, data } = await api('POST', '/api/financial/payroll', {
+      year: 2026,
+      month: 4,
+      week_number: 14,
+      amount_original: 1000,
+      currency: 'MXN',
+    });
+    assert.equal(status, 409);
+    assert.match(String(data.message || ''), /Ya existe una nómina capturada para la semana 14 de 2026/i);
+  });
+
+  await t.test('payroll week-range uses ISO attendance convention', async () => {
+    const { status, data } = await api('GET', '/api/financial/payroll/week-range?year=2026&week_number=32');
+    assert.equal(status, 200);
+    assert.equal(data.week_start_date, '2026-08-03');
+    assert.equal(data.week_end_date, '2026-08-09');
+    assert.equal(data.range_label, 'lunes 3 de agosto – domingo 9 de agosto de 2026');
   });
 
   await t.test('create financial adjustment', async () => {
@@ -189,21 +208,24 @@ test('Financial Statements module integration', async (t) => {
 
   await t.test('create weekly payroll and operating expenses for July 2026', async () => {
     const payrollWeeks = [
-      { week_number: 1, week_start_date: '2026-07-01', week_end_date: '2026-07-05', amount_original: 64193.33 },
-      { week_number: 2, week_start_date: '2026-07-06', week_end_date: '2026-07-12', amount_original: 63450 },
-      { week_number: 3, week_start_date: '2026-07-13', week_end_date: '2026-07-19', amount_original: 63450 },
-      { week_number: 4, week_start_date: '2026-07-20', week_end_date: '2026-07-26', amount_original: 63450 },
-      { week_number: 5, week_start_date: '2026-07-27', week_end_date: '2026-07-31', amount_original: 63450 },
+      { week_number: 27, amount_original: 64193.33, week_start_date: '2026-06-29', week_end_date: '2026-07-05' },
+      { week_number: 28, amount_original: 63450, week_start_date: '2026-07-06', week_end_date: '2026-07-12' },
+      { week_number: 29, amount_original: 63450, week_start_date: '2026-07-13', week_end_date: '2026-07-19' },
+      { week_number: 30, amount_original: 63450, week_start_date: '2026-07-20', week_end_date: '2026-07-26' },
+      { week_number: 31, amount_original: 63450, week_start_date: '2026-07-27', week_end_date: '2026-08-02' },
     ];
     for (const week of payrollWeeks) {
       const { status, data } = await api('POST', '/api/financial/payroll', {
         year: 2026,
         month: 7,
-        ...week,
+        week_number: week.week_number,
+        amount_original: week.amount_original,
         currency: 'MXN',
       });
       assert.equal(status, 201);
       assert.equal(data.week_number, week.week_number);
+      assert.equal(data.week_start_date, week.week_start_date);
+      assert.equal(data.week_end_date, week.week_end_date);
       assert.ok(!data.deleted_at);
     }
 

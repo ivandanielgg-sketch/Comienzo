@@ -1828,17 +1828,14 @@
                 <input type="hidden" name="id" />
                 <input type="hidden" name="payroll_attendance_week_id" />
                 <label>
-                  Número de semana *
-                  <input type="number" name="week_number" min="1" max="6" required inputmode="numeric" />
+                  Año *
+                  <input type="number" name="year" min="2020" max="2100" required inputmode="numeric" />
                 </label>
                 <label>
-                  Fecha inicio *
-                  <input type="date" name="week_start_date" required />
+                  Semana (1-53) *
+                  <input type="number" name="week_number" min="1" max="53" required inputmode="numeric" />
                 </label>
-                <label>
-                  Fecha fin *
-                  <input type="date" name="week_end_date" required />
-                </label>
+                <p id="fin-payroll-week-range" class="text-muted" aria-live="polite">Selecciona año y semana para ver el rango de fechas.</p>
                 <label>
                   Monto MXN *
                   <input type="number" name="amount_original" min="0.01" step="0.01" required inputmode="decimal" />
