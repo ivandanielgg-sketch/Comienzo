@@ -38,6 +38,7 @@ const SCHEMA_TABLE_ORDER = [
   'financial_statements',
   'financial_adjustments',
   'manual_payroll_expenses',
+  'operating_expenses',
   'projects',
   'ecovis_amount_adjustments',
   'accounts_payable',

@@ -382,6 +382,10 @@ CREATE TABLE manual_payroll_expenses (
       id SERIAL PRIMARY KEY,
       year INTEGER NOT NULL,
       month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      week_number INTEGER,
+      week_start_date TEXT,
+      week_end_date TEXT,
+      payroll_attendance_week_id INTEGER,
       concept TEXT NOT NULL,
       amount_original DOUBLE PRECISION NOT NULL CHECK (amount_original > 0),
       currency TEXT NOT NULL DEFAULT 'MXN',
@@ -393,7 +397,35 @@ CREATE TABLE manual_payroll_expenses (
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_by_user_id INTEGER,
       updated_by_name TEXT,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
+    );
+
+CREATE TABLE operating_expenses (
+      id SERIAL PRIMARY KEY,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      category TEXT NOT NULL,
+      description TEXT,
+      amount_original DOUBLE PRECISION NOT NULL CHECK (amount_original > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn DOUBLE PRECISION NOT NULL DEFAULT 1,
+      amount_mxn DOUBLE PRECISION NOT NULL,
+      expense_date TEXT NOT NULL,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
     );
 
 CREATE TABLE projects (

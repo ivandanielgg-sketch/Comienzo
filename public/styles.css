@@ -2012,6 +2012,42 @@ body.scroll-lock {
   }
 }
 
+/* Financial OpEx capture */
+#fin-opex-section .fin-opex-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+
+#fin-opex-section .fin-opex-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 140px;
+}
+
+#fin-opex-section input,
+#fin-opex-section select,
+#fin-opex-section textarea,
+#fin-payroll-modal input,
+#fin-payroll-modal select,
+#fin-payroll-modal textarea,
+#fin-opex-modal input,
+#fin-opex-modal select,
+#fin-opex-modal textarea,
+#fin-opex-delete-modal textarea {
+  font-size: 16px;
+  min-height: 44px;
+}
+
+#fin-opex-section button,
+#fin-payroll-modal button,
+#fin-opex-modal button,
+#fin-opex-delete-modal button {
+  min-height: 44px;
+}
+
 @keyframes project-drawer-in {
   from {
     transform: translateX(100%);

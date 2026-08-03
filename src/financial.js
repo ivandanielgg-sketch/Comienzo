@@ -16,6 +16,47 @@ function getFinancialWeekOfMonth(dateStr) {
   return Math.ceil(dayOfMonth / 7);
 }
 
+/** Fixed OpEx category catalog for captured operating expenses (admin-only capture). */
+const OPERATING_EXPENSE_CATEGORIES = [
+  'IMSS/ISN',
+  'Efectivo',
+  'Servicios',
+  'Renta',
+  'Vehículo',
+  'Mantenimiento',
+  'Capacitación',
+  'Gasolina',
+  'Otros',
+];
+
+function buildOperatingExpensesBreakdown(manualPayroll, operatingExpenses, expenseAdjustmentsMXN) {
+  const payrollTotal = roundMoney(
+    (manualPayroll || []).reduce((sum, p) => sum + Number(p.amount_mxn || 0), 0),
+  );
+  const otherByCategory = {};
+  for (const category of OPERATING_EXPENSE_CATEGORIES) {
+    otherByCategory[category] = 0;
+  }
+  let otherTotal = 0;
+  for (const expense of operatingExpenses || []) {
+    const amount = Number(expense.amount_mxn || 0);
+    otherTotal += amount;
+    const category = OPERATING_EXPENSE_CATEGORIES.includes(expense.category)
+      ? expense.category
+      : 'Otros';
+    otherByCategory[category] = roundMoney((otherByCategory[category] || 0) + amount);
+  }
+  otherTotal = roundMoney(otherTotal);
+  const adjustments = roundMoney(Number(expenseAdjustmentsMXN || 0));
+  return {
+    payroll_mxn: payrollTotal,
+    other_by_category: otherByCategory,
+    other_total_mxn: otherTotal,
+    adjustments_mxn: adjustments,
+    total_mxn: roundMoney(payrollTotal + otherTotal + adjustments),
+  };
+}
+
 function calculateFinancialStatement(data, settings) {
   const {
     projects = [],
@@ -23,6 +64,7 @@ function calculateFinancialStatement(data, settings) {
     accountsPayable = [],
     bankMovements = [],
     manualPayroll = [],
+    operatingExpenses = [],
     adjustments = [],
     omittedProjectIds = [],
   } = data;
@@ -74,30 +116,23 @@ function calculateFinancialStatement(data, settings) {
   const grossProfitMXN = roundMoney(revenueNetMXN - costOfSalesMXN);
 
   // Operating expenses
-  const payrollTotal = roundMoney(
-    manualPayroll.reduce((sum, p) => sum + Number(p.amount_mxn || 0), 0),
-  );
-
-  const operatingCategories = ['Hotel', 'Vuelos', 'Gasolina', 'Vehículo', 'Renta', 'Servicios', 'Nómina', 'Impuestos', 'Gastos bancarios', 'Otros'];
-  const apOperating = roundMoney(
-    accountsPayable
-      .filter((ap) => operatingCategories.includes(ap.category) && !ap.related_project_id)
-      .reduce((sum, ap) => sum + Number(ap.amount_mxn || 0), 0),
-  );
-
-  const bankOperatingExpenses = roundMoney(
-    bankMovements
-      .filter((m) => m.classification_status === 'clasificado' && ['nomina', 'gasto_operativo', 'gasto_bancario', 'impuesto'].includes(m.classification_type) && !m.related_account_payable_id)
-      .reduce((sum, m) => sum + Number(m.withdrawal_mxn || 0), 0),
-  );
-
+  // CHANGE (OpEx ledger): operating_expenses_mxn = weekly manual payroll
+  // + captured operating_expenses (by category) + active gasto_operativo adjustments.
+  // AP operating categories and bank-classified withdrawals (nomina / gasto_operativo /
+  // gasto_bancario / impuesto) are intentionally NOT summed here, to avoid double-counting
+  // with the dedicated OpEx capture screen. CxP and bank modules remain for their own purposes.
   const expenseAdjustments = roundMoney(
     adjustments
       .filter((a) => a.adjustment_type === 'gasto_operativo' && a.status === 'activo')
       .reduce((sum, a) => sum + Number(a.amount_mxn || 0), 0),
   );
 
-  const operatingExpensesMXN = roundMoney(payrollTotal + apOperating + bankOperatingExpenses + expenseAdjustments);
+  const opexBreakdown = buildOperatingExpensesBreakdown(
+    manualPayroll,
+    operatingExpenses,
+    expenseAdjustments,
+  );
+  const operatingExpensesMXN = opexBreakdown.total_mxn;
 
   // Net administrative profit
   const netAdministrativeProfitMXN = roundMoney(grossProfitMXN - operatingExpensesMXN);
@@ -163,6 +198,7 @@ function calculateFinancialStatement(data, settings) {
     cost_of_sales_mxn: costOfSalesMXN,
     gross_profit_mxn: finalGross,
     operating_expenses_mxn: operatingExpensesMXN,
+    operating_expenses_breakdown: opexBreakdown,
     net_administrative_profit_mxn: finalNet,
     estimated_isr_mxn: finalISR,
     profit_after_isr_mxn: finalAfterISR,
@@ -227,6 +263,8 @@ module.exports = {
   convertToMXN,
   getFinancialWeekOfMonth,
   roundMoney,
+  buildOperatingExpensesBreakdown,
+  OPERATING_EXPENSE_CATEGORIES,
   AP_CATEGORIES,
   CLASSIFICATION_TYPES,
   ADJUSTMENT_TYPES,

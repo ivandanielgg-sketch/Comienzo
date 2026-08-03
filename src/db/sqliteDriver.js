@@ -842,6 +842,10 @@ function migrate(database) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       year INTEGER NOT NULL,
       month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      week_number INTEGER,
+      week_start_date TEXT,
+      week_end_date TEXT,
+      payroll_attendance_week_id INTEGER,
       concept TEXT NOT NULL,
       amount_original REAL NOT NULL CHECK (amount_original > 0),
       currency TEXT NOT NULL DEFAULT 'MXN',
@@ -853,7 +857,35 @@ function migrate(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_by_user_id INTEGER,
       updated_by_name TEXT,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS operating_expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+      category TEXT NOT NULL,
+      description TEXT,
+      amount_original REAL NOT NULL CHECK (amount_original > 0),
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL NOT NULL DEFAULT 1,
+      amount_mxn REAL NOT NULL,
+      expense_date TEXT NOT NULL,
+      notes TEXT,
+      created_by_user_id INTEGER,
+      created_by_name TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by_user_id INTEGER,
+      updated_by_name TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      deleted_at TEXT,
+      deleted_by_user_id INTEGER,
+      deleted_by_name TEXT,
+      delete_reason TEXT
     );
 
     CREATE TABLE IF NOT EXISTS financial_adjustments (
@@ -926,6 +958,16 @@ function migrate(database) {
 
   // Bank movement week of month (after financial tables created)
   ensureColumn(database, 'bank_statement_movements', 'financial_week_of_month', 'INTEGER');
+
+  // Weekly payroll + soft-delete columns on existing DBs
+  ensureColumn(database, 'manual_payroll_expenses', 'week_number', 'INTEGER');
+  ensureColumn(database, 'manual_payroll_expenses', 'week_start_date', 'TEXT');
+  ensureColumn(database, 'manual_payroll_expenses', 'week_end_date', 'TEXT');
+  ensureColumn(database, 'manual_payroll_expenses', 'payroll_attendance_week_id', 'INTEGER');
+  ensureColumn(database, 'manual_payroll_expenses', 'deleted_at', 'TEXT');
+  ensureColumn(database, 'manual_payroll_expenses', 'deleted_by_user_id', 'INTEGER');
+  ensureColumn(database, 'manual_payroll_expenses', 'deleted_by_name', 'TEXT');
+  ensureColumn(database, 'manual_payroll_expenses', 'delete_reason', 'TEXT');
 
   migrateEcovisCurrencyFields(database);
 

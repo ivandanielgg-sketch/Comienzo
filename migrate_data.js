@@ -52,6 +52,7 @@ const MIGRATION_ORDER = [
   'financial_statements',
   'financial_adjustments',
   'manual_payroll_expenses',
+  'operating_expenses',
   'projects',
   'ecovis_projects',
   'ecovis_amount_adjustments',
