@@ -1093,6 +1093,7 @@
             <button id="ecovis-subtab-loans" class="secondary" type="button">Prestamos</button>
             <button id="ecovis-subtab-movements" class="secondary" type="button">Movimientos</button>
             <button id="ecovis-subtab-history" class="secondary" type="button">Historial</button>
+            <button id="ecovis-subtab-diagnostic" class="secondary" type="button">Diagnostico</button>
           </div>
 
           <!-- ECOVIS Statement (ledger) Section -->
@@ -1306,6 +1307,77 @@
               <p class="text-muted" style="margin: 0.5rem 0; font-size: 0.85rem;">Los proyectos pagados al 100% se consultan aquí.</p>
               <div id="ecovis-history-results">
                 <p class="empty-message">Selecciona un año para consultar el historial.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ECOVIS Diagnostic Section (read-only) -->
+          <div id="ecovis-diagnostic-section" class="hidden">
+            <div class="panel">
+              <div class="panel-header">
+                <h2>Diagnostico ECOVIS</h2>
+                <div class="row-actions">
+                  <button id="ecovis-diagnostic-refresh-btn" class="secondary" type="button">Actualizar</button>
+                  <button id="ecovis-diagnostic-copy-json-btn" class="secondary" type="button">Copiar JSON</button>
+                </div>
+              </div>
+              <p class="text-muted" style="margin: 0 0 0.75rem 0; font-size: 0.85rem;">
+                Solo lectura. Identifica cargos duplicados, movimientos huerfanos y compara saldos. No modifica datos.
+                Tambien disponible en <code>GET /api/ecovis/diagnostic</code>.
+              </p>
+              <p id="ecovis-diagnostic-message" class="message"></p>
+              <div id="ecovis-diagnostic-summary" class="ecovis-diagnostic-summary"></div>
+
+              <h3 class="ecovis-diagnostic-heading">Cargos duplicados por proyecto</h3>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Proyecto</th>
+                      <th>Monto proyecto</th>
+                      <th>Cargos activos</th>
+                      <th>Conservar</th>
+                      <th>Cancelar (propuesto)</th>
+                      <th>Revision</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-diagnostic-duplicates-table"></tbody>
+                </table>
+              </div>
+
+              <h3 class="ecovis-diagnostic-heading">Movimientos huerfanos (proyecto cancelado)</h3>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Mov. ID</th>
+                      <th>Fecha</th>
+                      <th>Proyecto</th>
+                      <th>Tipo</th>
+                      <th>Monto MXN</th>
+                      <th>Motivo propuesto</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-diagnostic-orphans-table"></tbody>
+                </table>
+              </div>
+
+              <h3 class="ecovis-diagnostic-heading">Comparativo de saldos</h3>
+              <div id="ecovis-diagnostic-comparative" class="ecovis-diagnostic-comparative"></div>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Proyecto</th>
+                      <th>Estatus</th>
+                      <th>Total MXN</th>
+                      <th>Pagado MXN</th>
+                      <th>Pendiente MXN</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ecovis-diagnostic-balance-projects-table"></tbody>
+                </table>
               </div>
             </div>
           </div>

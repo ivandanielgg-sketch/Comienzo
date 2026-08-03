@@ -582,6 +582,219 @@ function buildEcovisAccountHeader(summary) {
   };
 }
 
+function isEcovisTruthy(value) {
+  return value === true || value === 1 || value === '1';
+}
+
+function movementAmountMxn(movement) {
+  return roundMoney(Number(movement.amount_mxn ?? movement.amount ?? 0));
+}
+
+function projectTotalMxn(project) {
+  return roundMoney(Number(project.amount_mxn ?? project.total_amount ?? 0));
+}
+
+function compareMovementsOldestFirst(a, b) {
+  const dateA = String(a.created_at || a.movement_date || '');
+  const dateB = String(b.created_at || b.movement_date || '');
+  if (dateA !== dateB) return dateA < dateB ? -1 : 1;
+  return Number(a.id) - Number(b.id);
+}
+
+function summarizeCargoMovement(movement) {
+  return {
+    id: Number(movement.id),
+    movement_type: movement.movement_type,
+    movement_date: movement.movement_date,
+    created_at: movement.created_at || null,
+    amount: Number(movement.amount || 0),
+    amount_mxn: movementAmountMxn(movement),
+    currency: movement.currency || 'MXN',
+    direction: movement.direction,
+    description: movement.description || '',
+    related_project_id: movement.related_project_id == null ? null : Number(movement.related_project_id),
+  };
+}
+
+/**
+ * Read-only integrity diagnostic for ECOVIS cargos / orphans / balance drift.
+ * Does not mutate data. Phase-1 cleanup candidates are proposed only.
+ */
+function generateEcovisIntegrityDiagnostic(projects, movements) {
+  const projectById = new Map(projects.map((p) => [Number(p.id), p]));
+  const activeProjects = projects.filter((p) => !isEcovisTruthy(p.is_cancelled) && p.status !== 'cancelado');
+  const cancelledProjects = projects.filter((p) => isEcovisTruthy(p.is_cancelled) || p.status === 'cancelado');
+  const cancelledProjectIds = new Set(cancelledProjects.map((p) => Number(p.id)));
+
+  const activeCargoMovements = movements.filter(
+    (m) => !isEcovisTruthy(m.is_cancelled) && m.direction === 'ecovis_debe_a_revram',
+  );
+
+  const activeProyectoCargos = activeCargoMovements.filter((m) => m.movement_type === 'proyecto');
+
+  const duplicateProjectReports = [];
+  for (const project of activeProjects) {
+    const projectId = Number(project.id);
+    const cargos = activeProyectoCargos
+      .filter((m) => Number(m.related_project_id) === projectId)
+      .slice()
+      .sort(compareMovementsOldestFirst);
+
+    if (cargos.length <= 1) {
+      if (cargos.length === 1) {
+        const only = cargos[0];
+        const matches = !amountsDiffer(movementAmountMxn(only), projectTotalMxn(project));
+        duplicateProjectReports.push({
+          project_id: projectId,
+          project_name: project.project_name || '',
+          project_status: project.status || null,
+          project_amount_mxn: projectTotalMxn(project),
+          active_cargo_count: 1,
+          keep_movement_id: Number(only.id),
+          cancel_movement_ids: [],
+          needs_manual_review: !matches,
+          review_reason: matches ? null : 'El unico cargo activo no coincide con el monto del proyecto.',
+          keep_movement: summarizeCargoMovement(only),
+          cancel_movements: [],
+        });
+      }
+      continue;
+    }
+
+    const matching = cargos.filter((m) => !amountsDiffer(movementAmountMxn(m), projectTotalMxn(project)));
+    const keep = matching.length > 0 ? matching[0] : cargos[0];
+    const cancelList = cargos.filter((m) => Number(m.id) !== Number(keep.id));
+    const needsManualReview = matching.length === 0;
+
+    duplicateProjectReports.push({
+      project_id: projectId,
+      project_name: project.project_name || '',
+      project_status: project.status || null,
+      project_amount_mxn: projectTotalMxn(project),
+      active_cargo_count: cargos.length,
+      keep_movement_id: Number(keep.id),
+      cancel_movement_ids: cancelList.map((m) => Number(m.id)),
+      needs_manual_review: needsManualReview,
+      review_reason: needsManualReview
+        ? 'Ningun cargo activo coincide con el monto del proyecto; se conserva el mas antiguo.'
+        : null,
+      keep_movement: summarizeCargoMovement(keep),
+      cancel_movements: cancelList.map(summarizeCargoMovement),
+    });
+  }
+
+  const projectsWithDuplicates = duplicateProjectReports.filter((r) => r.active_cargo_count > 1);
+  const projectsNeedingReview = duplicateProjectReports.filter((r) => r.needs_manual_review);
+
+  const orphanCargos = activeCargoMovements
+    .filter((m) => m.related_project_id != null && cancelledProjectIds.has(Number(m.related_project_id)))
+    .slice()
+    .sort(compareMovementsOldestFirst)
+    .map((m) => {
+      const project = projectById.get(Number(m.related_project_id));
+      return {
+        ...summarizeCargoMovement(m),
+        project_name: project?.project_name || '',
+        project_status: project?.status || 'cancelado',
+        project_cancelled_at: project?.cancelled_at || null,
+        proposed_cancellation_reason: 'Limpieza 2026-08: proyecto cancelado',
+      };
+    });
+
+  const projectsWithBalance = activeProjects
+    .map((p) => {
+      const total = projectTotalMxn(p);
+      const paid = roundMoney(Number(p.paid_amount_mxn ?? 0));
+      const pending = roundMoney(Number(p.pending_amount_mxn ?? Math.max(0, total - paid)));
+      return {
+        project_id: Number(p.id),
+        project_name: p.project_name || '',
+        status: p.status || null,
+        total_amount_mxn: total,
+        paid_amount_mxn: paid,
+        pending_amount_mxn: pending,
+      };
+    })
+    .filter((p) => p.pending_amount_mxn > 0.005)
+    .sort((a, b) => a.project_id - b.project_id);
+
+  const balanceFromProjects = roundMoney(
+    projectsWithBalance.reduce((sum, p) => sum + p.pending_amount_mxn, 0),
+  );
+
+  // Naive movement-based saldo: active cargos (does not decrease on payments with direction=neutral).
+  const balanceFromMovements = roundMoney(
+    activeCargoMovements.reduce((sum, m) => sum + movementAmountMxn(m), 0),
+  );
+
+  const activeProyectoCargoSum = roundMoney(
+    activeProyectoCargos.reduce((sum, m) => sum + movementAmountMxn(m), 0),
+  );
+  const activeProjectsTotalMxn = roundMoney(
+    activeProjects.reduce((sum, p) => sum + projectTotalMxn(p), 0),
+  );
+
+  const neutralPayments = movements.filter(
+    (m) => !isEcovisTruthy(m.is_cancelled)
+      && m.movement_type === 'pago_recibido'
+      && m.direction === 'neutral',
+  );
+
+  const proposedDuplicateCancelIds = projectsWithDuplicates.flatMap((r) => r.cancel_movement_ids);
+  const proposedOrphanCancelIds = orphanCargos.map((m) => m.id);
+
+  return {
+    generated_at: new Date().toISOString(),
+    read_only: true,
+    notes: [
+      'Diagnostico de solo lectura. No modifica datos.',
+      'Cargos = movimientos activos con direction=ecovis_debe_a_revram.',
+      'Duplicados se evaluan sobre movement_type=proyecto ligados a proyectos no cancelados.',
+      'Conservar: el cargo mas antiguo cuyo amount_mxn coincide con el total del proyecto; si ninguno coincide, el mas antiguo (needs_manual_review).',
+      'Saldo por proyectos = suma de pending_amount_mxn de proyectos no cancelados con pendiente > 0.',
+      'Saldo por movimientos = suma de amount_mxn de cargos activos (los pago_recibido con direction=neutral no restan).',
+    ],
+    duplicates: {
+      projects_analyzed: activeProjects.length,
+      projects_with_duplicate_cargos: projectsWithDuplicates.length,
+      projects_needing_manual_review: projectsNeedingReview.length,
+      proposed_cancel_count: proposedDuplicateCancelIds.length,
+      proposed_cancellation_reason: 'Limpieza 2026-08: cargo duplicado',
+      proposed_cancel_movement_ids: proposedDuplicateCancelIds,
+      by_project: duplicateProjectReports.filter((r) => r.active_cargo_count > 1 || r.needs_manual_review),
+    },
+    orphans: {
+      count: orphanCargos.length,
+      total_amount_mxn: roundMoney(orphanCargos.reduce((sum, m) => sum + m.amount_mxn, 0)),
+      proposed_cancellation_reason: 'Limpieza 2026-08: proyecto cancelado',
+      proposed_cancel_movement_ids: proposedOrphanCancelIds,
+      movements: orphanCargos,
+    },
+    comparative: {
+      balance_from_projects_pending_mxn: balanceFromProjects,
+      balance_from_movements_cargo_mxn: balanceFromMovements,
+      difference_mxn: roundMoney(balanceFromMovements - balanceFromProjects),
+      active_projects_total_mxn: activeProjectsTotalMxn,
+      active_proyecto_cargos_sum_mxn: activeProyectoCargoSum,
+      active_proyecto_cargos_vs_projects_difference_mxn: roundMoney(activeProyectoCargoSum - activeProjectsTotalMxn),
+      projects_with_balance_count: projectsWithBalance.length,
+      projects_with_balance: projectsWithBalance,
+      neutral_pago_recibido_count: neutralPayments.length,
+      neutral_pago_recibido_amount_mxn: roundMoney(
+        neutralPayments.reduce((sum, m) => sum + movementAmountMxn(m), 0),
+      ),
+    },
+    proposed_cleanup_summary: {
+      duplicate_movements_to_cancel: proposedDuplicateCancelIds.length,
+      orphan_movements_to_cancel: proposedOrphanCancelIds.length,
+      total_movements_to_cancel: proposedDuplicateCancelIds.length + proposedOrphanCancelIds.length,
+      all_proposed_cancel_movement_ids: [...new Set([...proposedDuplicateCancelIds, ...proposedOrphanCancelIds])].sort(
+        (a, b) => a - b,
+      ),
+    },
+  };
+}
+
 module.exports = {
   calculateEcovisAccountSummary,
   calculateEcovisProjectPaymentStatus,
@@ -604,5 +817,6 @@ module.exports = {
   resolveStatementConcept,
   describeEcovisNetBalance,
   buildEcovisAccountHeader,
+  generateEcovisIntegrityDiagnostic,
   STATEMENT_TYPE_LABELS,
 };

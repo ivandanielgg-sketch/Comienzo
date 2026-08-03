@@ -3423,7 +3423,7 @@ function showEcovisTab() {
 }
 
 function switchEcovisSubtab(name) {
-  const sections = ['statement', 'projects', 'payments', 'loans', 'movements', 'history'];
+  const sections = ['statement', 'projects', 'payments', 'loans', 'movements', 'history', 'diagnostic'];
   sections.forEach((s) => {
     const section = document.getElementById('ecovis-' + s + '-section');
     const btn = document.getElementById('ecovis-subtab-' + s);
@@ -3456,6 +3456,205 @@ if (document.getElementById('ecovis-subtab-history')) {
   document.getElementById('ecovis-subtab-history').addEventListener('click', () => {
     switchEcovisSubtab('history');
     loadEcovisHistoryYears();
+  });
+}
+if (document.getElementById('ecovis-subtab-diagnostic')) {
+  document.getElementById('ecovis-subtab-diagnostic').addEventListener('click', () => {
+    switchEcovisSubtab('diagnostic');
+    loadEcovisDiagnostic();
+  });
+}
+
+let ecovisDiagnosticData = null;
+
+async function copyEcovisDiagnosticJson() {
+  const messageEl = document.getElementById('ecovis-diagnostic-message');
+  try {
+    if (!ecovisDiagnosticData) {
+      await loadEcovisDiagnostic();
+    }
+    if (!ecovisDiagnosticData) {
+      throw new Error('No hay diagnostico para copiar.');
+    }
+    const text = JSON.stringify(ecovisDiagnosticData, null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    if (messageEl) {
+      messageEl.textContent = 'JSON del diagnostico copiado al portapapeles.';
+      messageEl.className = 'message success';
+    }
+  } catch (error) {
+    if (messageEl) {
+      messageEl.textContent = error.message || 'No se pudo copiar el JSON.';
+      messageEl.className = 'message error';
+    } else {
+      window.alert(error.message);
+    }
+  }
+}
+
+function renderEcovisDiagnostic(diagnostic) {
+  const summaryEl = document.getElementById('ecovis-diagnostic-summary');
+  const duplicatesBody = document.getElementById('ecovis-diagnostic-duplicates-table');
+  const orphansBody = document.getElementById('ecovis-diagnostic-orphans-table');
+  const comparativeEl = document.getElementById('ecovis-diagnostic-comparative');
+  const balanceBody = document.getElementById('ecovis-diagnostic-balance-projects-table');
+  if (!summaryEl || !duplicatesBody || !orphansBody || !comparativeEl || !balanceBody) return;
+
+  const dup = diagnostic.duplicates || {};
+  const orphans = diagnostic.orphans || {};
+  const comp = diagnostic.comparative || {};
+  const cleanup = diagnostic.proposed_cleanup_summary || {};
+
+  summaryEl.innerHTML = `
+    <div class="ecovis-diagnostic-cards">
+      <article>
+        <span>Proyectos con cargos duplicados</span>
+        <strong>${dup.projects_with_duplicate_cargos || 0}</strong>
+        <small>${dup.proposed_cancel_count || 0} movimientos a cancelar (propuesto)</small>
+      </article>
+      <article>
+        <span>Movimientos huerfanos</span>
+        <strong>${orphans.count || 0}</strong>
+        <small>${formatMoney(orphans.total_amount_mxn || 0)} MXN</small>
+      </article>
+      <article>
+        <span>Saldo por proyectos</span>
+        <strong>${formatMoney(comp.balance_from_projects_pending_mxn || 0)}</strong>
+        <small>${comp.projects_with_balance_count || 0} con pendiente</small>
+      </article>
+      <article>
+        <span>Diferencia (mov − proy)</span>
+        <strong>${formatMoney(comp.difference_mxn || 0)}</strong>
+        <small>Movimientos: ${formatMoney(comp.balance_from_movements_cargo_mxn || 0)}</small>
+      </article>
+    </div>
+    <p class="text-muted ecovis-diagnostic-meta">
+      Generado: ${diagnostic.generated_at || '—'} ·
+      Limpieza propuesta total: ${cleanup.total_movements_to_cancel || 0} movimientos ·
+      Solo lectura: ${diagnostic.read_only ? 'si' : 'no'}
+    </p>
+  `;
+
+  const dupRows = Array.isArray(dup.by_project) ? dup.by_project : [];
+  if (dupRows.length === 0) {
+    duplicatesBody.innerHTML = '<tr><td colspan="6" class="empty-message">Sin cargos duplicados ni casos de revision.</td></tr>';
+  } else {
+    duplicatesBody.innerHTML = dupRows.map((row) => {
+      const cancelIds = (row.cancel_movement_ids || []).join(', ') || '—';
+      const review = row.needs_manual_review
+        ? `<span class="ecovis-diagnostic-flag">Revision manual</span><br><small>${escapeHtml(row.review_reason || '')}</small>`
+        : 'OK';
+      return `<tr class="${row.needs_manual_review ? 'ecovis-diagnostic-row-warn' : ''}">
+        <td>#${row.project_id} ${escapeHtml(row.project_name || '')}<br><small>${escapeHtml(row.project_status || '')}</small></td>
+        <td class="num">${formatMoney(row.project_amount_mxn)}</td>
+        <td class="num">${row.active_cargo_count}</td>
+        <td class="num">#${row.keep_movement_id}<br><small>${formatMoney(row.keep_movement?.amount_mxn)}</small></td>
+        <td>${escapeHtml(String(cancelIds))}</td>
+        <td>${review}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const orphanRows = Array.isArray(orphans.movements) ? orphans.movements : [];
+  if (orphanRows.length === 0) {
+    orphansBody.innerHTML = '<tr><td colspan="6" class="empty-message">Sin movimientos huerfanos activos.</td></tr>';
+  } else {
+    orphansBody.innerHTML = orphanRows.map((m) => `
+      <tr>
+        <td class="num">#${m.id}</td>
+        <td>${escapeHtml(m.movement_date || '')}</td>
+        <td>#${m.related_project_id} ${escapeHtml(m.project_name || '')}</td>
+        <td>${escapeHtml(m.movement_type || '')}</td>
+        <td class="num">${formatMoney(m.amount_mxn)}</td>
+        <td>${escapeHtml(m.proposed_cancellation_reason || '')}</td>
+      </tr>
+    `).join('');
+  }
+
+  comparativeEl.innerHTML = `
+    <ul class="ecovis-diagnostic-comp-list">
+      <li><strong>Saldo por proyectos (pending_amount_mxn):</strong> ${formatMoney(comp.balance_from_projects_pending_mxn || 0)}</li>
+      <li><strong>Saldo por movimientos (cargos activos):</strong> ${formatMoney(comp.balance_from_movements_cargo_mxn || 0)}</li>
+      <li><strong>Diferencia (movimientos − proyectos):</strong> ${formatMoney(comp.difference_mxn || 0)}</li>
+      <li><strong>Total proyectos activos (amount_mxn):</strong> ${formatMoney(comp.active_projects_total_mxn || 0)}</li>
+      <li><strong>Suma cargos tipo proyecto activos:</strong> ${formatMoney(comp.active_proyecto_cargos_sum_mxn || 0)}
+        (diff vs totales: ${formatMoney(comp.active_proyecto_cargos_vs_projects_difference_mxn || 0)})</li>
+      <li><strong>Pagos recibidos con direction=neutral:</strong> ${comp.neutral_pago_recibido_count || 0}
+        (${formatMoney(comp.neutral_pago_recibido_amount_mxn || 0)})</li>
+    </ul>
+    <p class="text-muted" style="margin: 0.5rem 0;">Proyectos con saldo pendiente (${comp.projects_with_balance_count || 0}):</p>
+  `;
+
+  const balanceRows = Array.isArray(comp.projects_with_balance) ? comp.projects_with_balance : [];
+  if (balanceRows.length === 0) {
+    balanceBody.innerHTML = '<tr><td colspan="6" class="empty-message">Ningun proyecto con pendiente.</td></tr>';
+  } else {
+    const totalPending = balanceRows.reduce((s, p) => s + Number(p.pending_amount_mxn || 0), 0);
+    const totalAmount = balanceRows.reduce((s, p) => s + Number(p.total_amount_mxn || 0), 0);
+    const totalPaid = balanceRows.reduce((s, p) => s + Number(p.paid_amount_mxn || 0), 0);
+    balanceBody.innerHTML = balanceRows.map((p) => `
+      <tr>
+        <td class="num">${p.project_id}</td>
+        <td>${escapeHtml(p.project_name || '')}</td>
+        <td>${escapeHtml(p.status || '')}</td>
+        <td class="num">${formatMoney(p.total_amount_mxn)}</td>
+        <td class="num">${formatMoney(p.paid_amount_mxn)}</td>
+        <td class="num">${formatMoney(p.pending_amount_mxn)}</td>
+      </tr>
+    `).join('') + `
+      <tr class="ecovis-diagnostic-total-row">
+        <td colspan="3"><strong>Total (${balanceRows.length} proyectos)</strong></td>
+        <td class="num"><strong>${formatMoney(totalAmount)}</strong></td>
+        <td class="num"><strong>${formatMoney(totalPaid)}</strong></td>
+        <td class="num"><strong>${formatMoney(totalPending)}</strong></td>
+      </tr>
+    `;
+  }
+}
+
+async function loadEcovisDiagnostic() {
+  const messageEl = document.getElementById('ecovis-diagnostic-message');
+  try {
+    if (messageEl) {
+      messageEl.textContent = 'Cargando diagnostico...';
+      messageEl.className = 'message';
+    }
+    const diagnostic = await api('/api/ecovis/diagnostic');
+    ecovisDiagnosticData = diagnostic;
+    renderEcovisDiagnostic(diagnostic);
+    if (messageEl) {
+      messageEl.textContent = 'Diagnostico actualizado (solo lectura).';
+      messageEl.className = 'message success';
+    }
+  } catch (error) {
+    ecovisDiagnosticData = null;
+    if (messageEl) {
+      messageEl.textContent = error.message || 'No se pudo cargar el diagnostico.';
+      messageEl.className = 'message error';
+    }
+  }
+}
+
+if (document.getElementById('ecovis-diagnostic-refresh-btn')) {
+  document.getElementById('ecovis-diagnostic-refresh-btn').addEventListener('click', () => {
+    loadEcovisDiagnostic();
+  });
+}
+if (document.getElementById('ecovis-diagnostic-copy-json-btn')) {
+  document.getElementById('ecovis-diagnostic-copy-json-btn').addEventListener('click', () => {
+    copyEcovisDiagnosticJson();
   });
 }
 
