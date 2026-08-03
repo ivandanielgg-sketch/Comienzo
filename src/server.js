@@ -6024,7 +6024,15 @@ app.get('/api/admin/audit-logs', requireAuth, requirePermission('backups', 'view
 
 // ===================== FINANCIAL STATEMENTS MODULE =====================
 
-const { calculateFinancialStatement, AP_CATEGORIES, CLASSIFICATION_TYPES, ADJUSTMENT_TYPES, roundMoney: roundMoneyFin, getFinancialWeekOfMonth } = require('./financial');
+const {
+  calculateFinancialStatement,
+  AP_CATEGORIES,
+  CLASSIFICATION_TYPES,
+  ADJUSTMENT_TYPES,
+  OPERATING_EXPENSE_CATEGORIES,
+  roundMoney: roundMoneyFin,
+  getFinancialWeekOfMonth,
+} = require('./financial');
 
 function requireAdminOnly(req, res, next) {
   if (!req.session || !req.session.userId) {
@@ -6283,27 +6291,74 @@ app.delete('/api/financial/project-omissions/:id', requireAuth, requireAdminOnly
   } catch (error) { next(error); }
 });
 
-// --- Manual Payroll ---
+// --- Manual Payroll (weekly OpEx capture) ---
+
+function lastDayOfMonth(year, month) {
+  return new Date(year, month, 0).getDate();
+}
+
+function monthDateBounds(year, month) {
+  const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+  const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDayOfMonth(year, month)).padStart(2, '0')}`;
+  return { monthStart, monthEnd };
+}
+
+function requiredDate(body, field, label) {
+  const value = requiredText(body, field, label);
+  if (!isValidDate(value)) {
+    throw badRequest(`${label} no es una fecha valida.`);
+  }
+  return value;
+}
 
 app.get('/api/financial/payroll', requireAuth, requireAdminOnly, (req, res) => {
   const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
   const month = req.query.month ? Number(req.query.month) : null;
-  let where = 'year = ?';
+  let where = 'year = ? AND deleted_at IS NULL';
   const params = [year];
   if (month) { where += ' AND month = ?'; params.push(month); }
-  const data = db.prepare(`SELECT * FROM manual_payroll_expenses WHERE ${where} ORDER BY month, id`).all(...params);
+  const data = db.prepare(`SELECT * FROM manual_payroll_expenses WHERE ${where} ORDER BY month, week_number, id`).all(...params);
   const total = roundMoneyFin(data.reduce((s, r) => s + Number(r.amount_mxn || 0), 0));
   res.json({ data, total_mxn: total });
+});
+
+app.get('/api/financial/payroll/weeks-for-month', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const year = numberValue(req.query, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.query, 'month', 'Mes', { min: 1, max: 12 });
+    const { monthStart, monthEnd } = monthDateBounds(year, month);
+    const weeks = db.prepare(
+      `SELECT id, year, week_number, week_start_date, week_end_date, title, status
+       FROM payroll_attendance_weeks
+       WHERE deleted_at IS NULL AND status != 'cancelada'
+         AND week_start_date <= ? AND week_end_date >= ?
+       ORDER BY week_number, week_start_date`,
+    ).all(monthEnd, monthStart);
+    res.json({ data: weeks, year, month });
+  } catch (error) { next(error); }
 });
 
 app.post('/api/financial/payroll', requireAuth, requireAdminOnly, (req, res, next) => {
   try {
     const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
     const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
-    const concept = requiredText(req.body, 'concept', 'Concepto');
+    const weekNumber = numberValue(req.body, 'week_number', 'Número de semana', { min: 1, max: 6 });
+    const weekStartDate = requiredDate(req.body, 'week_start_date', 'Fecha inicio');
+    const weekEndDate = requiredDate(req.body, 'week_end_date', 'Fecha fin');
+    if (weekStartDate > weekEndDate) throw badRequest('La fecha inicio no puede ser posterior a la fecha fin.');
     const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
     const currency = currencyValue(req.body, 'currency', 'Moneda');
     const notes = optionalText(req.body, 'notes');
+    const concept = optionalText(req.body, 'concept') || `Semana ${weekNumber}`;
+    let attendanceWeekId = req.body.payroll_attendance_week_id != null && req.body.payroll_attendance_week_id !== ''
+      ? numberValue(req.body, 'payroll_attendance_week_id', 'Semana de asistencia', { min: 1 })
+      : null;
+    if (attendanceWeekId) {
+      const week = db.prepare(
+        "SELECT id FROM payroll_attendance_weeks WHERE id = ? AND deleted_at IS NULL AND status != 'cancelada'",
+      ).get(attendanceWeekId);
+      if (!week) throw badRequest('Semana de asistencia no encontrada.');
+    }
 
     const rates = getExchangeRateMap();
     const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
@@ -6311,12 +6366,203 @@ app.post('/api/financial/payroll', requireAuth, requireAdminOnly, (req, res, nex
 
     const audit = createdByFields(req);
     const result = db.prepare(
-      `INSERT INTO manual_payroll_expenses (year, month, concept, amount_original, currency, exchange_rate_to_mxn, amount_mxn, notes, created_by_user_id, created_by_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(year, month, concept, amountOriginal, currency, exchangeRate, amountMxn, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
+      `INSERT INTO manual_payroll_expenses (
+         year, month, week_number, week_start_date, week_end_date, payroll_attendance_week_id,
+         concept, amount_original, currency, exchange_rate_to_mxn, amount_mxn, notes,
+         created_by_user_id, created_by_name, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      year, month, weekNumber, weekStartDate, weekEndDate, attendanceWeekId,
+      concept, amountOriginal, currency, exchangeRate, amountMxn, notes,
+      audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at,
+    );
 
     logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'manual_payroll', entityId: result.lastInsertRowid, entityLabel: concept });
     res.status(201).json(db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) { next(error); }
+});
+
+app.put('/api/financial/payroll/:id', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const existing = db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!existing) throw badRequest('Registro de nómina no encontrado.');
+
+    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
+    const weekNumber = numberValue(req.body, 'week_number', 'Número de semana', { min: 1, max: 6 });
+    const weekStartDate = requiredDate(req.body, 'week_start_date', 'Fecha inicio');
+    const weekEndDate = requiredDate(req.body, 'week_end_date', 'Fecha fin');
+    if (weekStartDate > weekEndDate) throw badRequest('La fecha inicio no puede ser posterior a la fecha fin.');
+    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const notes = optionalText(req.body, 'notes');
+    const concept = optionalText(req.body, 'concept') || `Semana ${weekNumber}`;
+    let attendanceWeekId = req.body.payroll_attendance_week_id != null && req.body.payroll_attendance_week_id !== ''
+      ? numberValue(req.body, 'payroll_attendance_week_id', 'Semana de asistencia', { min: 1 })
+      : null;
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+    const audit = updatedByFields(req);
+
+    db.prepare(
+      `UPDATE manual_payroll_expenses SET
+         year=?, month=?, week_number=?, week_start_date=?, week_end_date=?, payroll_attendance_week_id=?,
+         concept=?, amount_original=?, currency=?, exchange_rate_to_mxn=?, amount_mxn=?, notes=?,
+         updated_by_user_id=?, updated_by_name=?, updated_at=?
+       WHERE id=?`,
+    ).run(
+      year, month, weekNumber, weekStartDate, weekEndDate, attendanceWeekId,
+      concept, amountOriginal, currency, exchangeRate, amountMxn, notes,
+      audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id,
+    );
+
+    logAuditEvent(db, {
+      req, action: 'update', module: 'financial', entityType: 'manual_payroll',
+      entityId: Number(req.params.id), entityLabel: concept, before: existing,
+    });
+    res.json(db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+app.post('/api/financial/payroll/:id/delete', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const existing = db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!existing) throw badRequest('Registro de nómina no encontrado.');
+    const reason = requiredText(req.body, 'reason', 'Motivo de eliminación');
+    const del = deletedByFields(req);
+    const audit = updatedByFields(req);
+    db.prepare(
+      `UPDATE manual_payroll_expenses SET deleted_at=?, deleted_by_user_id=?, deleted_by_name=?, delete_reason=?,
+         updated_by_user_id=?, updated_by_name=?, updated_at=? WHERE id=?`,
+    ).run(
+      del.deleted_at, del.deleted_by_user_id, del.deleted_by_name, reason,
+      audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id,
+    );
+    logAuditEvent(db, {
+      req, action: 'delete', module: 'financial', entityType: 'manual_payroll',
+      entityId: Number(req.params.id), entityLabel: existing.concept, metadata: { reason },
+    });
+    res.json(db.prepare('SELECT * FROM manual_payroll_expenses WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+// --- Operating expenses (other OpEx by category) ---
+
+app.get('/api/financial/operating-expenses/categories', requireAuth, requireAdminOnly, (_req, res) => {
+  res.json({ data: OPERATING_EXPENSE_CATEGORIES });
+});
+
+app.get('/api/financial/operating-expenses', requireAuth, requireAdminOnly, (req, res) => {
+  const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+  const month = req.query.month ? Number(req.query.month) : null;
+  let where = 'year = ? AND deleted_at IS NULL';
+  const params = [year];
+  if (month) { where += ' AND month = ?'; params.push(month); }
+  const data = db.prepare(
+    `SELECT * FROM operating_expenses WHERE ${where} ORDER BY month, expense_date, id`,
+  ).all(...params);
+  const total = roundMoneyFin(data.reduce((s, r) => s + Number(r.amount_mxn || 0), 0));
+  const byCategory = {};
+  for (const category of OPERATING_EXPENSE_CATEGORIES) byCategory[category] = 0;
+  for (const row of data) {
+    const key = OPERATING_EXPENSE_CATEGORIES.includes(row.category) ? row.category : 'Otros';
+    byCategory[key] = roundMoneyFin((byCategory[key] || 0) + Number(row.amount_mxn || 0));
+  }
+  res.json({ data, total_mxn: total, by_category: byCategory, categories: OPERATING_EXPENSE_CATEGORIES });
+});
+
+app.post('/api/financial/operating-expenses', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
+    const category = enumValue(req.body, 'category', 'Categoría', OPERATING_EXPENSE_CATEGORIES);
+    const description = optionalText(req.body, 'description');
+    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const expenseDate = requiredDate(req.body, 'expense_date', 'Fecha');
+    const notes = optionalText(req.body, 'notes');
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+    const audit = createdByFields(req);
+
+    const result = db.prepare(
+      `INSERT INTO operating_expenses (
+         year, month, category, description, amount_original, currency, exchange_rate_to_mxn, amount_mxn,
+         expense_date, notes, created_by_user_id, created_by_name, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      year, month, category, description, amountOriginal, currency, exchangeRate, amountMxn,
+      expenseDate, notes, audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at,
+    );
+
+    logAuditEvent(db, {
+      req, action: 'create', module: 'financial', entityType: 'operating_expense',
+      entityId: result.lastInsertRowid, entityLabel: `${category} ${expenseDate}`,
+    });
+    res.status(201).json(db.prepare('SELECT * FROM operating_expenses WHERE id = ?').get(result.lastInsertRowid));
+  } catch (error) { next(error); }
+});
+
+app.put('/api/financial/operating-expenses/:id', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const existing = db.prepare('SELECT * FROM operating_expenses WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!existing) throw badRequest('Gasto de operación no encontrado.');
+
+    const year = numberValue(req.body, 'year', 'Año', { min: 2020, max: 2100 });
+    const month = numberValue(req.body, 'month', 'Mes', { min: 1, max: 12 });
+    const category = enumValue(req.body, 'category', 'Categoría', OPERATING_EXPENSE_CATEGORIES);
+    const description = optionalText(req.body, 'description');
+    const amountOriginal = numberValue(req.body, 'amount_original', 'Monto', { min: 0.01 });
+    const currency = currencyValue(req.body, 'currency', 'Moneda');
+    const expenseDate = requiredDate(req.body, 'expense_date', 'Fecha');
+    const notes = optionalText(req.body, 'notes');
+
+    const rates = getExchangeRateMap();
+    const exchangeRate = currency === 'MXN' ? 1 : (rates[currency] || 1);
+    const amountMxn = roundMoneyFin(amountOriginal * exchangeRate);
+    const audit = updatedByFields(req);
+
+    db.prepare(
+      `UPDATE operating_expenses SET
+         year=?, month=?, category=?, description=?, amount_original=?, currency=?, exchange_rate_to_mxn=?, amount_mxn=?,
+         expense_date=?, notes=?, updated_by_user_id=?, updated_by_name=?, updated_at=?
+       WHERE id=?`,
+    ).run(
+      year, month, category, description, amountOriginal, currency, exchangeRate, amountMxn,
+      expenseDate, notes, audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id,
+    );
+
+    logAuditEvent(db, {
+      req, action: 'update', module: 'financial', entityType: 'operating_expense',
+      entityId: Number(req.params.id), entityLabel: `${category} ${expenseDate}`, before: existing,
+    });
+    res.json(db.prepare('SELECT * FROM operating_expenses WHERE id = ?').get(req.params.id));
+  } catch (error) { next(error); }
+});
+
+app.post('/api/financial/operating-expenses/:id/delete', requireAuth, requireAdminOnly, (req, res, next) => {
+  try {
+    const existing = db.prepare('SELECT * FROM operating_expenses WHERE id = ? AND deleted_at IS NULL').get(req.params.id);
+    if (!existing) throw badRequest('Gasto de operación no encontrado.');
+    const reason = requiredText(req.body, 'reason', 'Motivo de eliminación');
+    const del = deletedByFields(req);
+    const audit = updatedByFields(req);
+    db.prepare(
+      `UPDATE operating_expenses SET deleted_at=?, deleted_by_user_id=?, deleted_by_name=?, delete_reason=?,
+         updated_by_user_id=?, updated_by_name=?, updated_at=? WHERE id=?`,
+    ).run(
+      del.deleted_at, del.deleted_by_user_id, del.deleted_by_name, reason,
+      audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, req.params.id,
+    );
+    logAuditEvent(db, {
+      req, action: 'delete', module: 'financial', entityType: 'operating_expense',
+      entityId: Number(req.params.id), entityLabel: `${existing.category} ${existing.expense_date}`, metadata: { reason },
+    });
+    res.json(db.prepare('SELECT * FROM operating_expenses WHERE id = ?').get(req.params.id));
   } catch (error) { next(error); }
 });
 
@@ -6618,7 +6864,12 @@ app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (r
       bankMovements = db.prepare(`SELECT * FROM bank_statement_movements WHERE bank_statement_summary_id IN (${bankSummaryIds.map(() => '?').join(',')}) AND classification_status != 'ignorado'`).all(...bankSummaryIds);
     }
 
-    const manualPayroll = db.prepare('SELECT * FROM manual_payroll_expenses WHERE year = ? AND month = ?').all(year, month);
+    const manualPayroll = db.prepare(
+      'SELECT * FROM manual_payroll_expenses WHERE year = ? AND month = ? AND deleted_at IS NULL',
+    ).all(year, month);
+    const operatingExpenses = db.prepare(
+      'SELECT * FROM operating_expenses WHERE year = ? AND month = ? AND deleted_at IS NULL',
+    ).all(year, month);
     const adjustments = db.prepare("SELECT * FROM financial_adjustments WHERE year = ? AND month = ? AND status = 'activo' AND deleted_at IS NULL").all(year, month);
 
     // Accounts receivable
@@ -6639,6 +6890,7 @@ app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (r
       bankSummaries,
       bankMovements,
       manualPayroll,
+      operatingExpenses,
       adjustments,
       accountsReceivable,
       omittedProjectIds,
@@ -6647,6 +6899,9 @@ app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (r
     const result = calculateFinancialStatement(calcData, settings);
     const unclassified = bankMovements.filter((m) => m.classification_status === 'sin_clasificar').length;
     result.unclassified_movements_count = unclassified;
+    const dataSnapshot = JSON.stringify({
+      operating_expenses_breakdown: result.operating_expenses_breakdown,
+    });
 
     const audit = existing ? updatedByFields(req) : createdByFields(req);
 
@@ -6659,7 +6914,7 @@ app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (r
           accounts_receivable_mxn=?, accounts_payable_mxn=?,
           bank_initial_balance_mxn=?, bank_deposits_mxn=?, bank_withdrawals_mxn=?, bank_final_balance_mxn=?,
           unclassified_movements_count=?,
-          configuration_snapshot_json=?,
+          configuration_snapshot_json=?, data_snapshot_json=?,
           updated_by_user_id=?, updated_by_name=?, updated_at=?
         WHERE id=?`,
       ).run(
@@ -6669,11 +6924,12 @@ app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (r
         result.accounts_receivable_mxn, result.accounts_payable_mxn,
         result.bank_initial_balance_mxn, result.bank_deposits_mxn, result.bank_withdrawals_mxn, result.bank_final_balance_mxn,
         result.unclassified_movements_count,
-        JSON.stringify(settings),
+        JSON.stringify(settings), dataSnapshot,
         audit.updated_by_user_id, audit.updated_by_name, audit.updated_at, existing.id,
       );
       logAuditEvent(db, { req, action: 'update', module: 'financial', entityType: 'financial_statement', entityId: existing.id, entityLabel: `${year}-${month}` });
-      res.json(db.prepare('SELECT * FROM financial_statements WHERE id = ?').get(existing.id));
+      const row = db.prepare('SELECT * FROM financial_statements WHERE id = ?').get(existing.id);
+      res.json({ ...row, operating_expenses_breakdown: result.operating_expenses_breakdown });
     } else {
       const ins = db.prepare(
         `INSERT INTO financial_statements (year, month, status,
@@ -6682,19 +6938,20 @@ app.post('/api/financial/statements/generate', requireAuth, requireAdminOnly, (r
           ivan_commission_mxn, real_administrative_profit_mxn,
           accounts_receivable_mxn, accounts_payable_mxn,
           bank_initial_balance_mxn, bank_deposits_mxn, bank_withdrawals_mxn, bank_final_balance_mxn,
-          unclassified_movements_count, configuration_snapshot_json,
+          unclassified_movements_count, configuration_snapshot_json, data_snapshot_json,
           created_by_user_id, created_by_name, created_at, updated_at)
-        VALUES (?, ?, 'borrador', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (?, ?, 'borrador', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(year, month,
         result.revenue_net_mxn, result.cost_of_sales_mxn, result.gross_profit_mxn, result.operating_expenses_mxn,
         result.net_administrative_profit_mxn, result.estimated_isr_mxn, result.profit_after_isr_mxn,
         result.ivan_commission_mxn, result.real_administrative_profit_mxn,
         result.accounts_receivable_mxn, result.accounts_payable_mxn,
         result.bank_initial_balance_mxn, result.bank_deposits_mxn, result.bank_withdrawals_mxn, result.bank_final_balance_mxn,
-        result.unclassified_movements_count, JSON.stringify(settings),
+        result.unclassified_movements_count, JSON.stringify(settings), dataSnapshot,
         audit.created_by_user_id, audit.created_by_name, audit.created_at, audit.created_at);
       logAuditEvent(db, { req, action: 'create', module: 'financial', entityType: 'financial_statement', entityId: ins.lastInsertRowid, entityLabel: `${year}-${month}` });
-      res.status(201).json(db.prepare('SELECT * FROM financial_statements WHERE id = ?').get(ins.lastInsertRowid));
+      const row = db.prepare('SELECT * FROM financial_statements WHERE id = ?').get(ins.lastInsertRowid);
+      res.status(201).json({ ...row, operating_expenses_breakdown: result.operating_expenses_breakdown });
     }
   } catch (error) { next(error); }
 });

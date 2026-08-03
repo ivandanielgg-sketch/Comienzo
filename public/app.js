@@ -6469,7 +6469,7 @@ function showKpisTab() {
 }
 
 function switchFinSubtab(name) {
-  const sections = ['statement', 'payable', 'receivable', 'bank', 'payroll', 'adjustments', 'archive', 'config'];
+  const sections = ['statement', 'payable', 'receivable', 'bank', 'opex', 'adjustments', 'archive', 'config'];
   sections.forEach((s) => {
     const section = document.getElementById('fin-' + s + '-section');
     const btn = document.getElementById('fin-subtab-' + s);
@@ -6478,7 +6478,7 @@ function switchFinSubtab(name) {
   });
 }
 
-['statement', 'payable', 'receivable', 'bank', 'payroll', 'adjustments', 'archive', 'config'].forEach((tab) => {
+['statement', 'payable', 'receivable', 'bank', 'opex', 'adjustments', 'archive', 'config'].forEach((tab) => {
   const btn = document.getElementById('fin-subtab-' + tab);
   if (btn) btn.addEventListener('click', () => { switchFinSubtab(tab); loadFinSection(tab); });
 });
@@ -6487,7 +6487,7 @@ async function loadFinSection(section) {
   if (section === 'receivable') await loadFinReceivable();
   if (section === 'payable') await loadFinPayable();
   if (section === 'bank') await loadFinBank();
-  if (section === 'payroll') await loadFinPayroll();
+  if (section === 'opex') await loadFinOpex();
   if (section === 'adjustments') await loadFinAdjustments();
   if (section === 'archive') await loadFinArchive();
   if (section === 'config') await loadFinConfig();
@@ -6516,9 +6516,35 @@ async function generateFinStatement() {
   }
 }
 
+function getFinOpexBreakdown(s) {
+  if (s.operating_expenses_breakdown) return s.operating_expenses_breakdown;
+  if (!s.data_snapshot_json) return null;
+  try {
+    const snap = typeof s.data_snapshot_json === 'string' ? JSON.parse(s.data_snapshot_json) : s.data_snapshot_json;
+    return snap.operating_expenses_breakdown || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function renderFinStatement(s) {
   const container = document.getElementById('fin-statement-result');
   const warn = s.unclassified_movements_count > 0 ? `<p class="text-muted" style="color:orange;">⚠ ${s.unclassified_movements_count} movimientos bancarios sin clasificar</p>` : '';
+  const breakdown = getFinOpexBreakdown(s);
+  let opexRows = `<tr><td>Gastos operativos</td><td style="text-align:right">${money.format(s.operating_expenses_mxn)}</td></tr>`;
+  if (breakdown) {
+    opexRows = `<tr><td>Nómina semanal</td><td style="text-align:right">${money.format(breakdown.payroll_mxn || 0)}</td></tr>`;
+    const cats = breakdown.other_by_category || {};
+    Object.keys(cats).forEach((cat) => {
+      if (Number(cats[cat]) > 0) {
+        opexRows += `<tr><td style="padding-left:1.25rem">${escapeHtml(cat)}</td><td style="text-align:right">${money.format(cats[cat])}</td></tr>`;
+      }
+    });
+    if (Number(breakdown.adjustments_mxn) > 0) {
+      opexRows += `<tr><td>Ajustes gasto operativo</td><td style="text-align:right">${money.format(breakdown.adjustments_mxn)}</td></tr>`;
+    }
+    opexRows += `<tr style="font-weight:bold"><td>Total gastos de operación</td><td style="text-align:right">${money.format(s.operating_expenses_mxn)}</td></tr>`;
+  }
   container.innerHTML = `
     ${warn}
     <table class="data-table">
@@ -6529,7 +6555,7 @@ function renderFinStatement(s) {
         <tr><td>Costos directos</td><td style="text-align:right">${money.format(s.cost_of_sales_mxn)}</td></tr>
         <tr style="font-weight:bold"><td>UTILIDAD BRUTA</td><td style="text-align:right">${money.format(s.gross_profit_mxn)}</td></tr>
         <tr><th colspan="2" style="text-align:left;background:#f0f0f0">GASTOS DE OPERACIÓN</th></tr>
-        <tr><td>Gastos operativos</td><td style="text-align:right">${money.format(s.operating_expenses_mxn)}</td></tr>
+        ${opexRows}
         <tr style="font-weight:bold"><td>UTILIDAD NETA ADMINISTRATIVA</td><td style="text-align:right">${money.format(s.net_administrative_profit_mxn)}</td></tr>
         <tr><td>ISR Estimado Administrativo (10%)</td><td style="text-align:right">${money.format(s.estimated_isr_mxn)}</td></tr>
         <tr><td>Utilidad después de ISR estimado</td><td style="text-align:right">${money.format(s.profit_after_isr_mxn)}</td></tr>
@@ -6608,22 +6634,216 @@ async function loadFinBank() {
   } catch (e) { console.error(e); }
 }
 
-async function loadFinPayroll() {
-  try {
-    const result = await api('/api/financial/payroll?year=' + new Date().getFullYear());
-    const container = document.getElementById('fin-payroll-list');
-    if (!result.data || result.data.length === 0) {
-      container.innerHTML = '<p class="empty-message">No hay registros de nómina manual.</p>';
-      return;
+const FIN_OPEX_MONTH_NAMES = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+let finOpexCategories = [];
+
+function initFinOpexFilters() {
+  const yearSel = document.getElementById('fin-opex-year');
+  const monthSel = document.getElementById('fin-opex-month');
+  if (!yearSel || !monthSel) return;
+  const currentYear = new Date().getFullYear();
+  if (!yearSel.options.length) {
+    for (let y = currentYear; y >= currentYear - 3; y--) {
+      yearSel.innerHTML += `<option value="${y}">${y}</option>`;
     }
-    let html = `<p><strong>Total MXN: ${money.format(result.total_mxn)}</strong></p>`;
-    html += '<table class="data-table"><thead><tr><th>Mes</th><th>Concepto</th><th>Monto</th><th>Moneda</th><th>MXN</th></tr></thead><tbody>';
-    result.data.forEach((p) => {
-      html += `<tr><td>${p.year}-${String(p.month).padStart(2,'0')}</td><td>${escapeHtml(p.concept)}</td><td>${money.format(p.amount_original)}</td><td>${escapeHtml(p.currency)}</td><td>${money.format(p.amount_mxn)}</td></tr>`;
+  }
+  if (!yearSel.value) yearSel.value = String(currentYear);
+  if (!monthSel.value) monthSel.value = String(new Date().getMonth() + 1);
+}
+
+function getFinOpexPeriod() {
+  initFinOpexFilters();
+  return {
+    year: Number(document.getElementById('fin-opex-year').value),
+    month: Number(document.getElementById('fin-opex-month').value),
+  };
+}
+
+async function ensureFinOpexCategories() {
+  if (finOpexCategories.length) return finOpexCategories;
+  const result = await api('/api/financial/operating-expenses/categories');
+  finOpexCategories = result.data || [];
+  const select = document.getElementById('fin-opex-category');
+  if (select) {
+    select.innerHTML = finOpexCategories.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  }
+  return finOpexCategories;
+}
+
+async function loadFinOpex() {
+  initFinOpexFilters();
+  const { year, month } = getFinOpexPeriod();
+  const summaryEl = document.getElementById('fin-opex-summary');
+  const payrollContainer = document.getElementById('fin-payroll-list');
+  const opexContainer = document.getElementById('fin-opex-list');
+  try {
+    await ensureFinOpexCategories();
+    const [payroll, opex] = await Promise.all([
+      api(`/api/financial/payroll?year=${year}&month=${month}`),
+      api(`/api/financial/operating-expenses?year=${year}&month=${month}`),
+    ]);
+    const payrollTotal = Number(payroll.total_mxn || 0);
+    const opexTotal = Number(opex.total_mxn || 0);
+    const grand = payrollTotal + opexTotal;
+    if (summaryEl) {
+      summaryEl.textContent = `${FIN_OPEX_MONTH_NAMES[month]} ${year}: Nómina ${money.format(payrollTotal)} + Otros ${money.format(opexTotal)} = ${money.format(grand)} MXN`;
+    }
+
+    if (!payroll.data || payroll.data.length === 0) {
+      payrollContainer.innerHTML = '<p class="empty-message">Sin gastos capturados este mes</p>';
+    } else {
+      let html = `<p><strong>Total nómina: ${money.format(payrollTotal)}</strong></p>`;
+      html += '<table class="data-table"><thead><tr><th>Semana</th><th>Inicio</th><th>Fin</th><th>Monto MXN</th><th>Notas</th><th></th></tr></thead><tbody>';
+      payroll.data.forEach((p) => {
+        html += `<tr>
+          <td>${p.week_number != null ? p.week_number : '-'}</td>
+          <td>${escapeHtml(p.week_start_date || '')}</td>
+          <td>${escapeHtml(p.week_end_date || '')}</td>
+          <td>${money.format(p.amount_mxn)}</td>
+          <td>${escapeHtml(p.notes || '')}</td>
+          <td class="row-actions">
+            <button type="button" class="secondary fin-edit-payroll-btn" data-id="${p.id}">Editar</button>
+            <button type="button" class="secondary fin-delete-payroll-btn" data-id="${p.id}" data-label="Semana ${p.week_number || ''}">Eliminar</button>
+          </td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      payrollContainer.innerHTML = html;
+    }
+
+    if (!opex.data || opex.data.length === 0) {
+      opexContainer.innerHTML = '<p class="empty-message">Sin gastos capturados este mes</p>';
+    } else {
+      let html = `<p><strong>Total otros gastos: ${money.format(opexTotal)}</strong></p>`;
+      html += '<table class="data-table"><thead><tr><th>Fecha</th><th>Categoría</th><th>Descripción</th><th>Monto MXN</th><th>Notas</th><th></th></tr></thead><tbody>';
+      opex.data.forEach((e) => {
+        html += `<tr>
+          <td>${escapeHtml(e.expense_date || '')}</td>
+          <td>${escapeHtml(e.category)}</td>
+          <td>${escapeHtml(e.description || '')}</td>
+          <td>${money.format(e.amount_mxn)}</td>
+          <td>${escapeHtml(e.notes || '')}</td>
+          <td class="row-actions">
+            <button type="button" class="secondary fin-edit-opex-btn" data-id="${e.id}">Editar</button>
+            <button type="button" class="secondary fin-delete-opex-btn" data-id="${e.id}" data-label="${escapeHtml(e.category)}">${'Eliminar'}</button>
+          </td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      opexContainer.innerHTML = html;
+    }
+
+    payrollContainer.querySelectorAll('.fin-edit-payroll-btn').forEach((btn) => {
+      btn.addEventListener('click', () => openFinPayrollModal(payroll.data.find((r) => String(r.id) === btn.dataset.id)));
     });
-    html += '</tbody></table>';
-    container.innerHTML = html;
-  } catch (e) { console.error(e); }
+    payrollContainer.querySelectorAll('.fin-delete-payroll-btn').forEach((btn) => {
+      btn.addEventListener('click', () => openFinOpexDeleteModal('payroll', btn.dataset.id, btn.dataset.label));
+    });
+    opexContainer.querySelectorAll('.fin-edit-opex-btn').forEach((btn) => {
+      btn.addEventListener('click', () => openFinOpexModal(opex.data.find((r) => String(r.id) === btn.dataset.id)));
+    });
+    opexContainer.querySelectorAll('.fin-delete-opex-btn').forEach((btn) => {
+      btn.addEventListener('click', () => openFinOpexDeleteModal('opex', btn.dataset.id, btn.dataset.label));
+    });
+  } catch (e) {
+    console.error(e);
+    if (payrollContainer) payrollContainer.innerHTML = `<p class="error">${escapeHtml(e.message || 'Error al cargar')}</p>`;
+  }
+}
+
+function closeFinModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.add('hidden');
+}
+
+function openFinModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('hidden');
+}
+
+async function openFinPayrollModal(row) {
+  const form = document.getElementById('fin-payroll-form');
+  const title = document.getElementById('fin-payroll-modal-title');
+  const msg = document.getElementById('fin-payroll-form-message');
+  const hint = document.getElementById('fin-payroll-weeks-hint');
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = '';
+  form.elements.payroll_attendance_week_id.value = '';
+  if (msg) msg.textContent = '';
+  const { year, month } = getFinOpexPeriod();
+  title.textContent = row ? 'Editar nómina semanal' : 'Agregar nómina semanal';
+  if (row) {
+    form.elements.id.value = row.id;
+    form.elements.week_number.value = row.week_number || '';
+    form.elements.week_start_date.value = row.week_start_date || '';
+    form.elements.week_end_date.value = row.week_end_date || '';
+    form.elements.amount_original.value = row.amount_original || '';
+    form.elements.notes.value = row.notes || '';
+    form.elements.payroll_attendance_week_id.value = row.payroll_attendance_week_id || '';
+  } else {
+    try {
+      const weeks = await api(`/api/financial/payroll/weeks-for-month?year=${year}&month=${month}`);
+      if (weeks.data && weeks.data.length) {
+        const options = weeks.data.map((w) =>
+          `Semana ${w.week_number}: ${w.week_start_date} → ${w.week_end_date}`,
+        ).join(' · ');
+        hint.innerHTML = `Semanas de asistencia del mes: ${escapeHtml(options)}. <button type="button" class="secondary" id="fin-payroll-preload-week">Usar primera semana libre</button>`;
+        const preloadBtn = document.getElementById('fin-payroll-preload-week');
+        if (preloadBtn) {
+          preloadBtn.addEventListener('click', () => {
+            const first = weeks.data[0];
+            form.elements.week_number.value = first.week_number;
+            form.elements.week_start_date.value = first.week_start_date;
+            form.elements.week_end_date.value = first.week_end_date;
+            form.elements.payroll_attendance_week_id.value = first.id;
+          });
+        }
+      } else {
+        hint.textContent = 'No hay semanas de asistencia registradas para este mes; captura las fechas manualmente.';
+      }
+    } catch (_) {
+      hint.textContent = '';
+    }
+  }
+  openFinModal('fin-payroll-modal');
+}
+
+async function openFinOpexModal(row) {
+  await ensureFinOpexCategories();
+  const form = document.getElementById('fin-opex-form');
+  const title = document.getElementById('fin-opex-modal-title');
+  const msg = document.getElementById('fin-opex-form-message');
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = '';
+  if (msg) msg.textContent = '';
+  title.textContent = row ? 'Editar gasto' : 'Agregar gasto';
+  const { year, month } = getFinOpexPeriod();
+  if (row) {
+    form.elements.id.value = row.id;
+    form.elements.category.value = row.category;
+    form.elements.description.value = row.description || '';
+    form.elements.amount_original.value = row.amount_original || '';
+    form.elements.expense_date.value = row.expense_date || '';
+    form.elements.notes.value = row.notes || '';
+  } else {
+    form.elements.expense_date.value = `${year}-${String(month).padStart(2, '0')}-01`;
+  }
+  openFinModal('fin-opex-modal');
+}
+
+function openFinOpexDeleteModal(entityType, entityId, label) {
+  const form = document.getElementById('fin-opex-delete-form');
+  const msg = document.getElementById('fin-opex-delete-message');
+  const labelEl = document.getElementById('fin-opex-delete-label');
+  if (!form) return;
+  form.reset();
+  form.elements.entity_type.value = entityType;
+  form.elements.entity_id.value = entityId;
+  if (labelEl) labelEl.textContent = label || '';
+  if (msg) msg.textContent = '';
+  openFinModal('fin-opex-delete-modal');
 }
 
 async function loadFinAdjustments() {
@@ -6727,6 +6947,115 @@ if (document.getElementById('fin-reauth-cancel')) {
 
 if (document.getElementById('fin-generate-btn')) {
   document.getElementById('fin-generate-btn').addEventListener('click', generateFinStatement);
+}
+
+if (document.getElementById('fin-opex-year')) {
+  document.getElementById('fin-opex-year').addEventListener('change', () => loadFinOpex());
+}
+if (document.getElementById('fin-opex-month')) {
+  document.getElementById('fin-opex-month').addEventListener('change', () => loadFinOpex());
+}
+if (document.getElementById('fin-new-payroll-btn')) {
+  document.getElementById('fin-new-payroll-btn').addEventListener('click', () => openFinPayrollModal(null));
+}
+if (document.getElementById('fin-new-opex-btn')) {
+  document.getElementById('fin-new-opex-btn').addEventListener('click', () => openFinOpexModal(null));
+}
+['fin-payroll-modal-close', 'fin-payroll-form-cancel'].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('click', () => closeFinModal('fin-payroll-modal'));
+});
+['fin-opex-modal-close', 'fin-opex-form-cancel'].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('click', () => closeFinModal('fin-opex-modal'));
+});
+['fin-opex-delete-close', 'fin-opex-delete-cancel'].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('click', () => closeFinModal('fin-opex-delete-modal'));
+});
+
+if (document.getElementById('fin-payroll-form')) {
+  document.getElementById('fin-payroll-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const msg = document.getElementById('fin-payroll-form-message');
+    const { year, month } = getFinOpexPeriod();
+    const payload = {
+      year,
+      month,
+      week_number: Number(form.elements.week_number.value),
+      week_start_date: form.elements.week_start_date.value,
+      week_end_date: form.elements.week_end_date.value,
+      amount_original: Number(form.elements.amount_original.value),
+      currency: 'MXN',
+      notes: form.elements.notes.value || null,
+      payroll_attendance_week_id: form.elements.payroll_attendance_week_id.value || null,
+    };
+    try {
+      const id = form.elements.id.value;
+      if (id) {
+        await api(`/api/financial/payroll/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      } else {
+        await api('/api/financial/payroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      }
+      closeFinModal('fin-payroll-modal');
+      await loadFinOpex();
+    } catch (err) {
+      if (msg) msg.textContent = err.message || 'Error al guardar';
+    }
+  });
+}
+
+if (document.getElementById('fin-opex-form')) {
+  document.getElementById('fin-opex-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const msg = document.getElementById('fin-opex-form-message');
+    const { year, month } = getFinOpexPeriod();
+    const payload = {
+      year,
+      month,
+      category: form.elements.category.value,
+      description: form.elements.description.value || null,
+      amount_original: Number(form.elements.amount_original.value),
+      currency: 'MXN',
+      expense_date: form.elements.expense_date.value,
+      notes: form.elements.notes.value || null,
+    };
+    try {
+      const id = form.elements.id.value;
+      if (id) {
+        await api(`/api/financial/operating-expenses/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      } else {
+        await api('/api/financial/operating-expenses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      }
+      closeFinModal('fin-opex-modal');
+      await loadFinOpex();
+    } catch (err) {
+      if (msg) msg.textContent = err.message || 'Error al guardar';
+    }
+  });
+}
+
+if (document.getElementById('fin-opex-delete-form')) {
+  document.getElementById('fin-opex-delete-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const msg = document.getElementById('fin-opex-delete-message');
+    const entityType = form.elements.entity_type.value;
+    const entityId = form.elements.entity_id.value;
+    const reason = form.elements.reason.value;
+    const path = entityType === 'payroll'
+      ? `/api/financial/payroll/${entityId}/delete`
+      : `/api/financial/operating-expenses/${entityId}/delete`;
+    try {
+      await api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) });
+      closeFinModal('fin-opex-delete-modal');
+      await loadFinOpex();
+    } catch (err) {
+      if (msg) msg.textContent = err.message || 'Error al eliminar';
+    }
+  });
 }
 
 if (document.getElementById('fin-config-form')) {

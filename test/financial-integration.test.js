@@ -117,6 +117,9 @@ test('Financial Statements module integration', async (t) => {
     const { status, data } = await api('POST', '/api/financial/payroll', {
       year: 2026,
       month: 4,
+      week_number: 1,
+      week_start_date: '2026-04-01',
+      week_end_date: '2026-04-05',
       concept: 'Nómina quincenal 1',
       amount_original: 120000,
       currency: 'MXN',
@@ -125,6 +128,7 @@ test('Financial Statements module integration', async (t) => {
     assert.equal(data.amount_mxn, 120000);
     assert.equal(data.year, 2026);
     assert.equal(data.month, 4);
+    assert.equal(data.week_number, 1);
   });
 
   await t.test('create financial adjustment', async () => {
@@ -183,6 +187,91 @@ test('Financial Statements module integration', async (t) => {
     assert.equal(classified.classification_type, 'ingreso_proyecto');
   });
 
+  await t.test('create weekly payroll and operating expenses for July 2026', async () => {
+    const payrollWeeks = [
+      { week_number: 1, week_start_date: '2026-07-01', week_end_date: '2026-07-05', amount_original: 64193.33 },
+      { week_number: 2, week_start_date: '2026-07-06', week_end_date: '2026-07-12', amount_original: 63450 },
+      { week_number: 3, week_start_date: '2026-07-13', week_end_date: '2026-07-19', amount_original: 63450 },
+      { week_number: 4, week_start_date: '2026-07-20', week_end_date: '2026-07-26', amount_original: 63450 },
+      { week_number: 5, week_start_date: '2026-07-27', week_end_date: '2026-07-31', amount_original: 63450 },
+    ];
+    for (const week of payrollWeeks) {
+      const { status, data } = await api('POST', '/api/financial/payroll', {
+        year: 2026,
+        month: 7,
+        ...week,
+        currency: 'MXN',
+      });
+      assert.equal(status, 201);
+      assert.equal(data.week_number, week.week_number);
+      assert.ok(!data.deleted_at);
+    }
+
+    const otherExpenses = [
+      { category: 'IMSS/ISN', amount_original: 171672, expense_date: '2026-07-15', description: 'IMSS e ISN' },
+      { category: 'Efectivo', amount_original: 187921.31, expense_date: '2026-07-20', description: 'Efectivo' },
+      { category: 'Servicios', amount_original: 2815.30, expense_date: '2026-07-10', description: 'Servicios' },
+      { category: 'Renta', amount_original: 7400, expense_date: '2026-07-01', description: 'Renta' },
+      { category: 'Vehículo', amount_original: 9135.34, expense_date: '2026-07-18', description: 'Vehículo' },
+      { category: 'Mantenimiento', amount_original: 17465.52, expense_date: '2026-07-22', description: 'Mtto vehículos y oficina' },
+      { category: 'Capacitación', amount_original: 53095, expense_date: '2026-07-25', description: 'Curso sistema' },
+      { category: 'Gasolina', amount_original: 17941.38, expense_date: '2026-07-28', description: 'Gasolina' },
+    ];
+    for (const expense of otherExpenses) {
+      const { status, data } = await api('POST', '/api/financial/operating-expenses', {
+        year: 2026,
+        month: 7,
+        currency: 'MXN',
+        ...expense,
+      });
+      assert.equal(status, 201);
+      assert.equal(data.category, expense.category);
+    }
+
+    const { status: listStatus, data: list } = await api('GET', '/api/financial/operating-expenses?year=2026&month=7');
+    assert.equal(listStatus, 200);
+    assert.equal(list.total_mxn, 467445.85);
+  });
+
+  await t.test('soft delete operating expense requires reason and hides from list', async () => {
+    const { data: list } = await api('GET', '/api/financial/operating-expenses?year=2026&month=7');
+    const target = list.data[0];
+    const { status } = await api('POST', `/api/financial/operating-expenses/${target.id}/delete`, {
+      reason: 'Captura duplicada de prueba',
+    });
+    assert.equal(status, 200);
+    const { data: after } = await api('GET', '/api/financial/operating-expenses?year=2026&month=7');
+    assert.equal(after.data.length, list.data.length - 1);
+
+    // Restore by creating again so July total stays correct for statement test
+    await api('POST', '/api/financial/operating-expenses', {
+      year: 2026,
+      month: 7,
+      currency: 'MXN',
+      category: target.category,
+      description: target.description,
+      amount_original: target.amount_original,
+      expense_date: target.expense_date,
+      notes: 'restaurado para prueba',
+    });
+  });
+
+  await t.test('generate financial statement for July 2026 uses OpEx capture', async () => {
+    const { status, data } = await api('POST', '/api/financial/statements/generate', {
+      year: 2026,
+      month: 7,
+    });
+    assert.ok(status === 201 || status === 200);
+    assert.equal(data.year, 2026);
+    assert.equal(data.month, 7);
+    assert.equal(data.operating_expenses_mxn, 785439.18);
+    assert.ok(data.operating_expenses_breakdown);
+    assert.equal(data.operating_expenses_breakdown.payroll_mxn, 317993.33);
+    assert.equal(data.operating_expenses_breakdown.other_total_mxn, 467445.85);
+    assert.ok(typeof data.estimated_isr_mxn === 'number');
+    assert.ok(typeof data.ivan_commission_mxn === 'number');
+  });
+
   await t.test('generate financial statement for April 2026', async () => {
     const { status, data } = await api('POST', '/api/financial/statements/generate', {
       year: 2026,
@@ -200,7 +289,8 @@ test('Financial Statements module integration', async (t) => {
 
   await t.test('close financial statement creates snapshot', async () => {
     const { data: stmts } = await api('GET', '/api/financial/statements');
-    const stmt = stmts.data[0];
+    const stmt = stmts.data.find((s) => s.year === 2026 && s.month === 4);
+    assert.ok(stmt, 'April 2026 statement should exist');
     const { status, data } = await api('POST', `/api/financial/statements/${stmt.id}/close`);
     assert.equal(status, 200);
     assert.equal(data.status, 'cerrado');
@@ -216,7 +306,8 @@ test('Financial Statements module integration', async (t) => {
 
   await t.test('reopen allows regeneration', async () => {
     const { data: stmts } = await api('GET', '/api/financial/statements');
-    const stmt = stmts.data[0];
+    const stmt = stmts.data.find((s) => s.year === 2026 && s.month === 4);
+    assert.ok(stmt, 'April 2026 statement should exist');
     const { status } = await api('POST', `/api/financial/statements/${stmt.id}/reopen`);
     assert.equal(status, 200);
 
@@ -241,7 +332,13 @@ test('Financial Statements module integration', async (t) => {
     assert.ok('bankStatementSummaries' in data.data);
     assert.ok('bankStatementMovements' in data.data);
     assert.ok('manualPayrollExpenses' in data.data);
+    assert.ok('operatingExpenses' in data.data);
     assert.ok('financialAdjustments' in data.data);
     assert.ok('financialSettings' in data.data);
+  });
+
+  await t.test('non-admin cannot capture operating expenses', async () => {
+    const { status } = await api('GET', '/api/financial/operating-expenses?year=2026&month=7', null, userCookie);
+    assert.equal(status, 403);
   });
 });

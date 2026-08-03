@@ -276,8 +276,16 @@ const BACKUP_ENTITIES = [
   {
     key: 'manualPayrollExpenses',
     table: 'manual_payroll_expenses',
-    query: 'SELECT * FROM manual_payroll_expenses ORDER BY year, month, id',
-    stableKeys: ['year', 'month', 'concept', 'amount_original'],
+    query: 'SELECT * FROM manual_payroll_expenses WHERE deleted_at IS NULL ORDER BY year, month, id',
+    stableKeys: ['year', 'month', 'week_number', 'concept', 'amount_original'],
+    status: ENTITY_STATUS.INCLUDED,
+    module: 'financial',
+  },
+  {
+    key: 'operatingExpenses',
+    table: 'operating_expenses',
+    query: 'SELECT * FROM operating_expenses WHERE deleted_at IS NULL ORDER BY year, month, id',
+    stableKeys: ['year', 'month', 'category', 'expense_date', 'amount_original'],
     status: ENTITY_STATUS.INCLUDED,
     module: 'financial',
   },
