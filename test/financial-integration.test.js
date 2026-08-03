@@ -117,6 +117,9 @@ test('Financial Statements module integration', async (t) => {
     const { status, data } = await api('POST', '/api/financial/payroll', {
       year: 2026,
       month: 4,
+      week_number: 1,
+      week_start_date: '2026-04-01',
+      week_end_date: '2026-04-05',
       concept: 'Nómina quincenal 1',
       amount_original: 120000,
       currency: 'MXN',
@@ -125,6 +128,7 @@ test('Financial Statements module integration', async (t) => {
     assert.equal(data.amount_mxn, 120000);
     assert.equal(data.year, 2026);
     assert.equal(data.month, 4);
+    assert.equal(data.week_number, 1);
   });
 
   await t.test('create financial adjustment', async () => {
@@ -285,7 +289,8 @@ test('Financial Statements module integration', async (t) => {
 
   await t.test('close financial statement creates snapshot', async () => {
     const { data: stmts } = await api('GET', '/api/financial/statements');
-    const stmt = stmts.data[0];
+    const stmt = stmts.data.find((s) => s.year === 2026 && s.month === 4);
+    assert.ok(stmt, 'April 2026 statement should exist');
     const { status, data } = await api('POST', `/api/financial/statements/${stmt.id}/close`);
     assert.equal(status, 200);
     assert.equal(data.status, 'cerrado');
@@ -301,7 +306,8 @@ test('Financial Statements module integration', async (t) => {
 
   await t.test('reopen allows regeneration', async () => {
     const { data: stmts } = await api('GET', '/api/financial/statements');
-    const stmt = stmts.data[0];
+    const stmt = stmts.data.find((s) => s.year === 2026 && s.month === 4);
+    assert.ok(stmt, 'April 2026 statement should exist');
     const { status } = await api('POST', `/api/financial/statements/${stmt.id}/reopen`);
     assert.equal(status, 200);
 
