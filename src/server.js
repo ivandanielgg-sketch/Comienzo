@@ -6,6 +6,7 @@ const session = require('express-session');
 const path = require('node:path');
 const { getDb } = require('./db');
 const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate, isDbTruthy } = require('./db/dialect');
+const { isUniqueConstraintError, uniqueConstraintMessage } = require('./db/uniqueConstraint');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
@@ -780,6 +781,15 @@ function getProjectOrFail(projectId) {
   return project;
 }
 
+function assertUniqueProjectQuoteNumber(quoteNumber, excludeId = null) {
+  const existing = excludeId == null
+    ? db.prepare('SELECT id FROM projects WHERE quote_number = ? LIMIT 1').get(quoteNumber)
+    : db.prepare('SELECT id FROM projects WHERE quote_number = ? AND id != ? LIMIT 1').get(quoteNumber, Number(excludeId));
+  if (existing) {
+    throw badRequest('El numero de cotizacion ya existe.');
+  }
+}
+
 function getUserOrFail(userId) {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
   if (!user) {
@@ -1484,6 +1494,7 @@ app.get('/api/projects/:id', requireAuth, requirePermission('projects', 'view'),
 app.post('/api/projects', requireAuth, requirePermission('projects', 'create'), (req, res, next) => {
   try {
     const project = normalizeProject(req.body);
+    assertUniqueProjectQuoteNumber(project.quote_number);
     const audit = createdByFields(req);
     const result = db
       .prepare(
@@ -1570,6 +1581,7 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
   try {
     const before = getProjectOrFail(req.params.id);
     const project = normalizeProject(req.body, { existingRow: before });
+    assertUniqueProjectQuoteNumber(project.quote_number, req.params.id);
     const audit = updatedByFields(req);
     db.prepare(
       `UPDATE projects SET
@@ -7355,16 +7367,8 @@ app.use((err, req, res, next) => {
     return next(err);
   }
 
-  if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-    let message = 'El registro ya existe.';
-    if (err.message.includes('users.username')) {
-      message = 'El usuario ya existe.';
-    } else if (err.message.includes('employees.employee_number')) {
-      message = 'El numero de empleado ya existe.';
-    } else if (err.message.includes('projects.quote_number')) {
-      message = 'El numero de cotizacion ya existe.';
-    }
-    return res.status(400).json({ message });
+  if (isUniqueConstraintError(err)) {
+    return res.status(400).json({ message: uniqueConstraintMessage(err) });
   }
 
   const statusCode = err.statusCode || 500;
