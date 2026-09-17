@@ -5,7 +5,8 @@ const express = require('express');
 const session = require('express-session');
 const path = require('node:path');
 const { getDb } = require('./db');
-const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate, isDbTruthy } = require('./db/dialect');
+const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate, isDbTruthy, sqlDateCompareGte, sqlDateCompareLte } = require('./db/dialect');
+const { parseExportDateRange, buildProjectsExcelWorkbook } = require('./projectsExport');
 const { isUniqueConstraintError, uniqueConstraintMessage } = require('./db/uniqueConstraint');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
 const { createSqliteSessionStore } = require('./sessionStore');
@@ -1393,6 +1394,72 @@ app.get('/api/projects/assignable-employees', requireAuth, requirePermission('pr
      ORDER BY full_name ASC`,
   ).all();
   res.json({ data: employees });
+});
+
+function fetchProjectsForExcelExport({ closed, from, to }) {
+  const dateColumn = closed ? 'p.closed_at' : 'p.created_at';
+  const closedClause = closed ? 'p.closed_at IS NOT NULL' : 'p.closed_at IS NULL';
+  const orderBy = closed ? 'p.closed_at DESC, p.id DESC' : 'p.created_at DESC, p.id DESC';
+  const sql = `
+    SELECT
+      p.*,
+      ${PROJECT_INVOICED_SQL} AS total_invoiced_mxn,
+      ${PROJECT_CHARGED_SQL} AS total_charged,
+      ${PROJECT_SPENT_SQL} AS spent,
+      ${PROJECT_PENDING_SQL} AS pending_collection,
+      ${PROJECT_MARGIN_SQL} AS final_margin,
+      (SELECT full_name FROM employees WHERE id = p.vendedor_id) AS vendedor_nombre,
+      (SELECT full_name FROM employees WHERE id = p.tecnico_id) AS tecnico_nombre
+    FROM projects p
+    WHERE ${closedClause}
+      AND ${sqlDateCompareGte(dateColumn)}
+      AND ${sqlDateCompareLte(dateColumn)}
+    ORDER BY ${orderBy}
+  `;
+  return db.prepare(sql).all(from, to).map((row) => ({
+    ...row,
+    invoice_payment_status: resolveInvoicePaymentStatus(row),
+    purchase_order_not_applicable: !!row.purchase_order_not_applicable,
+  }));
+}
+
+app.get('/api/projects/export/excel', requireAuth, requirePermission('projects', 'view'), (req, res, next) => {
+  try {
+    const { from, to, days } = parseExportDateRange(req.query);
+    const activeProjects = fetchProjectsForExcelExport({ closed: false, from, to });
+    const closedProjects = fetchProjectsForExcelExport({ closed: true, from, to });
+    const xml = buildProjectsExcelWorkbook({
+      from,
+      to,
+      activeProjects,
+      closedProjects,
+      generatedBy: req.session.username || '',
+    });
+
+    logAuditEvent(db, {
+      req,
+      action: 'export',
+      module: 'projects',
+      entityType: 'projects_export',
+      entityLabel: 'Excel proyectos activos y cerrados',
+      metadata: {
+        format: 'excel',
+        from,
+        to,
+        days,
+        active_count: activeProjects.length,
+        closed_count: closedProjects.length,
+      },
+    });
+
+    const filename = `proyectos_${from}_${to}.xls`;
+    res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(xml);
+  } catch (error) {
+    error.statusCode = error.statusCode || 400;
+    next(error);
+  }
 });
 
 app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (req, res) => {

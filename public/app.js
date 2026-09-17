@@ -2385,6 +2385,107 @@ if (projectsSearchInput) {
   }));
 }
 
+function toIsoDateLocal(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function daysBetweenExportDates(from, to) {
+  const fromParts = from.split('-').map(Number);
+  const toParts = to.split('-').map(Number);
+  const fromUtc = Date.UTC(fromParts[0], fromParts[1] - 1, fromParts[2]);
+  const toUtc = Date.UTC(toParts[0], toParts[1] - 1, toParts[2]);
+  return Math.floor((toUtc - fromUtc) / 86400000) + 1;
+}
+
+function setProjectsExportRange(from, to) {
+  const fromInput = document.getElementById('projects-export-from');
+  const toInput = document.getElementById('projects-export-to');
+  if (fromInput) fromInput.value = from;
+  if (toInput) toInput.value = to;
+}
+
+function initProjectsExportDefaultRange() {
+  const to = new Date();
+  const from = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+  from.setFullYear(from.getFullYear() - 1);
+  from.setDate(from.getDate() + 1);
+  setProjectsExportRange(toIsoDateLocal(from), toIsoDateLocal(to));
+}
+
+function validateProjectsExportRange(from, to) {
+  if (!from || !to) {
+    return 'Indica el rango de fechas (desde y hasta).';
+  }
+  if (from > to) {
+    return 'La fecha "desde" no puede ser posterior a "hasta".';
+  }
+  if (daysBetweenExportDates(from, to) > 366) {
+    return 'El rango de fechas no puede exceder un año (366 dias).';
+  }
+  return '';
+}
+
+function exportProjectsExcel() {
+  const fromInput = document.getElementById('projects-export-from');
+  const toInput = document.getElementById('projects-export-to');
+  const messageEl = document.getElementById('projects-export-message');
+  const from = fromInput ? fromInput.value : '';
+  const to = toInput ? toInput.value : '';
+  const error = validateProjectsExportRange(from, to);
+  if (error) {
+    if (messageEl) messageEl.textContent = error;
+    window.alert(error);
+    return;
+  }
+  if (messageEl) messageEl.textContent = `Descargando Excel del ${from} al ${to}...`;
+  const params = new URLSearchParams({ from, to });
+  window.location.href = `/api/projects/export/excel?${params.toString()}`;
+}
+
+initProjectsExportDefaultRange();
+
+const projectsExportExcelBtn = document.getElementById('projects-export-excel-btn');
+if (projectsExportExcelBtn) {
+  projectsExportExcelBtn.addEventListener('click', exportProjectsExcel);
+}
+
+const closedProjectsExportExcelBtn = document.getElementById('closed-projects-export-excel-btn');
+if (closedProjectsExportExcelBtn) {
+  closedProjectsExportExcelBtn.addEventListener('click', () => {
+    const closedFrom = (document.getElementById('closed-date-from') || {}).value || '';
+    const closedTo = (document.getElementById('closed-date-to') || {}).value || '';
+    if (closedFrom && closedTo) {
+      setProjectsExportRange(closedFrom, closedTo);
+    }
+    const fromInput = document.getElementById('projects-export-from');
+    const toInput = document.getElementById('projects-export-to');
+    const error = validateProjectsExportRange(fromInput ? fromInput.value : '', toInput ? toInput.value : '');
+    if (error) {
+      window.alert(`${error} Ajusta el rango en la vista Proyectos o selecciona un rango de fechas valido aqui.`);
+      return;
+    }
+    exportProjectsExcel();
+  });
+}
+
+const projectsExportThisYear = document.getElementById('projects-export-this-year');
+if (projectsExportThisYear) {
+  projectsExportThisYear.addEventListener('click', () => {
+    const y = new Date().getFullYear();
+    setProjectsExportRange(`${y}-01-01`, `${y}-12-31`);
+  });
+}
+
+const projectsExportLast12m = document.getElementById('projects-export-last-12m');
+if (projectsExportLast12m) {
+  projectsExportLast12m.addEventListener('click', () => {
+    initProjectsExportDefaultRange();
+  });
+}
+
 if (closedProjectsSearchInput) {
   closedProjectsSearchInput.addEventListener('input', debounce(() => {
     state.closedSearch = closedProjectsSearchInput.value;

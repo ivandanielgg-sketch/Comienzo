@@ -263,6 +263,23 @@
                   <p class="muted">Selecciona un proyecto para agregar pagos, compras, gastos o salarios.</p>
                 </div>
               </div>
+              <div id="projects-export-bar" class="search-row" style="margin-bottom:12px;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+                <label style="flex-direction:row;gap:6px;align-items:center;">
+                  <span>Desde:</span>
+                  <input id="projects-export-from" type="date" style="width:auto;" />
+                </label>
+                <label style="flex-direction:row;gap:6px;align-items:center;">
+                  <span>Hasta:</span>
+                  <input id="projects-export-to" type="date" style="width:auto;" />
+                </label>
+                <button id="projects-export-excel-btn" class="secondary" type="button">Exportar Excel</button>
+                <button id="projects-export-this-year" class="secondary" type="button" style="padding:8px 10px;font-size:0.82rem;">Año actual</button>
+                <button id="projects-export-last-12m" class="secondary" type="button" style="padding:8px 10px;font-size:0.82rem;">Ultimos 12 meses</button>
+                <p id="projects-export-message" class="message muted" style="margin:0;flex-basis:100%;"></p>
+              </div>
+              <p class="muted" style="margin:-4px 0 10px;">
+                Exporta activos (por fecha de creacion) y cerrados (por fecha de cierre) en un Excel. Rango maximo: 1 año.
+              </p>
               <div class="search-row" style="margin-bottom:10px;">
                 <input id="projects-search" type="text" placeholder="Buscar por pedido, factura, cliente..." />
               </div>
@@ -419,6 +436,7 @@
                   El borrado definitivo requiere contrasena del admin.
                 </p>
               </div>
+              <button id="closed-projects-export-excel-btn" class="secondary" type="button">Exportar Excel</button>
             </div>
             <div class="search-row" style="margin-bottom:10px;">
               <input id="closed-projects-search" type="text" placeholder="Buscar proyectos cerrados..." />
