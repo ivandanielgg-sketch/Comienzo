@@ -9,6 +9,12 @@ const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate,
 const { parseExportDateRange, buildProjectsExcelWorkbook } = require('./projectsExport');
 const { isUniqueConstraintError, uniqueConstraintMessage } = require('./db/uniqueConstraint');
 const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
+const {
+  PENDING_TOLERANCE_MXN,
+  SETTLEMENT_PAYMENT_NOTES,
+  buildSettlementPlan,
+  amountsMatchWithinTolerance,
+} = require('./projectInvoiceSettlement');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
 const {
@@ -371,6 +377,17 @@ function normalizeInvoicePaymentFields(body, { existingRow = null, requireBillin
 
   let invoicePaidAt = optionalDate(body, 'invoice_paid_at', 'Fecha de pago');
   if (invoicePaymentStatus === 'Pagada') {
+    // Etapa 3: toda transición a Pagada debe pasar por /settle-invoice.
+    // Proyectos históricos ya Pagada pueden conservar el estatus vía PUT/POST.
+    const alreadyPaid = Boolean(existingRow && existingRow.invoice_payment_status === 'Pagada');
+    if (!alreadyPaid) {
+      throw badRequest(
+        'Para marcar la factura como Pagada use la liquidacion de cobranza con confirmacion de saldo.',
+      );
+    }
+    if (!invoicePaidAt) {
+      invoicePaidAt = existingRow.invoice_paid_at || null;
+    }
     if (!invoicePaidAt) {
       throw badRequest('Fecha de pago es obligatoria cuando el estatus es Pagada.');
     }
@@ -466,6 +483,59 @@ function badRequest(message) {
   const error = new Error(message);
   error.statusCode = 400;
   return error;
+}
+
+function conflict(message, details = {}) {
+  const error = new Error(message);
+  error.statusCode = 409;
+  error.details = details;
+  return error;
+}
+
+function runImmediateTransaction(work) {
+  const tx = db.transaction(work);
+  if (typeof tx.immediate === 'function') {
+    return tx.immediate();
+  }
+  return tx();
+}
+
+/** Bloqueo de fila en PG (FOR UPDATE); en SQLite la serializacion la da BEGIN IMMEDIATE. */
+function getProjectLockedOrFail(projectId) {
+  const sql = isPostgres()
+    ? 'SELECT * FROM projects WHERE id = ? FOR UPDATE'
+    : 'SELECT * FROM projects WHERE id = ?';
+  const project = db.prepare(sql).get(projectId);
+  if (!project) {
+    const error = new Error('Proyecto no encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return project;
+}
+
+function loadProjectMoneyRows(projectId) {
+  const payments = db
+    .prepare('SELECT * FROM project_payments WHERE project_id = ? ORDER BY payment_date DESC, id DESC')
+    .all(projectId);
+  const costs = db
+    .prepare('SELECT * FROM project_costs WHERE project_id = ? ORDER BY cost_date DESC, id DESC')
+    .all(projectId);
+  return { payments, costs };
+}
+
+function buildProjectSettlementPreview(projectRow, exchangeRates = getExchangeRateMap()) {
+  const { payments, costs } = loadProjectMoneyRows(projectRow.id);
+  const plan = buildSettlementPlan(projectRow, payments, costs, exchangeRates);
+  return {
+    project_id: projectRow.id,
+    quote_number: projectRow.quote_number,
+    closed_at: projectRow.closed_at || null,
+    status: projectRow.status,
+    invoice_payment_status_stored: projectRow.invoice_payment_status || null,
+    invoice_paid_at: projectRow.invoice_paid_at || null,
+    ...plan,
+  };
 }
 
 function addDaysToIsoDate(isoDate, days) {
@@ -1857,16 +1927,288 @@ app.post('/api/closed-projects/:id/restore', requireAuth, requirePermission('clo
 
 app.post('/api/projects/:id/payments', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
-    getProjectOrFail(req.params.id);
     const payment = normalizePayment(req.body);
     const audit = createdByFields(req);
-    const result = db.prepare(
-      `INSERT INTO project_payments (project_id, amount, currency, payment_date, notes, created_at, created_by_user_id, created_by_name)
-       VALUES (@project_id, @amount, @currency, @payment_date, @notes, @created_at, @created_by_user_id, @created_by_name)`,
-    ).run({ ...payment, project_id: req.params.id, ...audit });
+    const projectId = req.params.id;
+    runImmediateTransaction(() => {
+      // Misma serializacion que liquidacion automatica (FOR UPDATE / IMMEDIATE).
+      const locked = getProjectLockedOrFail(projectId);
+      const exchangeRates = getExchangeRateMap();
+      const preview = buildProjectSettlementPreview(locked, exchangeRates);
+      const paymentMxn = convertAmountToMxn(payment.amount, payment.currency, exchangeRates);
+      if (paymentMxn - preview.pending_collection_mxn > PENDING_TOLERANCE_MXN) {
+        throw conflict(
+          `El pago ($${paymentMxn.toFixed(2)} MXN) excede el saldo pendiente ($${preview.pending_collection_mxn.toFixed(2)} MXN).`,
+          {
+            code: 'PAYMENT_OVERPAY',
+            payment_amount_mxn: paymentMxn,
+            pending_collection_mxn: preview.pending_collection_mxn,
+          },
+        );
+      }
 
-    logAuditEvent(db, { req, action: 'create', module: 'payments', entityType: 'project_payment', entityId: result.lastInsertRowid, entityLabel: `Pago ${payment.amount} ${payment.currency}`, after: payment });
-    res.status(201).json(mapProject(getProjectOrFail(req.params.id), getExchangeRateMap()));
+      const insertResult = db.prepare(
+        `INSERT INTO project_payments (project_id, amount, currency, payment_date, notes, created_at, created_by_user_id, created_by_name)
+         VALUES (@project_id, @amount, @currency, @payment_date, @notes, @created_at, @created_by_user_id, @created_by_name)`,
+      ).run({ ...payment, project_id: projectId, ...audit });
+
+      logAuditEvent(db, {
+        req,
+        action: 'create',
+        module: 'payments',
+        entityType: 'project_payment',
+        entityId: insertResult.lastInsertRowid,
+        entityLabel: `Pago ${payment.amount} ${payment.currency}`,
+        after: payment,
+        metadata: { project_id: Number(projectId) },
+      });
+      return insertResult;
+    });
+
+    res.status(201).json(mapProject(getProjectOrFail(projectId), getExchangeRateMap()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/projects/:id/settlement-preview', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
+  try {
+    const project = getProjectOrFail(req.params.id);
+    res.json(buildProjectSettlementPreview(project));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/projects/:id/settle-invoice', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
+  try {
+    const projectId = req.params.id;
+    const invoicePaidAt = requiredText(req.body, 'invoice_paid_at', 'Fecha de pago');
+    if (!isValidDate(invoicePaidAt)) {
+      throw badRequest('Fecha de pago no es una fecha valida.');
+    }
+    if (!booleanValue(req.body, 'confirm')) {
+      throw badRequest('Debe confirmar la liquidacion (confirm=true).');
+    }
+    if (req.body.expected_pending_mxn === undefined || req.body.expected_pending_mxn === null || req.body.expected_pending_mxn === '') {
+      throw badRequest('expected_pending_mxn es obligatorio.');
+    }
+    const expectedPendingMxn = numberValue(req.body, 'expected_pending_mxn', 'Saldo pendiente esperado', {
+      min: -1e12,
+      max: 1e12,
+    });
+    const confirmMxnMatchesRealPayment = booleanValue(req.body, 'confirm_mxn_matches_real_payment');
+
+    const outcome = runImmediateTransaction(() => {
+      const locked = getProjectLockedOrFail(projectId);
+      const closedAtBefore = locked.closed_at || null;
+      const createdAtBefore = locked.created_at;
+      const technicalStatusBefore = locked.status;
+      const exchangeRates = getExchangeRateMap();
+      const preview = buildProjectSettlementPreview(locked, exchangeRates);
+
+      if (!amountsMatchWithinTolerance(expectedPendingMxn, preview.pending_collection_mxn)) {
+        throw conflict(
+          'El saldo pendiente cambio desde la vista previa. Revise el nuevo saldo e intente de nuevo.',
+          {
+            code: 'SETTLEMENT_STALE',
+            expected_pending_mxn: roundMoney(expectedPendingMxn),
+            pending_collection_mxn: preview.pending_collection_mxn,
+            preview,
+          },
+        );
+      }
+
+      if (!preview.can_auto_settle) {
+        throw conflict(preview.block_reason || 'No se puede liquidar automaticamente.', {
+          code: 'SETTLEMENT_BLOCKED',
+          preview,
+        });
+      }
+
+      // Idempotencia: ya Pagada y sin saldo relevante → no crear otro movimiento.
+      if (
+        preview.already_paid
+        && preview.settlement_action === 'status_only'
+      ) {
+        const updateAudit = updatedByFields(req);
+        db.prepare(
+          `UPDATE projects SET
+            invoice_payment_status = 'Pagada',
+            invoice_paid_at = @invoice_paid_at,
+            updated_at = @updated_at,
+            updated_by_user_id = @updated_by_user_id,
+            updated_by_name = @updated_by_name
+           WHERE id = @id`,
+        ).run({
+          id: projectId,
+          invoice_paid_at: invoicePaidAt,
+          ...updateAudit,
+        });
+        logAuditEvent(db, {
+          req,
+          action: 'settle_invoice',
+          module: 'projects',
+          entityType: 'project',
+          entityId: Number(projectId),
+          entityLabel: locked.quote_number,
+          before: {
+            invoice_payment_status: locked.invoice_payment_status,
+            invoice_paid_at: locked.invoice_paid_at,
+            pending_collection_mxn: preview.pending_collection_mxn,
+          },
+          after: {
+            invoice_payment_status: 'Pagada',
+            invoice_paid_at: invoicePaidAt,
+            pending_collection_mxn: preview.pending_collection_mxn,
+          },
+          metadata: {
+            project_id: Number(projectId),
+            settlement_action: 'status_only',
+            idempotent: true,
+            payment_id: null,
+            payment_amount: null,
+            payment_currency: null,
+            previous_pending_mxn: preview.pending_collection_mxn,
+            invoice_currency: preview.invoice_currency,
+            total_invoiced: preview.total_invoiced,
+            rates_snapshot: preview.exchange_rates,
+            closed_at_unchanged: closedAtBefore,
+            created_at_unchanged: createdAtBefore,
+            status_unchanged: technicalStatusBefore,
+          },
+        });
+        return { paymentId: null, action: 'status_only', idempotent: true };
+      }
+
+      if (preview.requires_mxn_confirmation && !confirmMxnMatchesRealPayment) {
+        throw badRequest(
+          'Para facturas en moneda extranjera debe confirmar explicitamente que el importe en MXN corresponde al cobro real (confirm_mxn_matches_real_payment=true).',
+        );
+      }
+
+      let paymentId = null;
+      if (preview.settlement_action === 'create_payment') {
+        const proposed = preview.proposed_payment;
+        if (!proposed || proposed.amount < PENDING_TOLERANCE_MXN) {
+          throw badRequest('No hay importe residual valido para registrar.');
+        }
+        const paymentAudit = createdByFields(req);
+        const insertResult = db.prepare(
+          `INSERT INTO project_payments (project_id, amount, currency, payment_date, notes, created_at, created_by_user_id, created_by_name)
+           VALUES (@project_id, @amount, @currency, @payment_date, @notes, @created_at, @created_by_user_id, @created_by_name)`,
+        ).run({
+          project_id: projectId,
+          amount: proposed.amount,
+          currency: proposed.currency,
+          payment_date: invoicePaidAt,
+          notes: SETTLEMENT_PAYMENT_NOTES,
+          ...paymentAudit,
+        });
+        paymentId = insertResult.lastInsertRowid;
+        logAuditEvent(db, {
+          req,
+          action: 'create',
+          module: 'payments',
+          entityType: 'project_payment',
+          entityId: paymentId,
+          entityLabel: `Pago ${proposed.amount} ${proposed.currency}`,
+          after: {
+            amount: proposed.amount,
+            currency: proposed.currency,
+            payment_date: invoicePaidAt,
+            notes: SETTLEMENT_PAYMENT_NOTES,
+          },
+          metadata: {
+            project_id: Number(projectId),
+            settlement: true,
+            previous_pending_mxn: preview.pending_collection_mxn,
+          },
+        });
+      }
+
+      const updateAudit = updatedByFields(req);
+      db.prepare(
+        `UPDATE projects SET
+          invoice_payment_status = 'Pagada',
+          invoice_paid_at = @invoice_paid_at,
+          updated_at = @updated_at,
+          updated_by_user_id = @updated_by_user_id,
+          updated_by_name = @updated_by_name
+         WHERE id = @id`,
+      ).run({
+        id: projectId,
+        invoice_paid_at: invoicePaidAt,
+        ...updateAudit,
+      });
+
+      // Guardas: no alterar closed_at / created_at / status tecnico.
+      const afterRow = db.prepare('SELECT closed_at, created_at, status FROM projects WHERE id = ?').get(projectId);
+      if ((afterRow.closed_at || null) !== closedAtBefore
+        || afterRow.created_at !== createdAtBefore
+        || afterRow.status !== technicalStatusBefore) {
+        throw new Error('Liquidacion abortada: se intento alterar closed_at, created_at o status tecnico.');
+      }
+
+      const afterPreview = buildProjectSettlementPreview(
+        db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId),
+        exchangeRates,
+      );
+
+      logAuditEvent(db, {
+        req,
+        action: 'settle_invoice',
+        module: 'projects',
+        entityType: 'project',
+        entityId: Number(projectId),
+        entityLabel: locked.quote_number,
+        before: {
+          invoice_payment_status: locked.invoice_payment_status,
+          invoice_paid_at: locked.invoice_paid_at,
+          pending_collection_mxn: preview.pending_collection_mxn,
+        },
+        after: {
+          invoice_payment_status: 'Pagada',
+          invoice_paid_at: invoicePaidAt,
+          pending_collection_mxn: afterPreview.pending_collection_mxn,
+        },
+        metadata: {
+          project_id: Number(projectId),
+          settlement_action: preview.settlement_action,
+          idempotent: false,
+          payment_id: paymentId,
+          payment_amount: preview.proposed_payment ? preview.proposed_payment.amount : null,
+          payment_currency: preview.proposed_payment ? preview.proposed_payment.currency : null,
+          previous_pending_mxn: preview.pending_collection_mxn,
+          invoice_currency: preview.invoice_currency,
+          total_invoiced: preview.total_invoiced,
+          total_invoiced_mxn: preview.total_invoiced_mxn,
+          total_charged_mxn_before: preview.total_charged_mxn,
+          rate_applied: preview.rate_applied,
+          rates_snapshot: preview.exchange_rates,
+          confirm_mxn_matches_real_payment: confirmMxnMatchesRealPayment,
+          closed_at_unchanged: closedAtBefore,
+          created_at_unchanged: createdAtBefore,
+          status_unchanged: technicalStatusBefore,
+        },
+      });
+
+      return {
+        paymentId,
+        action: preview.settlement_action,
+        idempotent: false,
+      };
+    });
+
+    const mapped = mapProject(getProjectOrFail(projectId), getExchangeRateMap());
+    res.status(outcome.idempotent ? 200 : 200).json({
+      ...mapped,
+      settlement: {
+        action: outcome.action,
+        payment_id: outcome.paymentId,
+        idempotent: outcome.idempotent,
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -7509,7 +7851,11 @@ app.use((err, req, res, next) => {
     });
   }
   const message = statusCode === 500 ? 'Ocurrio un error inesperado.' : err.message;
-  return res.status(statusCode).json({ message });
+  const payload = { message };
+  if (err.details && typeof err.details === 'object') {
+    Object.assign(payload, err.details);
+  }
+  return res.status(statusCode).json(payload);
 });
 
 app.listen(PORT, () => {

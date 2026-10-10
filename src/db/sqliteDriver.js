@@ -16,6 +16,8 @@ function createSqliteDb() {
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+    // Espera ante escritores concurrentes (liquidacion + pagos manuales).
+    db.pragma('busy_timeout = 5000');
     migrate(db);
     seedAdmin(db);
   }

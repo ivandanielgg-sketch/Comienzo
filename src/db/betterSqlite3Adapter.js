@@ -115,15 +115,17 @@ class BetterSqlite3CompatibleDatabase {
   /**
    * Igual que better-sqlite3: fn usa el mismo objeto db; durante fn las
    * consultas van por la conexion transaccional.
+   * Expone .immediate / .exclusive (en PG equivalen a BEGIN; el bloqueo
+   * efectivo de fila se hace con SELECT ... FOR UPDATE en el caller).
    */
   transaction(fn) {
-    return (...args) => {
+    const runWithBegin = (beginSql) => (...args) => {
       const client = waitPromise(this.pool.connect());
       const prev = this._txClient;
       this._txClient = client;
       let result;
       try {
-        querySync(client, 'BEGIN');
+        querySync(client, beginSql);
         result = fn(...args);
         querySync(client, 'COMMIT');
         return result;
@@ -139,6 +141,12 @@ class BetterSqlite3CompatibleDatabase {
         client.release();
       }
     };
+
+    const deferred = runWithBegin('BEGIN');
+    deferred.deferred = deferred;
+    deferred.immediate = runWithBegin('BEGIN');
+    deferred.exclusive = deferred.immediate;
+    return deferred;
   }
 }
 
