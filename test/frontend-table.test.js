@@ -41,4 +41,6 @@ test('projects list defaults to order_number ascending and patches rows in place
     appJs,
     /costForm\.reset\(\);\s*setDefaultDates\(\);\s*await loadProjects\(\);/s,
   );
+  assert.match(appJs, /await applyProjectListUpdate\(updatedProject\);\s*if \(state\.selectedProjectId === projectId\) \{\s*resetPaymentForm\(\);/s);
+  assert.match(appJs, /await applyProjectListUpdate\(updatedProject\);\s*if \(state\.selectedProjectId === projectId\) \{\s*resetCostForm\(\);/s);
 });
