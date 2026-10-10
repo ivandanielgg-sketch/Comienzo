@@ -96,6 +96,8 @@ const state = {
   exchangeUpdatedAt: null,
   selectedProjectId: null,
   projectDrawerOpen: false,
+  projectDetailLoadToken: 0,
+  projectDetailAbortController: null,
   selectedClosedProjectId: null,
   selectedUserId: null,
   selectedEmployeeId: null,
@@ -780,6 +782,143 @@ function setDefaultDates() {
   }
 }
 
+function getPaymentFormAmountValue() {
+  const amountInput = paymentForm?.elements?.amount;
+  if (amountInput && typeof amountInput.getCurrencyValue === 'function') {
+    return amountInput.getCurrencyValue();
+  }
+  return amountInput ? amountInput.value : 0;
+}
+
+function getCostFormAmountValue() {
+  const amountInput = costForm?.elements?.amount;
+  if (amountInput && typeof amountInput.getCurrencyValue === 'function') {
+    return amountInput.getCurrencyValue();
+  }
+  return amountInput ? amountInput.value : 0;
+}
+
+function resetPaymentForm() {
+  if (!paymentForm) return;
+  const amountInput = paymentForm.elements.amount;
+  if (amountInput && typeof amountInput.clearCurrencyValue === 'function') {
+    amountInput.clearCurrencyValue();
+  }
+  paymentForm.reset();
+  if (paymentForm.elements.currency) {
+    paymentForm.elements.currency.value = 'MXN';
+  }
+  if (amountInput && typeof amountInput.clearCurrencyValue === 'function') {
+    amountInput.clearCurrencyValue();
+  } else if (amountInput) {
+    amountInput.value = '';
+  }
+  paymentForm.elements.payment_date.value = today();
+  if (paymentForm.elements.notes) {
+    paymentForm.elements.notes.value = '';
+  }
+}
+
+function resetCostForm() {
+  if (!costForm) return;
+  const amountInput = costForm.elements.amount;
+  if (amountInput && typeof amountInput.clearCurrencyValue === 'function') {
+    amountInput.clearCurrencyValue();
+  }
+  costForm.reset();
+  if (costForm.elements.currency) {
+    costForm.elements.currency.value = 'MXN';
+  }
+  if (costForm.elements.category) {
+    costForm.elements.category.value = 'Compra';
+  }
+  if (amountInput && typeof amountInput.clearCurrencyValue === 'function') {
+    amountInput.clearCurrencyValue();
+  } else if (amountInput) {
+    amountInput.value = '';
+  }
+  costForm.elements.cost_date.value = today();
+  if (costForm.elements.description) {
+    costForm.elements.description.value = '';
+  }
+}
+
+function resetMovementForms() {
+  resetPaymentForm();
+  resetCostForm();
+}
+
+function hasUnsavedMovementDrafts() {
+  const helpers = typeof ProjectFormIsolation !== 'undefined' ? ProjectFormIsolation : null;
+  const todayDate = today();
+  const payment = {
+    amount: getPaymentFormAmountValue(),
+    notes: paymentForm?.elements?.notes?.value || '',
+    paymentDate: paymentForm?.elements?.payment_date?.value || '',
+  };
+  const cost = {
+    amount: getCostFormAmountValue(),
+    description: costForm?.elements?.description?.value || '',
+    costDate: costForm?.elements?.cost_date?.value || '',
+  };
+  if (helpers && typeof helpers.isUnsavedMovementDraftDirty === 'function') {
+    return helpers.isUnsavedMovementDraftDirty(payment, cost, todayDate);
+  }
+  if (Math.abs(Number(payment.amount) || 0) > 0.000001) return true;
+  if (String(payment.notes || '').trim()) return true;
+  if (payment.paymentDate && payment.paymentDate !== todayDate) return true;
+  if (Math.abs(Number(cost.amount) || 0) > 0.000001) return true;
+  if (String(cost.description || '').trim()) return true;
+  if (cost.costDate && cost.costDate !== todayDate) return true;
+  return false;
+}
+
+function confirmDiscardUnsavedMovementDrafts() {
+  if (!hasUnsavedMovementDrafts()) {
+    return true;
+  }
+  return window.confirm(
+    'Hay un pago o costo capturado que aún no se ha guardado.\n\n'
+    + 'Si continúas, se descartará esa información.\n\n'
+    + '¿Deseas cambiar de proyecto?',
+  );
+}
+
+function beginProjectDetailLoad(projectId) {
+  const helpers = typeof ProjectFormIsolation !== 'undefined' ? ProjectFormIsolation : null;
+  state.projectDetailLoadToken = helpers && typeof helpers.nextProjectDetailLoadToken === 'function'
+    ? helpers.nextProjectDetailLoadToken(state.projectDetailLoadToken)
+    : (Number(state.projectDetailLoadToken) || 0) + 1;
+
+  if (state.projectDetailAbortController) {
+    try {
+      state.projectDetailAbortController.abort();
+    } catch (_err) {
+      /* ignore */
+    }
+  }
+  state.projectDetailAbortController = typeof AbortController !== 'undefined'
+    ? new AbortController()
+    : null;
+
+  return {
+    token: state.projectDetailLoadToken,
+    signal: state.projectDetailAbortController ? state.projectDetailAbortController.signal : undefined,
+    projectId: Number(projectId),
+  };
+}
+
+function isProjectDetailLoadCurrent(token, projectId) {
+  const helpers = typeof ProjectFormIsolation !== 'undefined' ? ProjectFormIsolation : null;
+  if (helpers && typeof helpers.isProjectDetailLoadCurrent === 'function') {
+    return helpers.isProjectDetailLoadCurrent(state, token, projectId);
+  }
+  return (
+    Number(state.projectDetailLoadToken) === Number(token)
+    && Number(state.selectedProjectId) === Number(projectId)
+  );
+}
+
 function projectPayload() {
   const formData = new FormData(projectForm);
   const payload = Object.fromEntries(formData.entries());
@@ -1180,7 +1319,11 @@ async function applyProjectListUpdate(updatedProject, { remove = false, markWork
   if (state.selectedProjectId === id) {
     fillProjectForm(updatedProject);
     if (state.projectDrawerOpen) {
-      renderDetail(updatedProject);
+      renderDetail(updatedProject, {
+        token: state.projectDetailLoadToken,
+        signal: state.projectDetailAbortController ? state.projectDetailAbortController.signal : undefined,
+        projectId: id,
+      });
     }
   }
 
@@ -1430,16 +1573,30 @@ function selectProject(projectId, focusReturnEl) {
     return;
   }
 
+  const previousProjectId = state.selectedProjectId;
+  const nextProjectId = project.id;
+  const isSwitchingProject = previousProjectId != null && Number(previousProjectId) !== Number(nextProjectId);
+
+  if (isSwitchingProject) {
+    if (!confirmDiscardUnsavedMovementDrafts()) {
+      return;
+    }
+    resetMovementForms();
+  } else if (previousProjectId == null) {
+    resetMovementForms();
+  }
+
   if (state.lastWorkedProjectId != null && state.lastWorkedProjectId !== project.id) {
     state.lastWorkedProjectId = null;
   }
 
-  state.selectedProjectId = project.id;
+  const detailLoad = beginProjectDetailLoad(nextProjectId);
+  state.selectedProjectId = nextProjectId;
   if (focusReturnEl) {
     projectDrawerFocusReturn = focusReturnEl;
   }
   fillProjectForm(project);
-  renderDetail(project);
+  renderDetail(project, detailLoad);
   openProjectDrawer();
 }
 
@@ -1741,9 +1898,16 @@ function resetProjectForm() {
 }
 
 function clearSelection() {
+  if (state.selectedProjectId != null || hasUnsavedMovementDrafts()) {
+    if (!confirmDiscardUnsavedMovementDrafts()) {
+      return;
+    }
+  }
+  beginProjectDetailLoad(null);
   state.selectedProjectId = null;
   closeProjectDrawer();
   resetProjectForm();
+  resetMovementForms();
 }
 
 function clearClosedSelection() {
@@ -1994,7 +2158,14 @@ function resetUserForm() {
   setMessage(userMessage, '');
 }
 
-function renderDetail(project) {
+function renderDetail(project, detailLoad = null) {
+  if (detailLoad && !isProjectDetailLoadCurrent(detailLoad.token, project.id)) {
+    return;
+  }
+  if (state.selectedProjectId != null && Number(state.selectedProjectId) !== Number(project.id)) {
+    return;
+  }
+
   document.querySelector('#detail-title').textContent = `#${project.id} - ${project.client_name}`;
   document.querySelector('#detail-subtitle').textContent =
     `Cotizacion ${project.quote_number} | Pedido ${project.order_number} | Tecnico ${project.technician_name}`;
@@ -2032,7 +2203,11 @@ function renderDetail(project) {
 
   const drl = document.querySelector('#detail-reports-list');
   if (drl && typeof renderDetailReports === 'function') {
-    renderDetailReports(project.id, drl);
+    renderDetailReports(project.id, drl, detailLoad || {
+      token: state.projectDetailLoadToken,
+      signal: state.projectDetailAbortController ? state.projectDetailAbortController.signal : undefined,
+      projectId: Number(project.id),
+    });
   }
 
   paymentsList.innerHTML = renderEntries(
@@ -2283,32 +2458,44 @@ userForm.addEventListener('submit', async (event) => {
 
 paymentForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!state.selectedProjectId) {
+  const projectId = state.selectedProjectId;
+  if (!projectId) {
     return;
   }
 
-  const updatedProject = await api(`/api/projects/${state.selectedProjectId}/payments`, {
-    method: 'POST',
-    body: JSON.stringify(simpleFormPayload(paymentForm)),
-  });
-  paymentForm.reset();
-  setDefaultDates();
-  await applyProjectListUpdate(updatedProject);
+  try {
+    const updatedProject = await api(`/api/projects/${projectId}/payments`, {
+      method: 'POST',
+      body: JSON.stringify(simpleFormPayload(paymentForm)),
+    });
+    await applyProjectListUpdate(updatedProject);
+    if (state.selectedProjectId === projectId) {
+      resetPaymentForm();
+    }
+  } catch (error) {
+    window.alert(error.message);
+  }
 });
 
 costForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!state.selectedProjectId) {
+  const projectId = state.selectedProjectId;
+  if (!projectId) {
     return;
   }
 
-  const updatedProject = await api(`/api/projects/${state.selectedProjectId}/costs`, {
-    method: 'POST',
-    body: JSON.stringify(simpleFormPayload(costForm)),
-  });
-  costForm.reset();
-  setDefaultDates();
-  await applyProjectListUpdate(updatedProject);
+  try {
+    const updatedProject = await api(`/api/projects/${projectId}/costs`, {
+      method: 'POST',
+      body: JSON.stringify(simpleFormPayload(costForm)),
+    });
+    await applyProjectListUpdate(updatedProject);
+    if (state.selectedProjectId === projectId) {
+      resetCostForm();
+    }
+  } catch (error) {
+    window.alert(error.message);
+  }
 });
 
 if (detailPanelClose) {
@@ -3211,9 +3398,17 @@ function renderReportList(reports, pagination, projectId) {
   });
 }
 
-async function renderDetailReports(projectId, listElement) {
+async function renderDetailReports(projectId, listElement, detailLoad = null) {
+  const token = detailLoad?.token;
+  const signal = detailLoad?.signal;
   try {
-    const result = await api('/api/projects/' + projectId + '/reports?limit=50');
+    const result = await api('/api/projects/' + projectId + '/reports?limit=50', signal ? { signal } : {});
+    if (token != null && !isProjectDetailLoadCurrent(token, projectId)) {
+      return;
+    }
+    if (Number(state.selectedProjectId) !== Number(projectId)) {
+      return;
+    }
     const reports = result.data || [];
     if (!reports.length) {
       listElement.innerHTML = '<li class="muted">Sin reportes generados.</li>';
@@ -3231,7 +3426,16 @@ async function renderDetailReports(projectId, listElement) {
         </div>
       </li>
     `).join('');
-  } catch (_e) {
+  } catch (error) {
+    if (error?.name === 'AbortError' || signal?.aborted) {
+      return;
+    }
+    if (token != null && !isProjectDetailLoadCurrent(token, projectId)) {
+      return;
+    }
+    if (Number(state.selectedProjectId) !== Number(projectId)) {
+      return;
+    }
     listElement.innerHTML = '<li class="muted">Error al cargar reportes.</li>';
   }
 }
