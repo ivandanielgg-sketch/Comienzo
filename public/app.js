@@ -99,6 +99,14 @@ const state = {
   projectDetailLoadToken: 0,
   projectDetailAbortController: null,
   selectedClosedProjectId: null,
+  currentUserId: null,
+  sessionExpiresAtMs: null,
+  sessionWarningVisible: false,
+  sessionExpiredHandled: false,
+  sessionAuthBlocked: false,
+  sessionExtendInFlight: false,
+  sessionTimerId: null,
+  pendingDraftRestore: null,
   selectedUserId: null,
   selectedEmployeeId: null,
   adminVerified: false,
@@ -698,6 +706,13 @@ async function api(path, options = {}) {
     body,
   });
 
+  if (response.status === 401 && !isAuthExemptPath(path)) {
+    handleAuthenticatedSessionLoss('expired');
+    const err = new Error('Tu sesión ha terminado. Inicia sesión nuevamente.');
+    err.statusCode = 401;
+    throw err;
+  }
+
   if (response.status === 204) {
     return null;
   }
@@ -714,12 +729,397 @@ async function api(path, options = {}) {
   }
   if (!response.ok) {
     const msg = data.message || data.error || 'La operacion no pudo completarse.';
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.statusCode = response.status;
+    throw err;
   }
   return data;
 }
 
+function isAuthExemptPath(path) {
+  const clean = String(path || '').split('?')[0];
+  return clean === '/api/login' || clean === '/api/session';
+}
+
+function getDraftStorage() {
+  try {
+    return window.sessionStorage;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function getSessionDraftsApi() {
+  return typeof SessionDrafts !== 'undefined' ? SessionDrafts : null;
+}
+
+function collectProjectEditDraftPayload() {
+  if (!projectForm) return null;
+  const payload = projectPayload();
+  delete payload.password;
+  return payload;
+}
+
+function collectPaymentDraftPayload() {
+  if (!paymentForm) return null;
+  return {
+    amount: getPaymentFormAmountValue(),
+    currency: paymentForm.elements.currency?.value || 'MXN',
+    payment_date: paymentForm.elements.payment_date?.value || '',
+    notes: paymentForm.elements.notes?.value || '',
+  };
+}
+
+function collectCostDraftPayload() {
+  if (!costForm) return null;
+  return {
+    category: costForm.elements.category?.value || '',
+    description: costForm.elements.description?.value || '',
+    amount: getCostFormAmountValue(),
+    currency: costForm.elements.currency?.value || 'MXN',
+    cost_date: costForm.elements.cost_date?.value || '',
+  };
+}
+
+function snapshotActiveProjectDrafts() {
+  const draftsApi = getSessionDraftsApi();
+  const storage = getDraftStorage();
+  const userId = state.currentUserId;
+  const projectId = state.selectedProjectId;
+  if (!draftsApi || !storage || !userId || !projectId) return;
+
+  const projectPayloadDraft = collectProjectEditDraftPayload();
+  if (projectPayloadDraft && draftsApi.draftHasContent(projectPayloadDraft)) {
+    draftsApi.saveDraft(storage, {
+      userId,
+      projectId,
+      formType: 'project_edit',
+      payload: projectPayloadDraft,
+    });
+  }
+
+  const paymentPayload = collectPaymentDraftPayload();
+  if (paymentPayload && (
+    Math.abs(Number(paymentPayload.amount) || 0) > 0.000001
+    || String(paymentPayload.notes || '').trim()
+    || (paymentPayload.payment_date && paymentPayload.payment_date !== today())
+  )) {
+    draftsApi.saveDraft(storage, {
+      userId,
+      projectId,
+      formType: 'payment_new',
+      payload: paymentPayload,
+    });
+  }
+
+  const costPayload = collectCostDraftPayload();
+  if (costPayload && (
+    Math.abs(Number(costPayload.amount) || 0) > 0.000001
+    || String(costPayload.description || '').trim()
+    || (costPayload.cost_date && costPayload.cost_date !== today())
+  )) {
+    draftsApi.saveDraft(storage, {
+      userId,
+      projectId,
+      formType: 'cost_new',
+      payload: costPayload,
+    });
+  }
+}
+
+function clearDraftForCurrent(formType) {
+  const draftsApi = getSessionDraftsApi();
+  const storage = getDraftStorage();
+  if (!draftsApi || !storage || !state.currentUserId || !state.selectedProjectId) return;
+  draftsApi.removeDraft(storage, state.currentUserId, state.selectedProjectId, formType);
+}
+
+function clearAllDraftsForCurrentUser() {
+  const draftsApi = getSessionDraftsApi();
+  const storage = getDraftStorage();
+  if (!draftsApi || !storage || !state.currentUserId) return;
+  draftsApi.clearDraftsForUser(storage, state.currentUserId);
+}
+
+function applySessionExpiryFromPayload(payload) {
+  if (!payload) return;
+  if (payload.expires_at) {
+    const ms = Date.parse(payload.expires_at);
+    if (Number.isFinite(ms)) {
+      state.sessionExpiresAtMs = ms;
+      return;
+    }
+  }
+  if (Number.isFinite(Number(payload.expires_in_ms))) {
+    state.sessionExpiresAtMs = Date.now() + Number(payload.expires_in_ms);
+  }
+}
+
+function stopSessionExpiryMonitor() {
+  if (state.sessionTimerId) {
+    window.clearInterval(state.sessionTimerId);
+    state.sessionTimerId = null;
+  }
+}
+
+function hideSessionExpiryModal() {
+  const modal = document.getElementById('session-expiry-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  state.sessionWarningVisible = false;
+  const msg = document.getElementById('session-expiry-message');
+  if (msg) setMessage(msg, '');
+}
+
+function showSessionExpiryModal() {
+  const modal = document.getElementById('session-expiry-modal');
+  if (!modal || state.sessionWarningVisible) return;
+  state.sessionWarningVisible = true;
+  snapshotActiveProjectDrafts();
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  updateSessionExpiryCountdownDisplay();
+}
+
+function updateSessionExpiryCountdownDisplay() {
+  const el = document.getElementById('session-expiry-countdown');
+  if (!el || state.sessionExpiresAtMs == null) return;
+  const remainingSec = Math.max(0, Math.ceil((state.sessionExpiresAtMs - Date.now()) / 1000));
+  el.textContent = String(remainingSec);
+}
+
+function startSessionExpiryMonitor() {
+  stopSessionExpiryMonitor();
+  state.sessionExpiredHandled = false;
+  state.sessionAuthBlocked = false;
+  state.sessionTimerId = window.setInterval(() => {
+    if (state.sessionExpiresAtMs == null || state.sessionAuthBlocked) return;
+    const remainingMs = state.sessionExpiresAtMs - Date.now();
+    if (remainingMs <= 0) {
+      handleAuthenticatedSessionLoss('expired');
+      return;
+    }
+    if (remainingMs <= 60000) {
+      showSessionExpiryModal();
+      updateSessionExpiryCountdownDisplay();
+    } else if (state.sessionWarningVisible) {
+      hideSessionExpiryModal();
+    }
+  }, 1000);
+}
+
+async function extendSessionFromWarning() {
+  if (state.sessionExtendInFlight) return;
+  state.sessionExtendInFlight = true;
+  const msg = document.getElementById('session-expiry-message');
+  const extendBtn = document.getElementById('session-expiry-extend');
+  if (extendBtn) extendBtn.disabled = true;
+  try {
+    const result = await api('/api/session/extend', { method: 'POST' });
+    applySessionExpiryFromPayload(result);
+    hideSessionExpiryModal();
+    state.sessionExpiredHandled = false;
+    state.sessionAuthBlocked = false;
+  } catch (error) {
+    if (msg) setMessage(msg, error.message || 'No se pudo renovar la sesión.');
+  } finally {
+    state.sessionExtendInFlight = false;
+    if (extendBtn) extendBtn.disabled = false;
+  }
+}
+
+function handleAuthenticatedSessionLoss(reason) {
+  if (state.sessionExpiredHandled) return;
+  state.sessionExpiredHandled = true;
+  state.sessionAuthBlocked = true;
+  snapshotActiveProjectDrafts();
+  hideSessionExpiryModal();
+  stopSessionExpiryMonitor();
+  state.sessionExpiresAtMs = null;
+  showLogin();
+  if (loginMessage) {
+    setMessage(
+      loginMessage,
+      reason === 'logout'
+        ? ''
+        : 'Tu sesión ha terminado. Inicia sesión nuevamente para continuar. Si había capturas sin guardar en esta pestaña, podrás recuperarlas tras entrar.',
+    );
+  }
+}
+
+function formTypeLabel(formType) {
+  if (formType === 'project_edit') return 'Edición del proyecto';
+  if (formType === 'payment_new') return 'Nuevo pago';
+  if (formType === 'cost_new') return 'Nuevo costo';
+  return formType;
+}
+
+function hideDraftRestoreModal() {
+  const modal = document.getElementById('session-draft-restore-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  state.pendingDraftRestore = null;
+}
+
+function showDraftRestoreModal(drafts) {
+  const modal = document.getElementById('session-draft-restore-modal');
+  const list = document.getElementById('session-draft-restore-list');
+  if (!modal || !list || !drafts?.length) return;
+  state.pendingDraftRestore = drafts;
+  list.innerHTML = drafts.map((draft) => `
+    <li>
+      <div>
+        <strong>${escapeHtml(formTypeLabel(draft.formType))}</strong>
+        <small>Proyecto #${escapeHtml(String(draft.projectId))} · ${escapeHtml(draft.savedAt || '')}</small>
+      </div>
+    </li>
+  `).join('');
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function applyPaymentDraftPayload(payload) {
+  if (!paymentForm || !payload) return;
+  if (paymentForm.elements.currency && payload.currency) {
+    paymentForm.elements.currency.value = payload.currency;
+  }
+  const amountInput = paymentForm.elements.amount;
+  if (amountInput?.setCurrencyValue) amountInput.setCurrencyValue(Number(payload.amount) || 0);
+  else if (amountInput) amountInput.value = payload.amount != null ? String(payload.amount) : '';
+  if (paymentForm.elements.payment_date) {
+    paymentForm.elements.payment_date.value = payload.payment_date || today();
+  }
+  if (paymentForm.elements.notes) {
+    paymentForm.elements.notes.value = payload.notes || '';
+  }
+}
+
+function applyCostDraftPayload(payload) {
+  if (!costForm || !payload) return;
+  if (costForm.elements.category && payload.category) {
+    costForm.elements.category.value = payload.category;
+  }
+  if (costForm.elements.description) {
+    costForm.elements.description.value = payload.description || '';
+  }
+  if (costForm.elements.currency && payload.currency) {
+    costForm.elements.currency.value = payload.currency;
+  }
+  const amountInput = costForm.elements.amount;
+  if (amountInput?.setCurrencyValue) amountInput.setCurrencyValue(Number(payload.amount) || 0);
+  else if (amountInput) amountInput.value = payload.amount != null ? String(payload.amount) : '';
+  if (costForm.elements.cost_date) {
+    costForm.elements.cost_date.value = payload.cost_date || today();
+  }
+}
+
+async function restorePendingDrafts() {
+  const drafts = state.pendingDraftRestore || [];
+  hideDraftRestoreModal();
+  if (!drafts.length) return;
+
+  const byProject = drafts.reduce((map, draft) => {
+    const id = Number(draft.projectId);
+    if (!map.has(id)) map.set(id, []);
+    map.get(id).push(draft);
+    return map;
+  }, new Map());
+
+  const firstProjectId = [...byProject.keys()][0];
+  if (firstProjectId && typeof selectProject === 'function') {
+    const exists = state.projects.some((p) => Number(p.id) === firstProjectId);
+    if (!exists) {
+      await loadProjects();
+    }
+    selectProject(firstProjectId);
+  }
+
+  const activeDrafts = byProject.get(Number(state.selectedProjectId)) || drafts;
+  activeDrafts.forEach((draft) => {
+    if (draft.formType === 'project_edit') {
+      fillProjectForm({ ...draft.payload, id: draft.projectId });
+    } else if (draft.formType === 'payment_new') {
+      applyPaymentDraftPayload(draft.payload);
+    } else if (draft.formType === 'cost_new') {
+      applyCostDraftPayload(draft.payload);
+    }
+  });
+}
+
+function offerDraftRestoreForCurrentUser() {
+  const draftsApi = getSessionDraftsApi();
+  const storage = getDraftStorage();
+  if (!draftsApi || !storage || !state.currentUserId) return;
+  draftsApi.clearForeignDrafts(storage, state.currentUserId);
+  const drafts = draftsApi.listDraftsForUser(storage, state.currentUserId);
+  if (drafts.length) {
+    showDraftRestoreModal(drafts);
+  }
+}
+
+function bindSessionUiHandlers() {
+  const extendBtn = document.getElementById('session-expiry-extend');
+  const logoutBtn = document.getElementById('session-expiry-logout');
+  const restoreBtn = document.getElementById('session-draft-restore');
+  const discardBtn = document.getElementById('session-draft-discard');
+
+  if (extendBtn) {
+    extendBtn.addEventListener('click', () => {
+      extendSessionFromWarning();
+    });
+  }
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', async () => {
+      try {
+        snapshotActiveProjectDrafts();
+        await fetch('/api/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      } catch (_err) {
+        /* ignore */
+      }
+      handleAuthenticatedSessionLoss('logout');
+    });
+  }
+  if (restoreBtn) {
+    restoreBtn.addEventListener('click', () => {
+      restorePendingDrafts().catch((error) => {
+        const msg = document.getElementById('session-draft-restore-message');
+        if (msg) setMessage(msg, error.message || 'No se pudo restaurar.');
+      });
+    });
+  }
+  if (discardBtn) {
+    discardBtn.addEventListener('click', () => {
+      clearAllDraftsForCurrentUser();
+      hideDraftRestoreModal();
+    });
+  }
+}
+
+function bindDraftAutosave() {
+  const persist = debounce(() => {
+    if (!state.currentUserId || state.sessionAuthBlocked) return;
+    snapshotActiveProjectDrafts();
+  }, 800);
+
+  if (projectForm) {
+    projectForm.addEventListener('input', persist);
+    projectForm.addEventListener('change', persist);
+  }
+  if (paymentForm) {
+    paymentForm.addEventListener('input', persist);
+    paymentForm.addEventListener('change', persist);
+  }
+  if (costForm) {
+    costForm.addEventListener('input', persist);
+    costForm.addEventListener('change', persist);
+  }
+}
+
 function showLogin() {
+  stopSessionExpiryMonitor();
+  hideSessionExpiryModal();
   loginView.classList.remove('hidden');
   appView.classList.add('hidden');
 }
@@ -730,7 +1130,11 @@ async function showApp() {
   setDefaultDates();
   resetUserForm();
   state.adminVerified = false;
+  state.sessionAuthBlocked = false;
+  state.sessionExpiredHandled = false;
   applyRoleVisibility();
+  startSessionExpiryMonitor();
+  offerDraftRestoreForCurrentUser();
   if (canAccess('projects', 'view')) {
     switchView('projects');
     await loadExchangeRates();
@@ -2267,9 +2671,12 @@ loginForm.addEventListener('submit', async (event) => {
       body: JSON.stringify(simpleFormPayload(loginForm)),
     });
     state.userRole = result.role || 'user';
+    applySessionExpiryFromPayload(result);
     try {
       const sessionData = await api('/api/session');
       userPermissions = sessionData.permissions || {};
+      state.currentUserId = sessionData.user?.id || null;
+      applySessionExpiryFromPayload(sessionData);
       if (sessionData.theme) applyTheme(sessionData.theme);
     } catch { userPermissions = {}; }
     showVacationsTab();
@@ -2283,12 +2690,24 @@ loginForm.addEventListener('submit', async (event) => {
 });
 
 logoutButton.addEventListener('click', async () => {
-  await api('/api/logout', { method: 'POST' });
-  clearSelection();
+  snapshotActiveProjectDrafts();
+  try {
+    await fetch('/api/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+  } catch (_err) {
+    /* session may already be expired */
+  }
+  state.selectedProjectId = null;
+  closeProjectDrawer();
+  resetProjectForm();
+  resetMovementForms();
   clearClosedSelection();
   resetUserForm();
   state.adminVerified = false;
-  showLogin();
+  state.currentUserId = null;
+  state.sessionExpiresAtMs = null;
+  hideDraftRestoreModal();
+  handleAuthenticatedSessionLoss('logout');
+  setMessage(loginMessage, '');
 });
 
 projectsTab.addEventListener('click', () => switchView('projects'));
@@ -2354,6 +2773,7 @@ projectForm.addEventListener('submit', async (event) => {
     });
 
     setMessage(projectMessage, 'Proyecto guardado correctamente.', true);
+    clearDraftForCurrent('project_edit');
     if (id) {
       await applyProjectListUpdate(savedProject);
       selectProject(savedProject.id);
@@ -2471,6 +2891,7 @@ paymentForm.addEventListener('submit', async (event) => {
     await applyProjectListUpdate(updatedProject);
     if (state.selectedProjectId === projectId) {
       resetPaymentForm();
+      clearDraftForCurrent('payment_new');
     }
   } catch (error) {
     window.alert(error.message);
@@ -2492,6 +2913,7 @@ costForm.addEventListener('submit', async (event) => {
     await applyProjectListUpdate(updatedProject);
     if (state.selectedProjectId === projectId) {
       resetCostForm();
+      clearDraftForCurrent('cost_new');
     }
   } catch (error) {
     window.alert(error.message);
@@ -7999,12 +8421,16 @@ function initMobileFormScrollIntoView() {
   }, { passive: true });
 }
 initMobileFormScrollIntoView();
+bindSessionUiHandlers();
+bindDraftAutosave();
 
 api('/api/session')
   .then((session) => {
     if (session.authenticated) {
       state.userRole = session.user.role || 'user';
+      state.currentUserId = session.user?.id || null;
       userPermissions = session.permissions || {};
+      applySessionExpiryFromPayload(session);
       showVacationsTab();
       showAttendanceTab();
       showEcovisTab();

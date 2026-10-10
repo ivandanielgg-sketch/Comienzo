@@ -2764,9 +2764,48 @@
       </div>
     </div>
 
+    <div id="session-expiry-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="session-expiry-title">
+      <div class="modal-content panel session-expiry-panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Sesión</p>
+            <h2 id="session-expiry-title">TU SESIÓN ESTÁ POR CADUCAR</h2>
+          </div>
+        </div>
+        <p>Tu sesión finalizará en <strong id="session-expiry-countdown">60</strong> segundos.</p>
+        <p class="muted">¿Deseas mantener tu sesión activa durante otros 60 minutos?</p>
+        <p id="session-expiry-message" class="message"></p>
+        <div class="row-actions">
+          <button type="button" id="session-expiry-logout" class="secondary">Cerrar sesión</button>
+          <button type="button" id="session-expiry-extend">Ampliar 60 minutos</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="session-draft-restore-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="session-draft-restore-title">
+      <div class="modal-content panel session-draft-panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Borradores</p>
+            <h2 id="session-draft-restore-title">Hay trabajo no guardado</h2>
+          </div>
+        </div>
+        <p>Se encontraron capturas locales de esta pestaña que aún no se guardaron en el servidor.</p>
+        <p class="muted">No se crearán pagos ni costos automáticamente. Solo se restaurarán en el formulario si confirmas.</p>
+        <p class="muted">En equipos compartidos, cierra la pestaña al terminar. Los borradores viven solo en esta pestaña y caducan.</p>
+        <ul id="session-draft-restore-list" class="entry-list"></ul>
+        <p id="session-draft-restore-message" class="message"></p>
+        <div class="row-actions">
+          <button type="button" id="session-draft-discard" class="secondary">Descartar borradores</button>
+          <button type="button" id="session-draft-restore">Restaurar</button>
+        </div>
+      </div>
+    </div>
+
     <script src="/service-quoter-buildup.js?v=buildup-tarifas-20260717"></script>
     <script src="/project-form-isolation.js?v=form-isolation-stage1"></script>
-    <script src="/app.js?v=form-isolation-stage1"></script>
+    <script src="/session-drafts.js?v=session-stage2"></script>
+    <script src="/app.js?v=session-stage2"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>

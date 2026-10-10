@@ -678,6 +678,15 @@ th.col-number {
   max-width: min(960px, 100%);
 }
 
+.session-expiry-panel,
+.session-draft-panel {
+  max-width: min(480px, 100%);
+}
+
+.session-expiry-panel #session-expiry-countdown {
+  font-variant-numeric: tabular-nums;
+}
+
 .badge.status-programada {
   background: #e0f2fe;
   color: #075985;

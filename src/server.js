@@ -118,7 +118,9 @@ function normalizeReportCount(value) {
   const count = Number(value);
   return Number.isFinite(count) ? count : 0;
 }
-const SESSION_TTL_MS = 1000 * 60 * 60;
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) > 0
+  ? Number(process.env.SESSION_TTL_MS)
+  : 1000 * 60 * 60;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 const isProduction = process.env.NODE_ENV === 'production';
@@ -1119,6 +1121,30 @@ function employeeMatchesSearch(employee, search) {
   ], search);
 }
 
+function refreshSessionExpiry(req) {
+  const expiresAtMs = Date.now() + SESSION_TTL_MS;
+  req.session.expiresAtMs = expiresAtMs;
+  if (req.session.cookie) {
+    req.session.cookie.maxAge = SESSION_TTL_MS;
+    req.session.cookie.expires = new Date(expiresAtMs);
+  }
+  return expiresAtMs;
+}
+
+function sessionExpiryPayload(req) {
+  let expiresAtMs = Number(req.session?.expiresAtMs);
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= 0) {
+    const cookieExpires = req.session?.cookie?.expires;
+    expiresAtMs = cookieExpires ? new Date(cookieExpires).getTime() : (Date.now() + SESSION_TTL_MS);
+    req.session.expiresAtMs = expiresAtMs;
+  }
+  return {
+    expires_at: new Date(expiresAtMs).toISOString(),
+    expires_in_ms: Math.max(0, expiresAtMs - Date.now()),
+    session_ttl_ms: SESSION_TTL_MS,
+  };
+}
+
 app.get('/api/session', (req, res) => {
   if (!req.session.userId) {
     return res.json({ authenticated: false });
@@ -1132,7 +1158,36 @@ app.get('/api/session', (req, res) => {
     user: { id: req.session.userId, username: req.session.username, role: req.session.role || 'user' },
     permissions: perms,
     theme: pref ? pref.theme_name : "default",
+    ...sessionExpiryPayload(req),
   });
+});
+
+app.post('/api/session/extend', requireAuth, (req, res, next) => {
+  try {
+    refreshSessionExpiry(req);
+    req.session.save((err) => {
+      if (err) {
+        return next(err);
+      }
+      try { updateSessionActivity(db, req); } catch (e) { /* non-critical */ }
+      logAuditEvent(db, {
+        req,
+        action: 'session_extend',
+        module: 'auth',
+        entityType: 'user',
+        entityId: req.session.userId,
+        entityLabel: req.session.username,
+        metadata: { session_ttl_ms: SESSION_TTL_MS },
+      });
+      return res.json({
+        ok: true,
+        authenticated: true,
+        ...sessionExpiryPayload(req),
+      });
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/login', (req, res, next) => {
@@ -1186,9 +1241,14 @@ app.post('/api/login', (req, res, next) => {
     req.session.userId = user.id;
     req.session.username = user.username;
     req.session.role = user.role || 'user';
+    refreshSessionExpiry(req);
     logAuditEvent(db, { req, action: 'login_success', module: 'auth', entityType: 'user', entityId: user.id, entityLabel: user.username });
     try { updateSessionActivity(db, req); } catch(e) { /* non-critical */ }
-    return res.json({ username: user.username, role: user.role || 'user' });
+    return res.json({
+      username: user.username,
+      role: user.role || 'user',
+      ...sessionExpiryPayload(req),
+    });
   } catch (error) {
     return next(error);
   }
