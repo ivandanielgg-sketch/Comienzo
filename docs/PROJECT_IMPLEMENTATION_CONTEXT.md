@@ -7,7 +7,7 @@ Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
 |-------|--------|
 | Rama | `cursor/stage3-invoice-settlement-c0b6` |
 | HEAD código Etapa 3 | `5c79b5c` — *Add project payment FX snapshots so settled invoices stay Pagada* |
-| Commit continuidad | *Document Stage 3 definitive closure for Stage 4 handoff* (este archivo; ver `git log -1`) |
+| Commit continuidad | `943bbd1` — *Document Stage 3 definitive closure for Stage 4 handoff* |
 | Base histórica Etapas 1–2 | `cursor/session-renewal-drafts-3848` (mergeada en esta rama) |
 | PRs | #83 (Etapa 1), #84 (Etapa 2), **#85** (Etapa 3 + FX) |
 | Siguiente etapa | **4 — UI workspace** (no iniciada; requiere OK explícito) |
@@ -31,7 +31,7 @@ Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
 **Commits de esta rama no presentes en `origin/main` (al cierre documental):**
 
 ```
-<sha continuidad> Document Stage 3 definitive closure for Stage 4 handoff
+943bbd1 Document Stage 3 definitive closure for Stage 4 handoff
 5c79b5c Add project payment FX snapshots so settled invoices stay Pagada
 38ff859 Harden Stage 3 post-settlement financial integrity checks
 30b94e4 Implement Stage 3 atomic invoice settlement for Pagada status
@@ -41,8 +41,6 @@ c3e45fe Add session expiry warning, renew endpoint, and safe drafts
 9df6fba Add headless verification script for project form isolation
 31dee12 Isolate project payment/cost forms when switching projects
 ```
-
-Tras el commit de continuidad, reemplazar `<sha continuidad>` con `git rev-parse --short HEAD`.
 
 No implementar etapas en paralelo. Migraciones BD solo con autorización explícita (la de FX ya fue autorizada e implementada en código; **producción pendiente de autorización independiente**).
 
@@ -356,11 +354,12 @@ Si se despliega `5c79b5c+` contra una BD **sin** las 4 columnas:
 |------|--------|
 | Rama | `cursor/stage3-invoice-settlement-c0b6` |
 | HEAD código FX | `5c79b5c` |
-| Working tree antes del commit de continuidad | solo `docs/PROJECT_IMPLEMENTATION_CONTEXT.md` modificado |
-| Sync remote (código) | `origin/cursor/stage3-invoice-settlement-c0b6` en `5c79b5c` |
-| vs `origin/main` | 8 commits de código + 1 de continuidad documental (tras commit local) |
+| Commit continuidad (contenido) | `943bbd1` |
+| Working tree al cerrar | limpio (commits locales de continuidad; sin push) |
+| Sync remote | `origin/cursor/stage3-invoice-settlement-c0b6` en `5c79b5c` — local ahead (continuidad sin push) |
+| vs `origin/main` | ≥9 commits ahead (línea Etapas 1–3 + continuidad documental) |
 | Push / merge / rebase | **no** ejecutados en este cierre (instrucción explícita) |
-| PR | https://github.com/ivandanielgg-sketch/Comienzo/pull/85 (código FX ya en PR; continuidad puede quedar solo local hasta push autorizado) |
+| PR | https://github.com/ivandanielgg-sketch/Comienzo/pull/85 (código FX en remoto; continuidad documental solo local hasta push autorizado) |
 
 ### Comando de verificación Git (ejecutado al cierre)
 
