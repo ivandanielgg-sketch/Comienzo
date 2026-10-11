@@ -196,7 +196,7 @@ test('Stage 3 financial integrity validation', async (t) => {
     assert.ok(reviewed.body.pending_collection > 0.01);
   });
 
-  await t.test('3) changing exchange_rates can reopen material pending on settled FX project (document only)', async () => {
+  await t.test('3) changing exchange_rates after FX settle keeps Pagada and pending 0 (snapshots)', async () => {
     const created = await request('POST', '/api/projects', baseProjectPayload({
       quote_number: 'INT-FX-1',
       total_invoiced: 100,
@@ -205,16 +205,17 @@ test('Stage 3 financial integrity validation', async (t) => {
     const settled = await settleProject(created.body.id, adminCookie, { confirmMxn: true });
     assert.ok(Math.abs(settled.pending_collection) <= 0.01);
     assert.equal(settled.payments[0].currency, 'MXN');
+    assert.equal(settled.invoiced_amount_mxn_historical, 1700);
 
     const rates = await request('PUT', '/api/exchange-rates', { USD: 20, EUR: 19 }, adminCookie);
     assert.equal(rates.status, 200);
 
     const after = await request('GET', `/api/projects/${created.body.id}`, null, adminCookie);
-    // Documented behavior (no FX logic change in Stage 3):
-    // live rates recalculate invoiced MXN; residual was locked as MXN cash amount.
     assert.equal(after.body.invoice_payment_status, 'Pagada');
-    assert.equal(after.body.total_invoiced_mxn, 2000);
+    assert.equal(after.body.total_invoiced_mxn, 1700);
     assert.equal(after.body.total_charged, 1700);
-    assert.equal(after.body.pending_collection, 300);
+    assert.equal(after.body.pending_collection, 0);
+    assert.equal(after.body.payments[0].amount_mxn, 1700);
+    assert.equal(after.body.payments[0].amount_mxn_is_historical, true);
   });
 });

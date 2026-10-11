@@ -1,7 +1,7 @@
 # Contexto de implementación — Reestructuración UI / Proyectos
 
 Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
-Última actualización: 2026-10-11 (Etapas 1–3 + validación integridad financiera; Etapa 4 no iniciada).
+Última actualización: 2026-10-11 (Etapas 1–3 + snapshots FX de proyectos; Etapa 4 no iniciada).
 
 **Rama de trabajo Etapa 3:** `cursor/stage3-invoice-settlement-c0b6` (parte de `cursor/session-renewal-drafts-3848` + Etapa 3).
 **PRs relacionados:** #83 (Etapa 1), #84 (Etapa 2 + continuidad), Etapa 3 en rama `cursor/stage3-invoice-settlement-c0b6`.
@@ -89,9 +89,9 @@ Ver secciones históricas 6.1–6.5 del historial de commits; resumen: sesión c
 - Proyectos cerrados: liquidación permitida con permiso `projects/edit`; no altera `closed_at`, `created_at` ni `status` técnico.
 - Concurrencia: PG `SELECT … FOR UPDATE` + TX; SQLite `BEGIN IMMEDIATE` + `busy_timeout`; pagos manuales usan el mismo locking.
 - `expected_pending_mxn` obligatorio (stale → 409) **además** del bloqueo de fila.
-- Sin migraciones; sin columna de idempotencia; sin snapshot FX en `project_payments`.
-- Delete de pagos con contraseña admin: intacto; tras borrar, si queda saldo positivo se reabre a `Pendiente` (sin pagos automáticos).
-- Cambio de `total_invoiced` / moneda en proyecto `Pagada` con saldo material resultante: 409 `INVOICE_AMOUNT_REQUIRES_STATUS_REVIEW` salvo que el PUT pase el estatus a `Pendiente`.
+- Migración aditiva autorizada de snapshots FX (sin backfill ficticio).
+- Delete de pagos con contraseña admin: intacto; tras borrar, si queda saldo positivo se reabre a `Pendiente` (sin pagos automáticos); **no** se borra el snapshot de factura.
+- Cambio de `total_invoiced` / moneda en proyecto `Pagada` con saldo material resultante: 409 `INVOICE_AMOUNT_REQUIRES_STATUS_REVIEW` salvo que el PUT pase el estatus a `Pendiente` (entonces se invalida el snapshot de factura).
 
 ### 7.2 Endpoints
 
@@ -123,6 +123,10 @@ Body settle (mínimo):
 - `test/project-invoice-settlement.test.js`
 - `test/project-invoice-settlement-pg.test.js`
 - `test/project-invoice-settlement-integrity.test.js` (delete / importe / FX documentado)
+- `test/project-invoice-settlement-integrity-pg.test.js`
+- `test/project-payment-fx-snapshot.test.js` / `test/project-payment-fx-snapshot-pg.test.js`
+- `src/db/projectPaymentFxMigration.js`
+- `src/calculations.js` (precedence de snapshots)
 - `test/project-invoice-payment.test.js` (ajustado)
 - `docs/PROJECT_IMPLEMENTATION_CONTEXT.md`
 
@@ -132,11 +136,13 @@ Body settle (mínimo):
 |-------|-----------|
 | `test/project-invoice-settlement.test.js` | OK (helpers + API SQLite + concurrencia) |
 | `test/project-invoice-payment.test.js` | OK (PUT a Pagada rechazado) |
-| `test/project-invoice-settlement-pg.test.js` | OK con BD local dedicada `TEST_DATABASE_URL` (doble settle + settle vs pago manual) |
-| `test/project-invoice-settlement-integrity.test.js` | OK (reabrir tras delete; review al cambiar facturado; FX drift documentado) |
-| `test/project-invoice-settlement-integrity-pg.test.js` | OK en BD local dedicada (mismos 3 escenarios) |
+| `test/project-invoice-settlement-pg.test.js` | OK con BD local dedicada `TEST_DATABASE_URL` |
+| `test/project-invoice-settlement-integrity.test.js` | OK |
+| `test/project-invoice-settlement-integrity-pg.test.js` | OK |
+| `test/project-payment-fx-snapshot.test.js` | OK (criterio USD@17→20, parciales, delete, importe, legacy, concurrencia) |
+| `test/project-payment-fx-snapshot-pg.test.js` | OK en BD local dedicada |
 
-**PostgreSQL de pruebas:** usar solo BD dedicada vía `TEST_DATABASE_URL` (el test hace `DROP SCHEMA public CASCADE`). Nunca apuntar a producción. Sin `TEST_DATABASE_URL`, el archivo se omite (`t.skip`) con mensaje claro. Ejecutar suites PG con `--test-concurrency=1` si se corren juntas (ambas recrean el schema).
+**PostgreSQL de pruebas:** usar solo BD dedicada vía `TEST_DATABASE_URL` (el test hace `DROP SCHEMA public CASCADE`). Nunca apuntar a producción. Sin `TEST_DATABASE_URL`, el archivo se omite (`t.skip`) con mensaje claro. Ejecutar suites PG con `--test-concurrency=1` si se corren juntas (recrean el schema).
 
 ### 7.5 UI
 
@@ -151,15 +157,44 @@ Body settle (mínimo):
 |-----------|------------------|------------|
 | Eliminar pago tras liquidar | Quedaba `Pagada` con saldo > 0 | Tras delete (admin password): si pending > 0.01 → `Pendiente`, `invoice_paid_at=null`, audit `reopen_invoice_payment_status`. Sin pagos auto. |
 | Subir `total_invoiced` en `Pagada` | PUT silencioso dejaba `Pagada` + pending | 409 `INVOICE_AMOUNT_REQUIRES_STATUS_REVIEW` si se conserva `Pagada`; permitir si el mismo PUT pasa a `Pendiente`. |
-| Cambiar `exchange_rates` tras settle USD | Factura 100 USD liquidada a 1700 MXN; TC 17→20 → pending 300 y sigue `Pagada` | **Solo documentado.** No se cambió lógica FX (snapshot futuro). |
+| Cambiar `exchange_rates` tras settle USD | Antes: pending artificial 300 | **Corregido** con snapshots (ver §7.7) |
+
+### 7.7 Snapshots FX de proyectos (autorizado 2026-10-11)
+
+**Columnas (aditivas, nullable, sin backfill):**
+
+| Tabla | Columnas |
+|-------|----------|
+| `project_payments` | `exchange_rate_to_mxn`, `amount_mxn` |
+| `projects` | `invoiced_exchange_rate_to_mxn`, `invoiced_amount_mxn` |
+
+**Reglas:**
+
+- Pagos nuevos / liquidación: persisten importe, moneda, TC aplicado y `amount_mxn`.
+- Al liquidar: si no hay snapshot de factura, se guarda el TC e importe MXN usados; si ya existe (reapertura), se **conserva**.
+- `buildProjectTotals` y SQL de listados: `COALESCE(snapshot, estimación viva)`.
+- API marca `amount_mxn_is_historical` / `invoiced_amount_mxn_is_historical` para no presentar estimaciones como historia confirmada.
+- Históricos pre-migración: `amount_mxn = NULL` (sin inventar TC).
+- Invalidar snapshot de factura solo al cambiar explícitamente importe/moneda facturada.
+- Reapertura por delete de pago: **no** borra snapshot de factura.
+
+**Migración / producción:**
+
+1. Respaldo previo obligatorio (`pg_dump` / copia de `data/app.db`).
+2. Aplicación idempotente vía `migrateProjectPaymentFx` al arrancar (SQLite `ensureColumn` / PG `ADD COLUMN IF NOT EXISTS`).
+3. Verificar en BD de prueba antes de producción.
+4. **No aplicar en producción sin autorización independiente** y plan de rollback (restaurar backup).
+5. Procedimiento de recuperación: restaurar backup de BD; el código nuevo es compatible con columnas ausentes solo tras redeploy previo — preferir rollback de release + restore.
+
+**Criterio de aceptación:** 100 USD liquidados a 1,700 MXN @ 17; TC general → 20 ⇒ sigue `Pagada`, pending 0, pago histórico 1,700 MXN @ TC 1 (MXN), snapshot factura 17 / 1,700.
 
 ## 8. Decisiones de diseño vigentes
 
 - Conservar ejes independientes: `status` técnico ≠ `invoice_payment_status` ≠ `closed_at`.
-- FACTURADO = importe original (`total_invoiced`→MXN), no saldo pendiente.
+- FACTURADO = importe original (`total_invoiced`); cobrado/pendiente usan snapshots FX cuando existen.
 - Liquidación: endpoint dedicado + TX inmediata; PUT no marca Pagada nueva.
 - Idempotency column: **no iniciada**.
-- FX snapshot en filas de proyecto: **futuro**.
+- FX snapshot en pagos/liquidaciones de proyecto: **implementado** (§7.7). Costos siguen en tasas vivas.
 - Eliminación pagos/costos: sigue exigiendo contraseña de administrador.
 
 ## 9. Restricciones financieras
@@ -182,12 +217,13 @@ Body settle (mínimo):
 | Riesgo | Severidad | Notas |
 |--------|-----------|-------|
 | Drawer overlay / UX tres paneles | Alta | Etapa 4 |
-| FX vivo sin snapshot: cambiar TC puede crear pending en proyectos ya Pagada | Alta | Confirmado en prueba controlada; snapshot FX = futuro autorizado |
+| Proyectos `Pagada` históricos sin snapshot de factura | Media | Siguen con tasas vivas hasta re-liquidar; no backfill ficticio |
+| Costos de proyecto sin snapshot FX | Baja | Márgenes pueden moverse con TC; CxC liquidada no |
 | Audit pagos sin `project_id` indexable en todos los eventos | Media | Settle/delete ya ponen `project_id` en metadata; Etapa 4 historial |
 | `SESSION_SECRET` fallback en código si falta env | Media | Ops / env de producción |
 | Borradores no sobreviven cierre de pestaña | Media | Intencional; server-side pendiente |
 | Test backup 413 preexistente | Baja | No bloquear |
-| Proyectos históricos Pagada con saldo > 0 por FX o datos viejos | Media | Liquidar residual vía settle; no auto-reparar en masa |
+| Migración FX en producción sin backup | Alta | Requiere autorización independiente + `pg_dump` / copia SQLite |
 
 ## 12. Cómo continuar desde una conversación nueva
 

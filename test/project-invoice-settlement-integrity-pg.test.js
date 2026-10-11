@@ -186,7 +186,7 @@ test('PostgreSQL Stage 3 integrity scenarios', async (t) => {
     assert.equal(blocked.body.code, 'INVOICE_AMOUNT_REQUIRES_STATUS_REVIEW');
   });
 
-  await t.test('exchange rate change can create pending on settled USD project (documented)', async () => {
+  await t.test('exchange rate change after settle keeps Pagada and pending 0 (snapshots)', async () => {
     const created = await request('POST', '/api/projects', baseProjectPayload({
       quote_number: 'PG-INT-FX',
       total_invoiced: 100,
@@ -203,8 +203,8 @@ test('PostgreSQL Stage 3 integrity scenarios', async (t) => {
     assert.equal(rates.status, 200);
     const after = await request('GET', `/api/projects/${created.body.id}`, null, adminCookie);
     assert.equal(after.body.invoice_payment_status, 'Pagada');
-    assert.equal(after.body.pending_collection, 300);
-    assert.equal(after.body.total_invoiced_mxn, 2000);
+    assert.equal(after.body.pending_collection, 0);
+    assert.equal(after.body.total_invoiced_mxn, 1700);
     assert.equal(after.body.total_charged, 1700);
   });
 });

@@ -8,7 +8,13 @@ const { getDb } = require('./db');
 const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate, isDbTruthy, sqlDateCompareGte, sqlDateCompareLte } = require('./db/dialect');
 const { parseExportDateRange, buildProjectsExcelWorkbook } = require('./projectsExport');
 const { isUniqueConstraintError, uniqueConstraintMessage } = require('./db/uniqueConstraint');
-const { buildProjectTotals, convertAmountToMxn, roundMoney } = require('./calculations');
+const {
+  buildProjectTotals,
+  convertAmountToMxn,
+  roundMoney,
+  capturePaymentFxSnapshot,
+  hasHistoricalAmountMxn,
+} = require('./calculations');
 const {
   PENDING_TOLERANCE_MXN,
   SETTLEMENT_PAYMENT_NOTES,
@@ -773,10 +779,14 @@ function mapExchangeRateState() {
 }
 
 function mapMoneyEntry(row, exchangeRates) {
+  const historical = hasHistoricalAmountMxn(row);
+  const liveEstimate = convertAmountToMxn(row.amount, row.currency || 'MXN', exchangeRates);
   return {
     ...row,
     currency: row.currency || 'MXN',
-    amount_mxn: convertAmountToMxn(row.amount, row.currency || 'MXN', exchangeRates),
+    exchange_rate_to_mxn: row.exchange_rate_to_mxn != null ? Number(row.exchange_rate_to_mxn) : null,
+    amount_mxn: historical ? roundMoney(Number(row.amount_mxn)) : liveEstimate,
+    amount_mxn_is_historical: historical,
   };
 }
 
@@ -830,6 +840,11 @@ function mapProject(row, exchangeRates = getExchangeRateMap()) {
     invoice_payment_status_stored: row.invoice_payment_status || null,
     invoice_payment_status: resolveInvoicePaymentStatus(row),
     invoice_paid_at: row.invoice_paid_at || null,
+    invoiced_exchange_rate_to_mxn:
+      row.invoiced_exchange_rate_to_mxn != null ? Number(row.invoiced_exchange_rate_to_mxn) : null,
+    invoiced_amount_mxn_historical:
+      row.invoiced_amount_mxn != null ? roundMoney(Number(row.invoiced_amount_mxn)) : null,
+    invoiced_amount_mxn_is_historical: row.invoiced_amount_mxn != null,
     tecnico_id: row.tecnico_id || null,
     vendedor_id: row.vendedor_id || null,
     tecnico_nombre: tecnico?.full_name || row.technician_name,
@@ -1018,7 +1033,12 @@ function sortRows(rows, sortBy, sortOrder, defaultSort) {
   });
 }
 
-const PROJECT_CHARGED_SQL = `(SELECT COALESCE(SUM(pp.amount * COALESCE(er.rate_to_mxn, 1)), 0)
+const PROJECT_CHARGED_SQL = `(SELECT COALESCE(SUM(
+  CASE
+    WHEN pp.amount_mxn IS NOT NULL THEN pp.amount_mxn
+    ELSE pp.amount * COALESCE(er.rate_to_mxn, 1)
+  END
+), 0)
   FROM project_payments pp
   LEFT JOIN exchange_rates er ON COALESCE(pp.currency, 'MXN') = er.currency
   WHERE pp.project_id = p.id)`;
@@ -1026,7 +1046,10 @@ const PROJECT_SPENT_SQL = `(SELECT COALESCE(SUM(pc.amount * COALESCE(er.rate_to_
   FROM project_costs pc
   LEFT JOIN exchange_rates er ON COALESCE(pc.currency, 'MXN') = er.currency
   WHERE pc.project_id = p.id)`;
-const PROJECT_INVOICED_SQL = `(p.total_invoiced * COALESCE((SELECT rate_to_mxn FROM exchange_rates WHERE currency = COALESCE(p.total_invoiced_currency, 'MXN')), 1))`;
+const PROJECT_INVOICED_SQL = `(COALESCE(
+  p.invoiced_amount_mxn,
+  p.total_invoiced * COALESCE((SELECT rate_to_mxn FROM exchange_rates WHERE currency = COALESCE(p.total_invoiced_currency, 'MXN')), 1)
+))`;
 const PROJECT_PENDING_SQL = `(${PROJECT_INVOICED_SQL} - ${PROJECT_CHARGED_SQL})`;
 const PROJECT_MARGIN_SQL = `(CASE WHEN ${PROJECT_INVOICED_SQL} > 0 THEN ((${PROJECT_INVOICED_SQL} - ${PROJECT_SPENT_SQL}) / ${PROJECT_INVOICED_SQL}) ELSE 0 END)`;
 const PROJECT_SORTS = {
@@ -1622,7 +1645,12 @@ app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (re
   const globalWhereClause = 'p.closed_at IS NULL';
   const totalProjects = db.prepare(`SELECT COUNT(*) as count FROM projects p WHERE ${globalWhereClause}`).get().count;
   const totalCharged = db.prepare(
-    `SELECT COALESCE(SUM(pp.amount * COALESCE(er.rate_to_mxn, 1)), 0) as total
+    `SELECT COALESCE(SUM(
+       CASE
+         WHEN pp.amount_mxn IS NOT NULL THEN pp.amount_mxn
+         ELSE pp.amount * COALESCE(er.rate_to_mxn, 1)
+       END
+     ), 0) as total
      FROM project_payments pp
      LEFT JOIN exchange_rates er ON COALESCE(pp.currency, 'MXN') = er.currency
      JOIN projects p ON p.id = pp.project_id
@@ -1638,7 +1666,12 @@ app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (re
   ).get().total;
 
   const totalInvoiced = db.prepare(
-    `SELECT COALESCE(SUM(p.total_invoiced * COALESCE(er.rate_to_mxn, 1)), 0) as total
+    `SELECT COALESCE(SUM(
+       COALESCE(
+         p.invoiced_amount_mxn,
+         p.total_invoiced * COALESCE(er.rate_to_mxn, 1)
+       )
+     ), 0) as total
      FROM projects p
      LEFT JOIN exchange_rates er ON COALESCE(p.total_invoiced_currency, 'MXN') = er.currency
      WHERE ${globalWhereClause}`,
@@ -1787,6 +1820,7 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
       || String(before.total_invoiced_currency || 'MXN') !== String(project.total_invoiced_currency || 'MXN');
 
     // Proyecto liquidado: no permitir conservar Pagada si el nuevo facturado deja saldo material.
+    // Proyectar SIN snapshot de factura (se invalidará si el cambio se acepta).
     if (before.invoice_payment_status === 'Pagada' && invoicedChanged) {
       const exchangeRates = getExchangeRateMap();
       const { payments, costs } = loadProjectMoneyRows(before.id);
@@ -1795,6 +1829,8 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
           ...before,
           total_invoiced: project.total_invoiced,
           total_invoiced_currency: project.total_invoiced_currency,
+          invoiced_amount_mxn: null,
+          invoiced_exchange_rate_to_mxn: null,
         },
         payments,
         costs,
@@ -1818,6 +1854,14 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
         );
       }
     }
+
+    // Invalidar snapshot de liquidación solo ante cambio explícito de importe/moneda facturada.
+    const invoiceFxFields = invoicedChanged
+      ? { invoiced_exchange_rate_to_mxn: null, invoiced_amount_mxn: null }
+      : {
+          invoiced_exchange_rate_to_mxn: before.invoiced_exchange_rate_to_mxn ?? null,
+          invoiced_amount_mxn: before.invoiced_amount_mxn ?? null,
+        };
 
     const audit = updatedByFields(req);
     db.prepare(
@@ -1851,13 +1895,27 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
         due_date = @due_date,
         invoice_payment_status = @invoice_payment_status,
         invoice_paid_at = @invoice_paid_at,
+        invoiced_exchange_rate_to_mxn = @invoiced_exchange_rate_to_mxn,
+        invoiced_amount_mxn = @invoiced_amount_mxn,
         updated_at = @updated_at,
         updated_by_user_id = @updated_by_user_id,
         updated_by_name = @updated_by_name
       WHERE id = @id`,
-    ).run({ ...project, id: req.params.id, ...audit });
+    ).run({ ...project, ...invoiceFxFields, id: req.params.id, ...audit });
 
-    logAuditEvent(db, { req, action: 'update', module: 'projects', entityType: 'project', entityId: Number(req.params.id), entityLabel: project.quote_number, before, after: project });
+    logAuditEvent(db, {
+      req,
+      action: 'update',
+      module: 'projects',
+      entityType: 'project',
+      entityId: Number(req.params.id),
+      entityLabel: project.quote_number,
+      before,
+      after: { ...project, ...invoiceFxFields },
+      metadata: invoicedChanged
+        ? { invoice_fx_snapshot_cleared: true }
+        : undefined,
+    });
     res.json(mapProject(getProjectOrFail(req.params.id), getExchangeRateMap()));
   } catch (error) {
     next(error);
@@ -1987,10 +2045,17 @@ app.post('/api/projects/:id/payments', requireAuth, requirePermission('projects'
         );
       }
 
+      const fx = capturePaymentFxSnapshot(payment.amount, payment.currency, exchangeRates);
+      const paymentRow = { ...payment, ...fx };
       const insertResult = db.prepare(
-        `INSERT INTO project_payments (project_id, amount, currency, payment_date, notes, created_at, created_by_user_id, created_by_name)
-         VALUES (@project_id, @amount, @currency, @payment_date, @notes, @created_at, @created_by_user_id, @created_by_name)`,
-      ).run({ ...payment, project_id: projectId, ...audit });
+        `INSERT INTO project_payments (
+           project_id, amount, currency, exchange_rate_to_mxn, amount_mxn,
+           payment_date, notes, created_at, created_by_user_id, created_by_name
+         ) VALUES (
+           @project_id, @amount, @currency, @exchange_rate_to_mxn, @amount_mxn,
+           @payment_date, @notes, @created_at, @created_by_user_id, @created_by_name
+         )`,
+      ).run({ ...paymentRow, project_id: projectId, ...audit });
 
       logAuditEvent(db, {
         req,
@@ -1999,8 +2064,12 @@ app.post('/api/projects/:id/payments', requireAuth, requirePermission('projects'
         entityType: 'project_payment',
         entityId: insertResult.lastInsertRowid,
         entityLabel: `Pago ${payment.amount} ${payment.currency}`,
-        after: payment,
-        metadata: { project_id: Number(projectId) },
+        after: paymentRow,
+        metadata: {
+          project_id: Number(projectId),
+          exchange_rate_to_mxn: fx.exchange_rate_to_mxn,
+          amount_mxn: fx.amount_mxn,
+        },
       });
       return insertResult;
     });
@@ -2134,13 +2203,25 @@ app.post('/api/projects/:id/settle-invoice', requireAuth, requirePermission('pro
           throw badRequest('No hay importe residual valido para registrar.');
         }
         const paymentAudit = createdByFields(req);
+        const paymentFx = capturePaymentFxSnapshot(
+          proposed.amount,
+          proposed.currency,
+          exchangeRates,
+        );
         const insertResult = db.prepare(
-          `INSERT INTO project_payments (project_id, amount, currency, payment_date, notes, created_at, created_by_user_id, created_by_name)
-           VALUES (@project_id, @amount, @currency, @payment_date, @notes, @created_at, @created_by_user_id, @created_by_name)`,
+          `INSERT INTO project_payments (
+             project_id, amount, currency, exchange_rate_to_mxn, amount_mxn,
+             payment_date, notes, created_at, created_by_user_id, created_by_name
+           ) VALUES (
+             @project_id, @amount, @currency, @exchange_rate_to_mxn, @amount_mxn,
+             @payment_date, @notes, @created_at, @created_by_user_id, @created_by_name
+           )`,
         ).run({
           project_id: projectId,
           amount: proposed.amount,
           currency: proposed.currency,
+          exchange_rate_to_mxn: paymentFx.exchange_rate_to_mxn,
+          amount_mxn: paymentFx.amount_mxn,
           payment_date: invoicePaidAt,
           notes: SETTLEMENT_PAYMENT_NOTES,
           ...paymentAudit,
@@ -2156,6 +2237,8 @@ app.post('/api/projects/:id/settle-invoice', requireAuth, requirePermission('pro
           after: {
             amount: proposed.amount,
             currency: proposed.currency,
+            exchange_rate_to_mxn: paymentFx.exchange_rate_to_mxn,
+            amount_mxn: paymentFx.amount_mxn,
             payment_date: invoicePaidAt,
             notes: SETTLEMENT_PAYMENT_NOTES,
           },
@@ -2163,15 +2246,28 @@ app.post('/api/projects/:id/settle-invoice', requireAuth, requirePermission('pro
             project_id: Number(projectId),
             settlement: true,
             previous_pending_mxn: preview.pending_collection_mxn,
+            exchange_rate_to_mxn: paymentFx.exchange_rate_to_mxn,
+            amount_mxn: paymentFx.amount_mxn,
           },
         });
       }
+
+      // Snapshot de factura: conservar el existente tras reapertura; crear solo si no hay histórico.
+      const hasInvoiceSnapshot = locked.invoiced_amount_mxn != null;
+      const invoicedExchangeRateToMxn = hasInvoiceSnapshot
+        ? Number(locked.invoiced_exchange_rate_to_mxn)
+        : Number(preview.rate_applied.rate_to_mxn);
+      const invoicedAmountMxn = hasInvoiceSnapshot
+        ? roundMoney(Number(locked.invoiced_amount_mxn))
+        : roundMoney(Number(preview.total_invoiced_mxn));
 
       const updateAudit = updatedByFields(req);
       db.prepare(
         `UPDATE projects SET
           invoice_payment_status = 'Pagada',
           invoice_paid_at = @invoice_paid_at,
+          invoiced_exchange_rate_to_mxn = @invoiced_exchange_rate_to_mxn,
+          invoiced_amount_mxn = @invoiced_amount_mxn,
           updated_at = @updated_at,
           updated_by_user_id = @updated_by_user_id,
           updated_by_name = @updated_by_name
@@ -2179,6 +2275,8 @@ app.post('/api/projects/:id/settle-invoice', requireAuth, requirePermission('pro
       ).run({
         id: projectId,
         invoice_paid_at: invoicePaidAt,
+        invoiced_exchange_rate_to_mxn: invoicedExchangeRateToMxn,
+        invoiced_amount_mxn: invoicedAmountMxn,
         ...updateAudit,
       });
 
@@ -2226,6 +2324,9 @@ app.post('/api/projects/:id/settle-invoice', requireAuth, requirePermission('pro
           total_charged_mxn_before: preview.total_charged_mxn,
           rate_applied: preview.rate_applied,
           rates_snapshot: preview.exchange_rates,
+          invoiced_exchange_rate_to_mxn: invoicedExchangeRateToMxn,
+          invoiced_amount_mxn: invoicedAmountMxn,
+          invoice_snapshot_preserved: hasInvoiceSnapshot,
           confirm_mxn_matches_real_payment: confirmMxnMatchesRealPayment,
           closed_at_unchanged: closedAtBefore,
           created_at_unchanged: createdAtBefore,
