@@ -16,6 +16,8 @@ function createSqliteDb() {
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+    // Espera ante escritores concurrentes (liquidacion + pagos manuales).
+    db.pragma('busy_timeout = 5000');
     migrate(db);
     seedAdmin(db);
   }
@@ -74,6 +76,8 @@ function migrate(database) {
       project_id INTEGER NOT NULL,
       amount REAL NOT NULL CHECK (amount >= 0),
       currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL,
+      amount_mxn REAL,
       payment_date TEXT NOT NULL,
       notes TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1144,6 +1148,9 @@ function migrate(database) {
 
   const { migrateClosedProjectsStatus } = require('./closedProjectsStatusMigration');
   migrateClosedProjectsStatus(database);
+
+  const { migrateProjectPaymentFx } = require('./projectPaymentFxMigration');
+  migrateProjectPaymentFx(database, { postgres: false });
 }
 
 function seedDefaultEmployees(database) {

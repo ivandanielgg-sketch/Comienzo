@@ -243,6 +243,9 @@
                     <option value="Pagada">Pagada</option>
                   </select>
                 </label>
+                <p id="invoice-payment-settle-hint" class="muted hidden">
+                  Para marcar Pagada se abrirá la liquidación con confirmación de saldo. No se guarda con el formulario del proyecto.
+                </p>
                 <label id="invoice-paid-at-field" class="hidden">
                   Fecha de pago
                   <input name="invoice_paid_at" type="date" />
@@ -2802,10 +2805,37 @@
       </div>
     </div>
 
+    <div id="invoice-settle-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="invoice-settle-title">
+      <div class="modal-content panel invoice-settle-panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Cobranza</p>
+            <h2 id="invoice-settle-title">Liquidar factura (Pagada)</h2>
+          </div>
+        </div>
+        <p class="muted">Revise el saldo antes de confirmar. El movimiento solo se registra si confirma.</p>
+        <dl id="invoice-settle-summary" class="invoice-settle-summary"></dl>
+        <label>
+          Fecha real del pago
+          <input id="invoice-settle-paid-at" type="date" required />
+        </label>
+        <label id="invoice-settle-mxn-confirm-wrap" class="invoice-settle-confirm-wrap hidden">
+          <input id="invoice-settle-mxn-confirm" type="checkbox" />
+          Confirmo que el importe en MXN corresponde al cobro real recibido.
+        </label>
+        <p id="invoice-settle-message" class="message"></p>
+        <div class="row-actions">
+          <button type="button" id="invoice-settle-cancel" class="secondary">Cancelar</button>
+          <button type="button" id="invoice-settle-manual" class="secondary">Registrar pago manual</button>
+          <button type="button" id="invoice-settle-confirm">Confirmar liquidación</button>
+        </div>
+      </div>
+    </div>
+
     <script src="/service-quoter-buildup.js?v=buildup-tarifas-20260717"></script>
     <script src="/project-form-isolation.js?v=form-isolation-stage1"></script>
     <script src="/session-drafts.js?v=session-stage2"></script>
-    <script src="/app.js?v=session-stage2"></script>
+    <script src="/app.js?v=stage3-settle"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>

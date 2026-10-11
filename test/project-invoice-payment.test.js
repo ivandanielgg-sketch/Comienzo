@@ -189,18 +189,20 @@ test('project invoice payment fields via API', async (t) => {
     assert.equal(created.body.credit_days, 0);
   });
 
-  await t.test('requires payment date when status is Pagada', async () => {
+  await t.test('rejects creating project directly as Pagada (must use settlement)', async () => {
     const created = await request('POST', '/api/projects', baseProjectPayload({
       quote_number: 'INV-PAID-FAIL',
       invoice_number: '2251',
       invoice_date: '2026-02-01',
       credit_days: 30,
       invoice_payment_status: 'Pagada',
+      invoice_paid_at: '2026-02-15',
     }), adminCookie);
     assert.equal(created.status, 400);
+    assert.match(String(created.body.message || ''), /liquidacion/i);
   });
 
-  await t.test('marks invoice as Pagada with payment date', async () => {
+  await t.test('rejects PUT transition to Pagada (must use settlement endpoint)', async () => {
     const created = await request('POST', '/api/projects', baseProjectPayload({
       quote_number: 'INV-PAID-OK',
       invoice_number: '2252',
@@ -221,9 +223,8 @@ test('project invoice payment fields via API', async (t) => {
         invoice_paid_at: '2026-02-15',
       }),
     }, adminCookie);
-    assert.equal(updated.status, 200);
-    assert.equal(updated.body.invoice_payment_status, 'Pagada');
-    assert.equal(updated.body.invoice_paid_at, '2026-02-15');
+    assert.equal(updated.status, 400);
+    assert.match(String(updated.body.message || ''), /liquidacion/i);
   });
 
   await t.test('rejects invalid invoice payment status and long invoice number', async () => {

@@ -107,6 +107,10 @@ const state = {
   sessionExtendInFlight: false,
   sessionTimerId: null,
   pendingDraftRestore: null,
+  invoicePaymentStatusBeforeSettle: null,
+  invoiceSettlePreview: null,
+  invoiceSettleProjectId: null,
+  invoiceSettleInFlight: false,
   selectedUserId: null,
   selectedEmployeeId: null,
   adminVerified: false,
@@ -731,6 +735,8 @@ async function api(path, options = {}) {
     const msg = data.message || data.error || 'La operacion no pudo completarse.';
     const err = new Error(msg);
     err.statusCode = response.status;
+    err.status = response.status;
+    err.body = data;
     throw err;
   }
   return data;
@@ -2146,18 +2152,282 @@ async function loadFailureReports(projectId, listElement) {
   }
 }
 
+function getSelectedProjectInvoiceStatusStored() {
+  const selected = state.projects.find((p) => Number(p.id) === Number(state.selectedProjectId));
+  return selected?.invoice_payment_status_stored || selected?.invoice_payment_status || null;
+}
+
 function toggleInvoicePaidAtField() {
   const statusSelect = projectForm.elements.invoice_payment_status;
   const paidAtField = document.getElementById('invoice-paid-at-field');
   const paidAtInput = projectForm.elements.invoice_paid_at;
+  const hint = document.getElementById('invoice-payment-settle-hint');
   if (!statusSelect || !paidAtField || !paidAtInput) {
     return;
   }
   const isPaid = statusSelect.value === 'Pagada';
-  paidAtField.classList.toggle('hidden', !isPaid);
-  paidAtInput.required = isPaid;
-  if (!isPaid) {
+  const alreadyStoredPaid = getSelectedProjectInvoiceStatusStored() === 'Pagada';
+  // Fecha en formulario solo para proyectos ya Pagada (histórico); liquidación nueva usa el modal.
+  const showPaidAt = isPaid && alreadyStoredPaid;
+  paidAtField.classList.toggle('hidden', !showPaidAt);
+  paidAtInput.required = showPaidAt;
+  if (!showPaidAt && !alreadyStoredPaid) {
     paidAtInput.value = '';
+  }
+  if (hint) {
+    hint.classList.toggle('hidden', !(isPaid && !alreadyStoredPaid));
+  }
+}
+
+function hideInvoiceSettleModal() {
+  const modal = document.getElementById('invoice-settle-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  state.invoiceSettlePreview = null;
+  state.invoiceSettleProjectId = null;
+  const msg = document.getElementById('invoice-settle-message');
+  if (msg) setMessage(msg, '');
+  const confirmMxn = document.getElementById('invoice-settle-mxn-confirm');
+  if (confirmMxn) confirmMxn.checked = false;
+}
+
+function revertInvoicePaymentStatusAfterSettleCancel() {
+  const statusSelect = projectForm.elements.invoice_payment_status;
+  if (!statusSelect) return;
+  const previous = state.invoicePaymentStatusBeforeSettle;
+  statusSelect.value = previous == null ? '' : previous;
+  state.invoicePaymentStatusBeforeSettle = null;
+  toggleInvoicePaidAtField();
+}
+
+function renderInvoiceSettleSummary(preview) {
+  const summary = document.getElementById('invoice-settle-summary');
+  if (!summary || !preview) return;
+  const moneyFmt = (value) => money.format(Number(value || 0));
+  const rows = [
+    ['Cotización', preview.quote_number || '—'],
+    ['Moneda original', preview.invoice_currency || 'MXN'],
+    ['Importe facturado', `${moneyFmt(preview.total_invoiced)} ${preview.invoice_currency || 'MXN'}`],
+    ['Facturado (MXN)', moneyFmt(preview.total_invoiced_mxn)],
+    ['Pagos acumulados (MXN)', moneyFmt(preview.total_charged_mxn)],
+    [
+      'Tipo de cambio',
+      preview.rate_applied
+        ? `1 ${preview.rate_applied.currency} = ${Number(preview.rate_applied.rate_to_mxn).toFixed(4)} MXN`
+        : '—',
+    ],
+    ['Saldo pendiente (MXN)', moneyFmt(preview.pending_collection_mxn)],
+  ];
+  if (preview.proposed_payment) {
+    rows.push([
+      'Importe a registrar',
+      `${moneyFmt(preview.proposed_payment.amount)} ${preview.proposed_payment.currency}`,
+    ]);
+  } else if (preview.settlement_action === 'status_only') {
+    rows.push(['Importe a registrar', 'Sin movimiento (saldo ≈ 0)']);
+  }
+  summary.innerHTML = rows
+    .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd>`)
+    .join('');
+}
+
+async function openInvoiceSettleModal(projectId) {
+  const modal = document.getElementById('invoice-settle-modal');
+  const msg = document.getElementById('invoice-settle-message');
+  const confirmBtn = document.getElementById('invoice-settle-confirm');
+  const mxnWrap = document.getElementById('invoice-settle-mxn-confirm-wrap');
+  const paidAtInput = document.getElementById('invoice-settle-paid-at');
+  if (!modal || !projectId) return false;
+
+  state.invoiceSettleProjectId = Number(projectId);
+  if (msg) setMessage(msg, '');
+  if (confirmBtn) confirmBtn.disabled = true;
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+
+  try {
+    const preview = await api(`/api/projects/${projectId}/settlement-preview`);
+    state.invoiceSettlePreview = preview;
+    renderInvoiceSettleSummary(preview);
+    if (paidAtInput && !paidAtInput.value) {
+      paidAtInput.value = today();
+    }
+    if (mxnWrap) {
+      mxnWrap.classList.toggle('hidden', !preview.requires_mxn_confirmation);
+    }
+    if (!preview.can_auto_settle) {
+      if (msg) setMessage(msg, preview.block_reason || 'No se puede liquidar automáticamente.');
+      if (confirmBtn) confirmBtn.disabled = true;
+      return false;
+    }
+    if (confirmBtn) confirmBtn.disabled = false;
+    return true;
+  } catch (error) {
+    if (msg) setMessage(msg, error.message || 'No se pudo obtener la vista previa.');
+    if (confirmBtn) confirmBtn.disabled = true;
+    return false;
+  }
+}
+
+async function handleInvoicePaymentStatusChange() {
+  const statusSelect = projectForm.elements.invoice_payment_status;
+  if (!statusSelect) return;
+  const previous = state.invoicePaymentStatusBeforeSettle ?? statusSelect.dataset.previousValue ?? '';
+  if (statusSelect.value !== 'Pagada') {
+    state.invoicePaymentStatusBeforeSettle = null;
+    toggleInvoicePaidAtField();
+    return;
+  }
+
+  const alreadyStoredPaid = getSelectedProjectInvoiceStatusStored() === 'Pagada';
+  toggleInvoicePaidAtField();
+  if (alreadyStoredPaid) {
+    return;
+  }
+
+  const projectId = projectForm.elements.id?.value || state.selectedProjectId;
+  if (!projectId) {
+    window.alert('Guarde el proyecto primero. Después podrá marcar Pagada e iniciar la liquidación.');
+    statusSelect.value = previous || '';
+    toggleInvoicePaidAtField();
+    return;
+  }
+
+  state.invoicePaymentStatusBeforeSettle = previous || '';
+  const opened = await openInvoiceSettleModal(projectId);
+  if (!opened && state.invoiceSettlePreview && !state.invoiceSettlePreview.can_auto_settle) {
+    // Mantener modal visible con advertencia de sobrepago; el usuario cancela o registra manual.
+    return;
+  }
+  if (!opened) {
+    revertInvoicePaymentStatusAfterSettleCancel();
+    hideInvoiceSettleModal();
+  }
+}
+
+async function confirmInvoiceSettlement() {
+  if (state.invoiceSettleInFlight) return;
+  const msg = document.getElementById('invoice-settle-message');
+  const paidAtInput = document.getElementById('invoice-settle-paid-at');
+  const confirmMxn = document.getElementById('invoice-settle-mxn-confirm');
+  const confirmBtn = document.getElementById('invoice-settle-confirm');
+  const preview = state.invoiceSettlePreview;
+  const projectId = state.invoiceSettleProjectId;
+  if (!preview || !projectId) return;
+
+  if (!paidAtInput?.value) {
+    if (msg) setMessage(msg, 'Indique la fecha real del pago.');
+    return;
+  }
+  if (preview.requires_mxn_confirmation && !confirmMxn?.checked) {
+    if (msg) {
+      setMessage(
+        msg,
+        'Confirme que el importe en MXN corresponde al cobro real, o cancele para registrar el pago manualmente.',
+      );
+    }
+    return;
+  }
+
+  state.invoiceSettleInFlight = true;
+  if (confirmBtn) confirmBtn.disabled = true;
+  try {
+    const result = await api(`/api/projects/${projectId}/settle-invoice`, {
+      method: 'POST',
+      body: JSON.stringify({
+        invoice_paid_at: paidAtInput.value,
+        expected_pending_mxn: preview.pending_collection_mxn,
+        confirm: true,
+        confirm_mxn_matches_real_payment: Boolean(confirmMxn?.checked),
+      }),
+    });
+    hideInvoiceSettleModal();
+    state.invoicePaymentStatusBeforeSettle = null;
+    setMessage(projectMessage, 'Factura liquidada correctamente.', true);
+    clearDraftForCurrent('project_edit');
+    await applyProjectListUpdate(result);
+    selectProject(result.id);
+  } catch (error) {
+    if (error.status === 409 && error.body?.code === 'SETTLEMENT_STALE' && error.body?.preview) {
+      state.invoiceSettlePreview = error.body.preview;
+      renderInvoiceSettleSummary(error.body.preview);
+      const mxnWrap = document.getElementById('invoice-settle-mxn-confirm-wrap');
+      if (mxnWrap) {
+        mxnWrap.classList.toggle('hidden', !error.body.preview.requires_mxn_confirmation);
+      }
+      if (msg) {
+        setMessage(
+          msg,
+          error.message || 'El saldo cambió. Revise el nuevo saldo antes de confirmar.',
+        );
+      }
+    } else if (msg) {
+      setMessage(msg, error.message || 'No se pudo liquidar la factura.');
+    }
+  } finally {
+    state.invoiceSettleInFlight = false;
+    if (confirmBtn) {
+      confirmBtn.disabled = !(state.invoiceSettlePreview && state.invoiceSettlePreview.can_auto_settle);
+    }
+  }
+}
+
+function cancelInvoiceSettlementToManualPayment() {
+  revertInvoicePaymentStatusAfterSettleCancel();
+  hideInvoiceSettleModal();
+  const amountInput = paymentForm?.elements?.amount;
+  if (amountInput && typeof amountInput.focus === 'function') {
+    amountInput.focus();
+  }
+  setMessage(
+    projectMessage,
+    'Liquidación cancelada. Registre el pago manualmente y vuelva a marcar Pagada cuando el saldo lo permita.',
+    true,
+  );
+}
+
+function wireInvoiceSettleModal() {
+  const statusSelect = projectForm?.elements?.invoice_payment_status;
+  if (statusSelect) {
+    statusSelect.addEventListener('focus', () => {
+      statusSelect.dataset.previousValue = statusSelect.value;
+    });
+    statusSelect.addEventListener('change', () => {
+      handleInvoicePaymentStatusChange();
+    });
+  }
+
+  const modal = document.getElementById('invoice-settle-modal');
+  const cancelBtn = document.getElementById('invoice-settle-cancel');
+  const manualBtn = document.getElementById('invoice-settle-manual');
+  const confirmBtn = document.getElementById('invoice-settle-confirm');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      revertInvoicePaymentStatusAfterSettleCancel();
+      hideInvoiceSettleModal();
+    });
+  }
+  if (manualBtn) {
+    manualBtn.addEventListener('click', cancelInvoiceSettlementToManualPayment);
+  }
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', () => {
+      confirmInvoiceSettlement();
+    });
+  }
+  if (modal) {
+    let settleBackdropMouseDown = false;
+    modal.addEventListener('mousedown', (event) => {
+      settleBackdropMouseDown = event.target === modal;
+    });
+    modal.addEventListener('mouseup', (event) => {
+      if (settleBackdropMouseDown && event.target === modal) {
+        revertInvoicePaymentStatusAfterSettleCancel();
+        hideInvoiceSettleModal();
+      }
+      settleBackdropMouseDown = false;
+    });
   }
 }
 
@@ -2767,6 +3037,22 @@ projectForm.addEventListener('submit', async (event) => {
 
   try {
     const id = projectForm.elements.id.value;
+    const statusSelect = projectForm.elements.invoice_payment_status;
+    const wantsPagada = statusSelect && statusSelect.value === 'Pagada';
+    const alreadyStoredPaid = getSelectedProjectInvoiceStatusStored() === 'Pagada';
+    if (wantsPagada && !alreadyStoredPaid) {
+      if (!id) {
+        setMessage(
+          projectMessage,
+          'Guarde el proyecto primero. Después marque Pagada para iniciar la liquidación.',
+        );
+        return;
+      }
+      state.invoicePaymentStatusBeforeSettle = statusSelect.dataset.previousValue || '';
+      await openInvoiceSettleModal(id);
+      return;
+    }
+
     const savedProject = await api(id ? `/api/projects/${id}` : '/api/projects', {
       method: id ? 'PUT' : 'POST',
       body: JSON.stringify(projectPayload()),
@@ -2788,9 +3074,7 @@ projectForm.addEventListener('submit', async (event) => {
 
 newProjectButton.addEventListener('click', clearSelection);
 purchaseOrderNotApplicable.addEventListener('change', togglePurchaseOrder);
-if (projectForm.elements.invoice_payment_status) {
-  projectForm.elements.invoice_payment_status.addEventListener('change', toggleInvoicePaidAtField);
-}
+wireInvoiceSettleModal();
 if (projectForm.elements.invoice_date_na) {
   projectForm.elements.invoice_date_na.addEventListener('change', toggleBillingNaFields);
 }
