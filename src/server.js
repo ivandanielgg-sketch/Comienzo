@@ -14,6 +14,8 @@ const {
   SETTLEMENT_PAYMENT_NOTES,
   buildSettlementPlan,
   amountsMatchWithinTolerance,
+  hasMaterialPendingBalance,
+  hasPositivePendingBalance,
 } = require('./projectInvoiceSettlement');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
@@ -1779,6 +1781,44 @@ app.put('/api/projects/:id', requireAuth, requirePermission('projects', 'edit'),
     const before = getProjectOrFail(req.params.id);
     const project = normalizeProject(req.body, { existingRow: before });
     assertUniqueProjectQuoteNumber(project.quote_number, req.params.id);
+
+    const invoicedChanged =
+      Number(before.total_invoiced || 0) !== Number(project.total_invoiced || 0)
+      || String(before.total_invoiced_currency || 'MXN') !== String(project.total_invoiced_currency || 'MXN');
+
+    // Proyecto liquidado: no permitir conservar Pagada si el nuevo facturado deja saldo material.
+    if (before.invoice_payment_status === 'Pagada' && invoicedChanged) {
+      const exchangeRates = getExchangeRateMap();
+      const { payments, costs } = loadProjectMoneyRows(before.id);
+      const projected = buildSettlementPlan(
+        {
+          ...before,
+          total_invoiced: project.total_invoiced,
+          total_invoiced_currency: project.total_invoiced_currency,
+        },
+        payments,
+        costs,
+        exchangeRates,
+      );
+      if (
+        hasMaterialPendingBalance(projected.pending_collection_mxn)
+        && project.invoice_payment_status === 'Pagada'
+      ) {
+        throw conflict(
+          'El cambio de importe o moneda facturada genera un saldo inconsistente con Pagada. '
+          + 'Cambie el estatus de pago a Pendiente para revisar la cobranza (no se modificara el historial de pagos automaticamente).',
+          {
+            code: 'INVOICE_AMOUNT_REQUIRES_STATUS_REVIEW',
+            pending_collection_mxn: projected.pending_collection_mxn,
+            previous_total_invoiced: before.total_invoiced,
+            previous_total_invoiced_currency: before.total_invoiced_currency || 'MXN',
+            new_total_invoiced: project.total_invoiced,
+            new_total_invoiced_currency: project.total_invoiced_currency || 'MXN',
+          },
+        );
+      }
+    }
+
     const audit = updatedByFields(req);
     db.prepare(
       `UPDATE projects SET
@@ -2216,15 +2256,78 @@ app.post('/api/projects/:id/settle-invoice', requireAuth, requirePermission('pro
 
 app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
-    getProjectOrFail(req.params.projectId);
     verifyAdminPassword(req.body);
-    const before = db.prepare('SELECT * FROM project_payments WHERE id = ? AND project_id = ?').get(req.params.paymentId, req.params.projectId);
-    db.prepare('DELETE FROM project_payments WHERE id = ? AND project_id = ?').run(
-      req.params.paymentId,
-      req.params.projectId,
-    );
-    logAuditEvent(db, { req, action: 'delete', module: 'payments', entityType: 'project_payment', entityId: Number(req.params.paymentId), entityLabel: before ? `Pago ${before.amount}` : null, before });
-    res.json(mapProject(getProjectOrFail(req.params.projectId), getExchangeRateMap()));
+    const projectId = req.params.projectId;
+    const paymentId = req.params.paymentId;
+
+    runImmediateTransaction(() => {
+      const locked = getProjectLockedOrFail(projectId);
+      const before = db.prepare('SELECT * FROM project_payments WHERE id = ? AND project_id = ?').get(paymentId, projectId);
+      if (!before) {
+        const error = new Error('Pago no encontrado.');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const exchangeRates = getExchangeRateMap();
+      const pendingBeforeDelete = buildProjectSettlementPreview(locked, exchangeRates).pending_collection_mxn;
+
+      db.prepare('DELETE FROM project_payments WHERE id = ? AND project_id = ?').run(paymentId, projectId);
+      logAuditEvent(db, {
+        req,
+        action: 'delete',
+        module: 'payments',
+        entityType: 'project_payment',
+        entityId: Number(paymentId),
+        entityLabel: `Pago ${before.amount}`,
+        before,
+        metadata: { project_id: Number(projectId) },
+      });
+
+      // Si el proyecto estaba Pagada y el saldo vuelve a ser positivo, reabrir cobranza.
+      // No se generan pagos automaticos.
+      if (locked.invoice_payment_status === 'Pagada') {
+        const previewAfter = buildProjectSettlementPreview(locked, exchangeRates);
+        if (hasPositivePendingBalance(previewAfter.pending_collection_mxn)) {
+          const audit = updatedByFields(req);
+          db.prepare(
+            `UPDATE projects SET
+              invoice_payment_status = 'Pendiente',
+              invoice_paid_at = NULL,
+              updated_at = @updated_at,
+              updated_by_user_id = @updated_by_user_id,
+              updated_by_name = @updated_by_name
+             WHERE id = @id`,
+          ).run({ id: projectId, ...audit });
+          logAuditEvent(db, {
+            req,
+            action: 'reopen_invoice_payment_status',
+            module: 'projects',
+            entityType: 'project',
+            entityId: Number(projectId),
+            entityLabel: locked.quote_number,
+            before: {
+              invoice_payment_status: 'Pagada',
+              invoice_paid_at: locked.invoice_paid_at,
+              pending_collection_mxn: pendingBeforeDelete,
+            },
+            after: {
+              invoice_payment_status: 'Pendiente',
+              invoice_paid_at: null,
+              pending_collection_mxn: previewAfter.pending_collection_mxn,
+            },
+            metadata: {
+              project_id: Number(projectId),
+              reason: 'payment_deleted',
+              deleted_payment_id: Number(paymentId),
+              pending_collection_mxn: previewAfter.pending_collection_mxn,
+            },
+          });
+        }
+      }
+    });
+
+    res.json(mapProject(getProjectOrFail(projectId), getExchangeRateMap()));
   } catch (error) {
     next(error);
   }

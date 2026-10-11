@@ -1,7 +1,7 @@
 # Contexto de implementación — Reestructuración UI / Proyectos
 
 Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
-Última actualización: 2026-10-10 (Etapas 1–3 cerradas en código; Etapa 4 no iniciada).
+Última actualización: 2026-10-11 (Etapas 1–3 + validación integridad financiera; Etapa 4 no iniciada).
 
 **Rama de trabajo Etapa 3:** `cursor/stage3-invoice-settlement-c0b6` (parte de `cursor/session-renewal-drafts-3848` + Etapa 3).
 **PRs relacionados:** #83 (Etapa 1), #84 (Etapa 2 + continuidad), Etapa 3 en rama `cursor/stage3-invoice-settlement-c0b6`.
@@ -90,7 +90,8 @@ Ver secciones históricas 6.1–6.5 del historial de commits; resumen: sesión c
 - Concurrencia: PG `SELECT … FOR UPDATE` + TX; SQLite `BEGIN IMMEDIATE` + `busy_timeout`; pagos manuales usan el mismo locking.
 - `expected_pending_mxn` obligatorio (stale → 409) **además** del bloqueo de fila.
 - Sin migraciones; sin columna de idempotencia; sin snapshot FX en `project_payments`.
-- Delete de pagos con contraseña admin: intacto.
+- Delete de pagos con contraseña admin: intacto; tras borrar, si queda saldo positivo se reabre a `Pendiente` (sin pagos automáticos).
+- Cambio de `total_invoiced` / moneda en proyecto `Pagada` con saldo material resultante: 409 `INVOICE_AMOUNT_REQUIRES_STATUS_REVIEW` salvo que el PUT pase el estatus a `Pendiente`.
 
 ### 7.2 Endpoints
 
@@ -121,6 +122,7 @@ Body settle (mínimo):
 - `public/app.js`, `public/index.html`, `public/styles.css` (modal liquidación)
 - `test/project-invoice-settlement.test.js`
 - `test/project-invoice-settlement-pg.test.js`
+- `test/project-invoice-settlement-integrity.test.js` (delete / importe / FX documentado)
 - `test/project-invoice-payment.test.js` (ajustado)
 - `docs/PROJECT_IMPLEMENTATION_CONTEXT.md`
 
@@ -131,8 +133,10 @@ Body settle (mínimo):
 | `test/project-invoice-settlement.test.js` | OK (helpers + API SQLite + concurrencia) |
 | `test/project-invoice-payment.test.js` | OK (PUT a Pagada rechazado) |
 | `test/project-invoice-settlement-pg.test.js` | OK con BD local dedicada `TEST_DATABASE_URL` (doble settle + settle vs pago manual) |
+| `test/project-invoice-settlement-integrity.test.js` | OK (reabrir tras delete; review al cambiar facturado; FX drift documentado) |
+| `test/project-invoice-settlement-integrity-pg.test.js` | OK en BD local dedicada (mismos 3 escenarios) |
 
-**PostgreSQL de pruebas:** usar solo BD dedicada vía `TEST_DATABASE_URL` (el test hace `DROP SCHEMA public CASCADE`). Nunca apuntar a producción. Sin `TEST_DATABASE_URL`, el archivo se omite (`t.skip`) con mensaje claro.
+**PostgreSQL de pruebas:** usar solo BD dedicada vía `TEST_DATABASE_URL` (el test hace `DROP SCHEMA public CASCADE`). Nunca apuntar a producción. Sin `TEST_DATABASE_URL`, el archivo se omite (`t.skip`) con mensaje claro. Ejecutar suites PG con `--test-concurrency=1` si se corren juntas (ambas recrean el schema).
 
 ### 7.5 UI
 
@@ -140,6 +144,14 @@ Body settle (mínimo):
 - Muestra resumen financiero; fecha real obligatoria; checkbox MXN para USD/EUR.
 - Botones: Confirmar / Registrar pago manual / Cancelar.
 - Guardar proyecto no puede “colarse” a Pagada sin liquidación.
+
+### 7.6 Validación final de integridad financiera (2026-10-11)
+
+| Escenario | Hallazgo inicial | Corrección |
+|-----------|------------------|------------|
+| Eliminar pago tras liquidar | Quedaba `Pagada` con saldo > 0 | Tras delete (admin password): si pending > 0.01 → `Pendiente`, `invoice_paid_at=null`, audit `reopen_invoice_payment_status`. Sin pagos auto. |
+| Subir `total_invoiced` en `Pagada` | PUT silencioso dejaba `Pagada` + pending | 409 `INVOICE_AMOUNT_REQUIRES_STATUS_REVIEW` si se conserva `Pagada`; permitir si el mismo PUT pasa a `Pendiente`. |
+| Cambiar `exchange_rates` tras settle USD | Factura 100 USD liquidada a 1700 MXN; TC 17→20 → pending 300 y sigue `Pagada` | **Solo documentado.** No se cambió lógica FX (snapshot futuro). |
 
 ## 8. Decisiones de diseño vigentes
 
@@ -170,12 +182,12 @@ Body settle (mínimo):
 | Riesgo | Severidad | Notas |
 |--------|-----------|-------|
 | Drawer overlay / UX tres paneles | Alta | Etapa 4 |
-| FX sin snapshot histórico en pagos de proyecto | Media | Solo documentado; residual settle en MXN |
-| Audit pagos sin `project_id` indexable en todos los eventos | Media | Settle ya pone `project_id` en metadata; Etapa 4 historial |
+| FX vivo sin snapshot: cambiar TC puede crear pending en proyectos ya Pagada | Alta | Confirmado en prueba controlada; snapshot FX = futuro autorizado |
+| Audit pagos sin `project_id` indexable en todos los eventos | Media | Settle/delete ya ponen `project_id` en metadata; Etapa 4 historial |
 | `SESSION_SECRET` fallback en código si falta env | Media | Ops / env de producción |
 | Borradores no sobreviven cierre de pestaña | Media | Intencional; server-side pendiente |
 | Test backup 413 preexistente | Baja | No bloquear |
-| Proyectos históricos Pagada con saldo > 0 | Baja | Se pueden liquidar (crea residual) vía settle |
+| Proyectos históricos Pagada con saldo > 0 por FX o datos viejos | Media | Liquidar residual vía settle; no auto-reparar en masa |
 
 ## 12. Cómo continuar desde una conversación nueva
 

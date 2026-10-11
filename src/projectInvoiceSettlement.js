@@ -86,9 +86,21 @@ function amountsMatchWithinTolerance(expected, actual, tolerance = PENDING_TOLER
   return Math.abs(roundMoney(Number(expected)) - roundMoney(Number(actual))) <= tolerance;
 }
 
+/** Saldo material (positivo o negativo) fuera de tolerancia. */
+function hasMaterialPendingBalance(pendingMxn, tolerance = PENDING_TOLERANCE_MXN) {
+  return Math.abs(roundMoney(Number(pendingMxn))) > tolerance;
+}
+
+/** Saldo por cobrar material (> tolerancia). */
+function hasPositivePendingBalance(pendingMxn, tolerance = PENDING_TOLERANCE_MXN) {
+  return roundMoney(Number(pendingMxn)) > tolerance;
+}
+
 module.exports = {
   PENDING_TOLERANCE_MXN,
   SETTLEMENT_PAYMENT_NOTES,
   buildSettlementPlan,
   amountsMatchWithinTolerance,
+  hasMaterialPendingBalance,
+  hasPositivePendingBalance,
 };
