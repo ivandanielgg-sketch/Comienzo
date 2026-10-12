@@ -85,6 +85,45 @@ function applyPermissionVisibility() {
   if (backupBtn) backupBtn.style.display = canAccess('backups', 'backup') ? '' : 'none';
   const importBtn = document.getElementById('import-btn');
   if (importBtn) importBtn.style.display = canAccess('backups', 'import') ? '' : 'none';
+
+  // M3: gate project create/edit/close controls in list + workspace/drawer.
+  const canCreateProject = canAccess('projects', 'create');
+  const canEditProject = canAccess('projects', 'edit');
+  const canCloseProject = canAccess('projects', 'close');
+
+  for (const id of ['projects-new-button', 'workspace-new-from-ws']) {
+    const el = document.getElementById(id);
+    if (el) {
+      if (canCreateProject) el.classList.remove('hidden');
+      else el.classList.add('hidden');
+    }
+  }
+
+  const projectSubmit = document.querySelector('#project-form button[type="submit"]');
+  if (projectSubmit) {
+    projectSubmit.disabled = !canEditProject;
+    projectSubmit.classList.toggle('hidden', !canEditProject);
+  }
+  const paymentSubmit = document.querySelector('#payment-form button[type="submit"]');
+  if (paymentSubmit) {
+    paymentSubmit.disabled = !canEditProject;
+    paymentSubmit.classList.toggle('hidden', !canEditProject);
+  }
+  const costSubmit = document.querySelector('#cost-form button[type="submit"]');
+  if (costSubmit) {
+    costSubmit.disabled = !canEditProject;
+    costSubmit.classList.toggle('hidden', !canEditProject);
+  }
+  for (const id of ['invoice-settle-confirm', 'invoice-settle-manual']) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.disabled = !canEditProject;
+    }
+  }
+  // Expose for row-action rendering (close button).
+  state.projectsCanClose = canCloseProject;
+  state.projectsCanEdit = canEditProject;
+  state.projectsCanCreate = canCreateProject;
 }
 
 const state = {
@@ -155,6 +194,8 @@ state.projectWorkspaceTab = 'info';
 state.projectFormBaseline = '';
 state.historialPag = { limit: 30, offset: 0, total: 0 };
 state.historialLoadedFor = null;
+state.historialLoadToken = 0;
+state.historialAbortController = null;
 state.listPositionSnapshot = null;
 state.workspaceFinanceExpanded = false;
 
@@ -1562,9 +1603,19 @@ async function loadProjects() {
   if (state.selectedProjectId) {
     const current = state.projects.find((project) => project.id === state.selectedProjectId);
     if (current) {
-      fillProjectForm(current);
-      if (state.projectDrawerOpen) {
-        renderDetail(current);
+      // C1: never clobber a dirty Información form on list refresh.
+      // Check dirty immediately before any form sync.
+      if (!isProjectFormDirty()) {
+        fillProjectForm(current);
+        snapshotProjectFormBaseline();
+      }
+      // M2: refresh indicators/lists in workspace or drawer without requiring form sync.
+      if (state.projectDrawerOpen || state.projectWorkspaceOpen) {
+        renderDetail(current, {
+          token: state.projectDetailLoadToken,
+          signal: state.projectDetailAbortController ? state.projectDetailAbortController.signal : undefined,
+          projectId: state.selectedProjectId,
+        });
       }
     } else {
       clearSelection();
@@ -1603,9 +1654,12 @@ function renderProjectsSummary() {
 }
 
 function projectRowActions(project) {
+  const closeBtn = state.projectsCanClose !== false
+    ? `<button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Cerrar proyecto</button>`
+    : '';
   return `
       <div class="row-actions">
-        <button class="danger" data-action="delete-project" data-id="${project.id}" type="button">Cerrar proyecto</button>
+        ${closeBtn}
         <button class="secondary" data-action="select" data-id="${project.id}" type="button">Abrir</button>
       </div>`;
 }
@@ -1753,7 +1807,13 @@ async function applyProjectListUpdate(updatedProject, { remove = false, markWork
   }
 
   if (state.selectedProjectId === id) {
-    fillProjectForm(updatedProject);
+    // C1: payment/cost/settle/delete refreshes must not overwrite dirty Información
+    // nor rebase the baseline. Re-check dirty immediately before syncing the form.
+    const formDirty = isProjectFormDirty();
+    if (!formDirty) {
+      fillProjectForm(updatedProject);
+      snapshotProjectFormBaseline();
+    }
     if (state.projectDrawerOpen || state.projectWorkspaceOpen) {
       renderDetail(updatedProject, {
         token: state.projectDetailLoadToken,
@@ -1761,7 +1821,6 @@ async function applyProjectListUpdate(updatedProject, { remove = false, markWork
         projectId: id,
       });
     }
-    snapshotProjectFormBaseline();
     if (state.projectWorkspaceOpen && state.projectWorkspaceTab === 'historial') {
       state.historialPag.offset = 0;
       loadWorkspaceHistorial();
@@ -2213,6 +2272,32 @@ function applyProjectsUiModeFromToggle() {
   syncProjectsRowClasses();
 }
 
+function beginHistorialLoad(projectId) {
+  state.historialLoadToken = (Number(state.historialLoadToken) || 0) + 1;
+  if (state.historialAbortController) {
+    try {
+      state.historialAbortController.abort();
+    } catch (_err) {
+      /* ignore */
+    }
+  }
+  state.historialAbortController = typeof AbortController !== 'undefined'
+    ? new AbortController()
+    : null;
+  return {
+    token: state.historialLoadToken,
+    signal: state.historialAbortController ? state.historialAbortController.signal : undefined,
+    projectId: Number(projectId),
+  };
+}
+
+function isHistorialLoadCurrent(token, projectId) {
+  return (
+    Number(state.historialLoadToken) === Number(token)
+    && Number(projectForm?.elements?.id?.value || state.selectedProjectId) === Number(projectId)
+  );
+}
+
 async function loadWorkspaceHistorial() {
   const list = document.querySelector('#workspace-historial-list');
   const message = document.querySelector('#workspace-historial-message');
@@ -2222,13 +2307,20 @@ async function loadWorkspaceHistorial() {
     if (list) list.innerHTML = '<li class="muted">Guarde el proyecto para ver su historial.</li>';
     return;
   }
+  const load = beginHistorialLoad(projectId);
   if (message) message.textContent = 'Cargando historial...';
   try {
     const params = new URLSearchParams({
       limit: String(state.historialPag.limit),
       offset: String(state.historialPag.offset),
     });
-    const result = await api(`/api/projects/${projectId}/historial?${params}`);
+    const result = await api(`/api/projects/${projectId}/historial?${params}`, {
+      signal: load.signal,
+    });
+    // M1: ignore stale responses after project switch / newer historial load.
+    if (!isHistorialLoadCurrent(load.token, load.projectId)) {
+      return;
+    }
     state.historialPag.total = result.total || 0;
     state.historialLoadedFor = projectId;
     const rows = result.data || [];
@@ -2260,6 +2352,12 @@ async function loadWorkspaceHistorial() {
     }
     if (message) message.textContent = '';
   } catch (error) {
+    if (error && (error.name === 'AbortError' || error.code === 'ABORT_ERR')) {
+      return;
+    }
+    if (!isHistorialLoadCurrent(load.token, load.projectId)) {
+      return;
+    }
     if (message) message.textContent = error.message;
     list.innerHTML = '<li class="muted">No se pudo cargar el historial.</li>';
   }
@@ -2305,8 +2403,15 @@ function selectProject(projectId, focusReturnEl) {
       if (!confirmLeaveProjectWorkspace('Hay cambios sin guardar. ¿Cambiar de proyecto y descartarlos?')) {
         return;
       }
-    } else if (!confirmDiscardUnsavedMovementDrafts()) {
-      return;
+    } else {
+      // M5: legacy drawer must also confirm dirty Información form, not only movement drafts.
+      if (isProjectFormDirty()) {
+        if (!confirmLeaveProjectWorkspace('Hay cambios sin guardar. ¿Cambiar de proyecto y descartarlos?')) {
+          return;
+        }
+      } else if (!confirmDiscardUnsavedMovementDrafts()) {
+        return;
+      }
     }
     resetMovementForms();
   } else if (previousProjectId == null) {
@@ -2325,6 +2430,8 @@ function selectProject(projectId, focusReturnEl) {
   state.selectedProjectId = nextProjectId;
   state.historialLoadedFor = null;
   state.historialPag.offset = 0;
+  // M1: invalidate any in-flight historial fetch for the previous project.
+  beginHistorialLoad(nextProjectId);
   if (focusReturnEl) {
     projectDrawerFocusReturn = focusReturnEl;
   }
@@ -3397,6 +3504,12 @@ projectForm.addEventListener('submit', async (event) => {
       return;
     }
 
+    // Snapshot at submit time so a late response cannot clobber edits made after send.
+    const submittedSnapshot = (typeof ProjectWorkspace !== 'undefined'
+      && typeof ProjectWorkspace.serializeForm === 'function')
+      ? ProjectWorkspace.serializeForm(projectForm)
+      : '';
+
     const savedProject = await api(id ? `/api/projects/${id}` : '/api/projects', {
       method: id ? 'PUT' : 'POST',
       body: JSON.stringify(projectPayload()),
@@ -3404,12 +3517,41 @@ projectForm.addEventListener('submit', async (event) => {
 
     setMessage(projectMessage, 'Proyecto guardado correctamente.', true);
     clearDraftForCurrent('project_edit');
+
+    const unchangedSinceSubmit = (typeof ProjectWorkspace !== 'undefined'
+      && typeof ProjectWorkspace.serializeForm === 'function')
+      ? ProjectWorkspace.serializeForm(projectForm) === submittedSnapshot
+      : true;
+
     if (id) {
       await applyProjectListUpdate(savedProject);
-      selectProject(savedProject.id);
-    } else {
+      // After successful Información save, sync form + baseline only if the user
+      // did not keep editing after submit (C1 complementary rule #5).
+      if (unchangedSinceSubmit) {
+        fillProjectForm(savedProject);
+        snapshotProjectFormBaseline();
+        if (state.projectDrawerOpen || state.projectWorkspaceOpen) {
+          renderDetail(savedProject, {
+            token: state.projectDetailLoadToken,
+            signal: state.projectDetailAbortController
+              ? state.projectDetailAbortController.signal
+              : undefined,
+            projectId: savedProject.id,
+          });
+        } else {
+          selectProject(savedProject.id);
+        }
+      }
+    } else if (unchangedSinceSubmit) {
       await loadProjects();
       selectProject(savedProject.id);
+    } else {
+      // Create succeeded but user kept typing: keep local edits, attach new id.
+      state.selectedProjectId = savedProject.id;
+      if (projectForm.elements.id) {
+        projectForm.elements.id.value = String(savedProject.id);
+      }
+      await applyProjectListUpdate(savedProject);
     }
   } catch (error) {
     setMessage(projectMessage, error.message);
