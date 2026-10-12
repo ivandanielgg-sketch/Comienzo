@@ -1,17 +1,17 @@
 # Contexto de implementación — Reestructuración UI / Proyectos
 
 Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
-**Etapa 4: C1/M1–M5 corregidos; M6 (tablet) pendiente manual** — última actualización: 2026-10-12.
+**Etapa 4: auditoría final integridad + M6 OK; pendiente autorización push/PR** — última actualización: 2026-10-12.
 
 | Campo | Valor |
 |-------|--------|
 | Rama Etapa 4 | `cursor/project-workspace-tabs-0cc1` |
-| HEAD (correcciones) | `43527b6` — *Pin Stage 4 correction HEAD in continuity header* |
+| HEAD | `6acc8f9` (tip local; ver `git rev-parse HEAD`) |
 | Base autorizada | `origin/main` @ `ce6f63d` (PR #85 — Etapas 1–3) |
 | Continuidad Etapa 3 (rama histórica) | `cursor/stage3-invoice-settlement-c0b6` / pin `8e635b8` |
 | PRs cerrados | #83 (Etapa 1), #84 (Etapa 2), #85 (Etapa 3 + FX) |
-| Push / PR Etapa 4 | **no** (sin autorización explícita; M6 manual pendiente) |
-| Siguiente trabajo | Verificación manual tablet (M6) + OK explícito antes de push/PR/merge — no Etapa 5 |
+| Push / PR Etapa 4 | **no** (sin autorización explícita) |
+| Siguiente trabajo | Autorización explícita de push/PR si se acepta §10.9 — no Etapa 5 |
 
 > No almacenar contraseñas, tokens, cookies ni secretos en este documento.
 > Credenciales de desarrollo: ver `AGENTS.md` / variables de entorno del entorno local.
@@ -25,7 +25,7 @@ Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
 | 1 | Aislamiento formularios pago/costo + confirm discard + anti-stale | **Cerrada** | #83 / `08cd8b3` |
 | 2 | Warning/renovación sesión + borradores seguros | **Cerrada** | #84 / `78d2697` |
 | 3 | Liquidación Pagada atómica + integridad + snapshots FX | **Cerrada en main** | #85 / `ce6f63d` |
-| 4 | UI listado full-width + workspace 5 pestañas + FACTURADO + historial | **C1/M1–M5 corregidos en rama; M6 manual pendiente** | ver §10.5 / §10.8 |
+| 4 | UI listado full-width + workspace 5 pestañas + FACTURADO + historial | **Corregida + auditada (M6 OK); push/PR pendiente OK** | ver §10.8 / §10.9 |
 | 5 | Filtros/agrupación cerrados por fecha de **creación** | Pendiente | — |
 | 6 | Pruebas integrales / validación financiera amplia | Pendiente | — |
 
@@ -320,7 +320,8 @@ Si se despliega `5c79b5c+` contra una BD **sin** las 4 columnas:
 | **M3** UI sin `canAccess` create/edit/close | ~~Media~~ | **Resuelto** — §10.8 |
 | **M4** Historial settlement por heurística de notas | ~~Baja~~ | **Resuelto** — §10.8 |
 | **M5** Legacy sin confirm dirty form proyecto | ~~Baja~~ | **Resuelto** — §10.8 |
-| **M6** Tablet sin prueba manual | Baja | **Pendiente verificación manual** |
+| **M6** Tablet / responsive | Baja | **Verificado manual 2026-10-12** — §10.9 |
+| Equivalencia exacta vs commits originales no pusheados (`aa45eae`…) | Media | Objetos Git ausentes; reconstrucción desde transcript — no garantizable bit-a-bit |
 | Borradores no sobreviven cierre de pestaña | Media | Intencional |
 | Test backup 413 preexistente | Baja | No bloquear |
 | `SESSION_SECRET` fallback si falta env | Media | Ops |
@@ -426,7 +427,7 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 | Campo | Detalle |
 |-------|---------|
 | Riesgo | Breakpoint CSS 1100px existe (`public/styles.css`); sin prueba manual tablet. |
-| Estado | **Pendiente verificación manual** (no es bug de código conocido). |
+| Estado | **Verificado manual** (1440×900, 1024×768, 768×1024, 390×844) — §10.9. |
 
 ### 10.6 Decisiones autorizadas para la corrección + restricciones
 
@@ -445,7 +446,7 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 - Tras guardado exitoso del proyecto (submit Información): rellenar + baseline **solo si** el form no cambió después del envío (`unchangedSinceSubmit`).
 - Prueba de regresión: `test/stage4-c1-dirty-form.test.js` + anclas en `scripts/verify-stage4-workspace.mjs`.
 
-**M1–M5:** corregidos en la misma rama. **M6:** verificación manual tablet pendiente.
+**M1–M5:** corregidos. **M6:** verificado manual (§10.9).
 
 **Restricciones (siguen vigentes):**
 
@@ -454,7 +455,7 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 - No modificar snapshots FX ni migraciones; **no nuevas migraciones**.
 - No tocar ECOVIS, KPI, asistencia, vacaciones, cotizador.
 - No Etapas 5 ni 6.
-- No push / merge / deploy hasta nueva autorización explícita (recomendado tras M6 manual).
+- No push / merge / deploy hasta nueva autorización explícita.
 
 ### 10.7 Pruebas: existentes vs faltantes
 
@@ -486,29 +487,47 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 | M3 | `applyPermissionVisibility` + `projectRowActions` gates create/edit/close |
 | M4 | `SETTLEMENT_PAYMENT_NOTES` exacto en `projectHistorial.js` |
 | M5 | Legacy `selectProject` confirma dirty Información |
-| M6 | **No verificado** en esta pasada (requiere UI tablet) |
-| Evidencia C1 UI | Manual PASS: dirty `Cliente Dirty C1` sobrevive `Registrar pago` (video artifact) |
-| Integración a `main` | **No recomendar aún** hasta M6 manual + OK explícito de push/PR |
+| M6 | **Verificado** — 4 viewports PASS (artefactos en audit) |
+| Evidencia C1 UI | Manual PASS: dirty sobrevive pago / tab switch |
+| Integración a `main` | **Condicional** — ver §10.9 (requiere OK explícito push/PR) |
 
-**No se tocaron:** `calculations.js`, settle/preview, FX snapshots, migraciones, ECOVIS/KPI/asistencia/vacaciones/cotizador.
+**No se tocaron (auditoría):** código de producto; solo doc de continuidad.
+
+### 10.9 Auditoría final de integridad + responsive (2026-10-12)
+
+**Alcance:** solo lectura / pruebas. Sin push, merge, deploy, migraciones ni Etapa 5.
+
+| Área | Resultado |
+|------|-----------|
+| Git | Rama `cursor/project-workspace-tabs-0cc1` @ tip local; WT limpio; base `ce6f63d`; **8 commits** ahead; 11 files (+1958/−81 vs main) |
+| Reconstrucción | SHAs originales (`aa45eae`/`33b8871`/…) **no existen** en este clone ni en `origin` → **no se garantiza equivalencia exacta** con la implementación pre-pérdida |
+| Auto Etapas 1–4 | `node --test` relevantes **78/78**; `session-extend` **5/5**; `verify-stage4-workspace` OK |
+| Puppeteer verify scripts | **No ejecutables** aquí (`puppeteer-core` ausente) — brecha de entorno, no fallo de producto demostrado |
+| API financiera | settle atómico, parciales, sobrepago 409, FX USD/EUR, delete admin password, historial, export Excel `from`/`to` — PASS |
+| UI workspace | 5 pestañas + listado (Creacion/FACTURADO/búsqueda/export) + modal liquidación + picker reportes — PASS |
+| Reportes CRUD completo | **Pendiente** (solo picker “Generar reporte”; no create/edit/print E2E) |
+| M6 | **PASS** en 1440×900, 1024×768, 768×1024, 390×844 |
+| Recomendación | **Apto para autorizar push/PR** tras aceptar riesgo de reconstrucción + pendiente reportes E2E; **no merge automático a main** |
+
+Artefactos: `/opt/cursor/artifacts/stage4-audit/` (API JSON, logs, `m6/*.webp`).
 
 ---
 
 ## 11. Cómo continuar
 
-1. `git checkout cursor/project-workspace-tabs-0cc1` (working tree limpio).
-2. Verificar merge-base con `ce6f63d` y leer §10.8.
-3. Completar **M6** (tablet manual) si se requiere antes de integrar.
-4. Pedir OK explícito para push/PR; no merge a `main` ni Etapas 5–6 sin autorización.
-5. No re-auditar los 10 puntos desde cero.
+1. Revisar §10.9 y decidir autorización explícita de **push/PR**.
+2. Si se autoriza: push de `cursor/project-workspace-tabs-0cc1` y abrir PR → `main` (draft recomendado).
+3. Opcional post-push: completar E2E reportes (generar/editar/imprimir) en staging.
+4. No Etapas 5–6 sin OK nuevo.
+5. No redeploy/migración FX producción sin auth independiente.
 
-### Checklist Git (cierre correcciones 2026-10-12)
+### Checklist Git (auditoría final 2026-10-12)
 
 | Ítem | Valor |
 |------|--------|
 | Rama | `cursor/project-workspace-tabs-0cc1` |
 | Base Etapa 3 | `ce6f63d` (#85) |
-| Push / merge / deploy | **no** (instrucción explícita) |
+| Push / merge / deploy | **no** (esta auditoría) |
 
 ```
 git status
