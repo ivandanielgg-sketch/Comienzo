@@ -93,7 +93,16 @@ async function ensureLegacyProjectsUi(page) {
 
 async function openProjectById(page, projectId) {
   await ensureLegacyProjectsUi(page);
-  await page.evaluate((id) => {
+  // selectProject only resolves projects present in the current list page (default limit 15).
+  await page.evaluate(async (id) => {
+    const targetId = Number(id);
+    if (!state.projects?.some((p) => Number(p.id) === targetId)) {
+      state.projectsPag.limit = Math.max(Number(state.projectsPag.limit) || 15, 100);
+      state.projectsPag.page = 1;
+      if (typeof loadProjects === 'function') {
+        await loadProjects();
+      }
+    }
     const btn = document.querySelector(`button[data-action="select"][data-id="${id}"]`);
     if (btn) {
       btn.click();
