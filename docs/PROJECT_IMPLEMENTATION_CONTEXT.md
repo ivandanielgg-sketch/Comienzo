@@ -514,6 +514,22 @@ Artefactos: `/opt/cursor/artifacts/stage4-audit/` (API JSON, logs, `m6/*.webp`).
 
 ---
 
+
+### 10.12 Validación comparativa main vs PR #86 (2026-10-12)
+
+**Alcance:** Draft PR #86; sin merge/Ready/deploy/migraciones. Worktrees + DBs independientes.
+
+| Resultado | Detalle |
+|-----------|---------|
+| Fallos hoja aislados | 11 idénticos en `main` (`ce6f63d`) y PR (asistencia/comisiones/audit/restore) |
+| Regresiones PR | **0** |
+| service-quoter-buildup | PASS en ambas ramas aislado (fallo previo = colisión puerto 3097) |
+| backup attendance 413 | PASS en DB fresca (era contaminación/payload) |
+| verify-session-stage2 | Fixture controlado `SESS2-FIX-*` (invoice 5000 / draft 100); 3× PASS 10/10 |
+| Criterio | Cero regresiones nuevas → **apto para solicitar autorización de merge** (no automático) |
+
+Matriz: `/opt/cursor/artifacts/stage4-audit/compare-main-vs-pr86/MATRIX.md`
+
 ## 11. Cómo continuar
 
 1. Revisar §10.9 y decidir autorización explícita de **push/PR**.
