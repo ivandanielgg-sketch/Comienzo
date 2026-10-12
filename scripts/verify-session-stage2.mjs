@@ -88,23 +88,63 @@ try {
     fail('extend-renews-and-closes-modal', JSON.stringify(afterExtend));
   }
 
-  // Draft isolation + restore flow — pick a project with enough pending balance so the
-  // save step is not rejected by PAYMENT_OVERPAY (which opens a blocking native alert).
-  await page.waitForSelector('#projects-table tr[data-row-id]', { timeout: 10000 });
-  step('select-project-with-pending');
-  const target = await page.evaluate(async () => {
-    const res = await fetch('/api/projects?limit=50');
-    const data = await res.json();
-    const rows = data.data || [];
-    const row = rows.find((p) => Number(p.pending_collection) >= 50 && !p.closed_at);
-    if (!row) return null;
-    return { id: Number(row.id), pending: Number(row.pending_collection) };
+  // Draft isolation + restore flow — create a controlled fixture project so the script
+  // never depends on commercial/existing rows or their pending balances.
+  step('create-controlled-fixture-project');
+  const fixtureInvoiceMxn = 5000;
+  const draftAmount = 100;
+  const fixture = await page.evaluate(async (invoiceMxn) => {
+    const empRes = await fetch('/api/employees?limit=100');
+    const empJson = await empRes.json();
+    const employees = empJson.data || empJson || [];
+    const tecnico = employees.find((e) => e.employee_number === 'EMP-TEC-001')
+      || employees.find((e) => /tecnico/i.test(String(e.full_name || '')))
+      || employees[0];
+    const vendedor = employees.find((e) => e.employee_number === 'EMP-VEN-001')
+      || employees.find((e) => /vendedor/i.test(String(e.full_name || '')))
+      || employees[1]
+      || employees[0];
+    if (!tecnico?.id || !vendedor?.id) {
+      throw new Error('fixture requires seed employees (tecnico/vendedor)');
+    }
+    const stamp = Date.now();
+    const payload = {
+      quote_number: `SESS2-FIX-${stamp}`,
+      order_number: `ORD-SESS2-${stamp}`,
+      purchase_order_not_applicable: true,
+      tecnico_id: tecnico.id,
+      vendedor_id: vendedor.id,
+      client_name: 'Cliente Fixture Session Stage2',
+      project_description: 'Proyecto de prueba controlado (verify-session-stage2)',
+      fecha_vencimiento: '2026-12-31',
+      promised_delivery_date: '2026-12-15',
+      expected_margin: 10,
+      total_invoiced: invoiceMxn,
+      total_invoiced_currency: 'MXN',
+      progress_percent: 0,
+      status: 'Pendiente',
+      risk: 'Bajo',
+    };
+    const res = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(`fixture create failed ${res.status}: ${JSON.stringify(body)}`);
+    }
+    return { id: Number(body.id), quote_number: body.quote_number, pending: invoiceMxn };
+  }, fixtureInvoiceMxn);
+  const projectId = fixture.id;
+  if (!projectId) throw new Error('Controlled fixture project was not created');
+  console.log(`FIXTURE: projectId=${projectId} quote=${fixture.quote_number} pending=${fixture.pending} draftAmount=${draftAmount}`);
+
+  // Refresh list so the fixture row is present, then force legacy drawer mode.
+  await page.evaluate(async () => {
+    if (typeof loadProjects === 'function') await loadProjects();
   });
-  if (!target?.id) throw new Error('No open project with pending_collection >= 50');
-  const projectId = target.id;
-  // Keep draft amount well under pending so overpay protection cannot fire.
-  const draftAmount = Math.min(100, Math.max(1, Math.floor(target.pending / 2)));
-  console.log(`TARGET: projectId=${projectId} pending=${target.pending} draftAmount=${draftAmount}`);
+  await page.waitForSelector(`#projects-table tr[data-row-id="${projectId}"]`, { timeout: 10000 });
 
   await page.evaluate(() => {
     const toggle = document.querySelector('#projects-workspace-mode-toggle');
