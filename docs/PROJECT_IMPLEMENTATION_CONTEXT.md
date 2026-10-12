@@ -6,7 +6,7 @@ Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
 | Campo | Valor |
 |-------|--------|
 | Rama Etapa 4 | `cursor/project-workspace-tabs-0cc1` |
-| HEAD (correcciones) | ver `git rev-parse HEAD` / §10.8 |
+| HEAD (correcciones) | `77a4449` — *Document Stage 4 C1/M1–M5 correction closure* |
 | Base autorizada | `origin/main` @ `ce6f63d` (PR #85 — Etapas 1–3) |
 | Continuidad Etapa 3 (rama histórica) | `cursor/stage3-invoice-settlement-c0b6` / pin `8e635b8` |
 | PRs cerrados | #83 (Etapa 1), #84 (Etapa 2), #85 (Etapa 3 + FX) |
@@ -487,6 +487,7 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 | M4 | `SETTLEMENT_PAYMENT_NOTES` exacto en `projectHistorial.js` |
 | M5 | Legacy `selectProject` confirma dirty Información |
 | M6 | **No verificado** en esta pasada (requiere UI tablet) |
+| Evidencia C1 UI | Manual PASS: dirty `Cliente Dirty C1` sobrevive `Registrar pago` (video artifact) |
 | Integración a `main` | **No recomendar aún** hasta M6 manual + OK explícito de push/PR |
 
 **No se tocaron:** `calculations.js`, settle/preview, FX snapshots, migraciones, ECOVIS/KPI/asistencia/vacaciones/cotizador.
