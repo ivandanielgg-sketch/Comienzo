@@ -1,17 +1,17 @@
 # Contexto de implementación — Reestructuración UI / Proyectos
 
 Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
-**Etapa 4 implementada + auditada; correcciones pendientes** — última actualización: 2026-10-12.
+**Etapa 4: C1/M1–M5 corregidos; M6 (tablet) pendiente manual** — última actualización: 2026-10-12.
 
 | Campo | Valor |
 |-------|--------|
 | Rama Etapa 4 | `cursor/project-workspace-tabs-0cc1` |
-| HEAD (al preparar continuidad) | `a45940b` — *Document Stage 4 pre-merge audit findings* |
+| HEAD (correcciones) | ver `git rev-parse HEAD` / §10.8 |
 | Base autorizada | `origin/main` @ `ce6f63d` (PR #85 — Etapas 1–3) |
 | Continuidad Etapa 3 (rama histórica) | `cursor/stage3-invoice-settlement-c0b6` / pin `8e635b8` |
 | PRs cerrados | #83 (Etapa 1), #84 (Etapa 2), #85 (Etapa 3 + FX) |
-| Push / PR Etapa 4 | **no** (bloqueado hasta corregir C1) |
-| Siguiente trabajo | **Correcciones Etapa 4 (C1 obligatorio; M1–M6 según prioridad)** — no Etapa 5 |
+| Push / PR Etapa 4 | **no** (sin autorización explícita; M6 manual pendiente) |
+| Siguiente trabajo | Verificación manual tablet (M6) + OK explícito antes de push/PR/merge — no Etapa 5 |
 
 > No almacenar contraseñas, tokens, cookies ni secretos en este documento.
 > Credenciales de desarrollo: ver `AGENTS.md` / variables de entorno del entorno local.
@@ -25,18 +25,21 @@ Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
 | 1 | Aislamiento formularios pago/costo + confirm discard + anti-stale | **Cerrada** | #83 / `08cd8b3` |
 | 2 | Warning/renovación sesión + borradores seguros | **Cerrada** | #84 / `78d2697` |
 | 3 | Liquidación Pagada atómica + integridad + snapshots FX | **Cerrada en main** | #85 / `ce6f63d` |
-| 4 | UI listado full-width + workspace 5 pestañas + FACTURADO + historial | **Implementada en rama; bloqueada por C1** | ver §10.5 |
+| 4 | UI listado full-width + workspace 5 pestañas + FACTURADO + historial | **C1/M1–M5 corregidos en rama; M6 manual pendiente** | ver §10.5 / §10.8 |
 | 5 | Filtros/agrupación cerrados por fecha de **creación** | Pendiente | — |
 | 6 | Pruebas integrales / validación financiera amplia | Pendiente | — |
 
-**Commits Etapa 4 en `cursor/project-workspace-tabs-0cc1` (no en `origin/main`):**
+**Commits Etapa 4 en `cursor/project-workspace-tabs-0cc1` (no en `origin/main`; SHAs locales tras recuperación):**
 
 ```
-a45940b Document Stage 4 pre-merge audit findings
-fc3117b Document Stage 4 workspace handoff on continuity context
-33b8871 Add project workspace UI with feature-flagged legacy drawer
-b1dc0d2 Add read-only project historial API for Stage 4
+(docs)   Document Stage 4 C1/M1–M5 correction closure
+760df44  Add Stage 4 C1/M1–M5 regression coverage
+adf7870  Fix Stage 4 M4 historial settlement labeling
+c57046d  Fix Stage 4 C1/M1/M2/M3/M5 project form refresh races
+ad3ebfe  Restore Stage 4 workspace/historial from prior agent (pre-C1)
 ```
+
+> Nota: el agente previo tenía HEAD `aa45eae` solo local (nunca pusheado). Esta rama se reconstruyó desde el transcript sobre `ce6f63d` y luego aplicó las correcciones.
 
 No implementar etapas en paralelo. Migraciones BD solo con autorización explícita (FX ya en código vía #85; **producción pendiente de autorización independiente**).
 
@@ -306,18 +309,18 @@ Si se despliega `5c79b5c+` contra una BD **sin** las 4 columnas:
 
 | Riesgo | Severidad | Notas |
 |--------|-----------|-------|
-| **C1** Dirty Información sobrescrita por async refresh | **Alta** | §10.5 — bloquea merge; corrección pendiente |
+| **C1** Dirty Información sobrescrita por async refresh | ~~Alta~~ | **Resuelto** — §10.8 |
 | `Pagada` históricos sin snapshot de factura | Media | Sensibles a TC vivo hasta re-liquidar |
 | Desplegar código FX sin ensure/migración | Alta | Fallos SQL; ver §6.7 |
 | Migración producción sin backup | Alta | Auth independiente + `pg_dump` |
 | Audit de pagos no indexado por `project_id` en todos los eventos | Media | metadata parcial; historial UI = Etapa 4 |
 | Costos sin snapshot FX | Baja | Solo márgenes |
-| **M1** Historial sin AbortController/token | Media | §10.5 |
-| **M2** loadProjects sin renderDetail en workspace | Media | §10.5 |
-| **M3** UI sin `canAccess` create/edit/close | Media | Backend 403 OK; preexistente |
-| **M4** Historial settlement por heurística de notas | Baja | §10.5 |
-| **M5** Legacy sin confirm dirty form proyecto | Baja | §10.5 |
-| **M6** Tablet sin prueba manual | Baja | §10.5 |
+| **M1** Historial sin AbortController/token | ~~Media~~ | **Resuelto** — §10.8 |
+| **M2** loadProjects sin renderDetail en workspace | ~~Media~~ | **Resuelto** — §10.8 |
+| **M3** UI sin `canAccess` create/edit/close | ~~Media~~ | **Resuelto** — §10.8 |
+| **M4** Historial settlement por heurística de notas | ~~Baja~~ | **Resuelto** — §10.8 |
+| **M5** Legacy sin confirm dirty form proyecto | ~~Baja~~ | **Resuelto** — §10.8 |
+| **M6** Tablet sin prueba manual | Baja | **Pendiente verificación manual** |
 | Borradores no sobreviven cierre de pestaña | Media | Intencional |
 | Test backup 413 preexistente | Baja | No bloquear |
 | `SESSION_SECRET` fallback si falta env | Media | Ops |
@@ -343,7 +346,7 @@ Si se despliega `5c79b5c+` contra una BD **sin** las 4 columnas:
 - `public/index.html`, `public/styles.css`, `public/app.js`
 - `public/project-workspace.js`
 - `src/projectHistorial.js`, `src/server.js` (ruta historial + sort `created_at`)
-- `test/project-historial.test.js`, `test/project-form-isolation.test.js`
+- `test/project-historial.test.js`, `test/project-form-isolation.test.js`, `test/stage4-c1-dirty-form.test.js`
 - `scripts/verify-stage4-workspace.mjs`
 
 ### 10.3 Restricciones respetadas
@@ -373,57 +376,57 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 | Funciones | `applyProjectListUpdate` (~1694; bloque ~1755–1770: `fillProjectForm` + `snapshotProjectFormBaseline` sin guardia); `loadProjects` (~1549; bloque ~1562–1568: `fillProjectForm` sin guardia; en workspace no llama `renderDetail`); helpers `isProjectFormDirty` (~2028), `snapshotProjectFormBaseline` (~2020), `fillProjectForm` (~2818). |
 | Callers que disparan C1 | submit pago/costo; delete pago/costo; `settle-invoice` → `applyProjectListUpdate`; búsqueda/paginación → `loadProjects`. |
 | No es C1 | `setWorkspaceTab` (~2124) solo oculta paneles; no destruye formularios. |
-| Estado corrección | **Pendiente** (no implementada). |
+| Estado corrección | **Resuelto** (2026-10-12) — ver §10.8. |
 
 #### M1 — Historial sin anti-stale
 
 | Campo | Detalle |
 |-------|---------|
 | Riesgo | Respuesta tardía de historial puede pintar otro `projectId`. |
-| Archivo | `public/app.js` → `loadWorkspaceHistorial` (~2216) |
+| Archivo | `public/app.js` → `loadWorkspaceHistorial` |
 | Falta | Token / `AbortController` al estilo `beginProjectDetailLoad` / `isProjectDetailLoadCurrent`. |
-| Estado | Pendiente (prioridad media). |
+| Estado | **Resuelto** — `beginHistorialLoad` / `isHistorialLoadCurrent` + abort al cambiar proyecto. |
 
 #### M2 — `loadProjects` no refresca detalle en workspace
 
 | Campo | Detalle |
 |-------|---------|
 | Riesgo | Con workspace abierto, tras `loadProjects` el form se rellena pero indicadores/listas no (`renderDetail` solo si `projectDrawerOpen`). |
-| Archivo | `public/app.js` → `loadProjects` (~1562–1568) |
-| Estado | Pendiente; conviene resolver junto con C1. |
+| Archivo | `public/app.js` → `loadProjects` |
+| Estado | **Resuelto** — `renderDetail` si drawer **o** workspace abierto; form sync solo si `!isProjectFormDirty()`. |
 
 #### M3 — UI sin gates `canAccess` create/edit/close
 
 | Campo | Detalle |
 |-------|---------|
 | Riesgo | Controles visibles sin permiso; API responde 403. |
-| Archivos | `public/app.js` (`canAccess` / `applyPermissionVisibility` ~45–88); formularios en `public/index.html` / workspace. |
+| Archivos | `public/app.js` (`applyPermissionVisibility`, `projectRowActions`). |
 | Nota | Patrón preexistente del drawer; no introducido solo por Etapa 4. |
-| Estado | Pendiente opcional (prioridad baja–media). |
+| Estado | **Resuelto** — hide/disable create/edit/close + settle controls según `canAccess`. |
 
 #### M4 — Etiqueta settlement en historial por heurística de notas
 
 | Campo | Detalle |
 |-------|---------|
 | Riesgo | `notes` con texto `liquidaci` clasifica como settlement. |
-| Archivo | `src/projectHistorial.js` (~224–227) |
+| Archivo | `src/projectHistorial.js` |
 | Mejor | Preferir `metadata.settlement` / `SETTLEMENT_PAYMENT_NOTES` de Etapa 3. |
-| Estado | Pendiente opcional. |
+| Estado | **Resuelto** — match exacto a `SETTLEMENT_PAYMENT_NOTES` (audit ya usa `metadata.settlement`). |
 
 #### M5 — Legacy: cambio de proyecto no confirma dirty del form proyecto
 
 | Campo | Detalle |
 |-------|---------|
-| Riesgo | En modo drawer, `selectProject` (~2293) usa solo `confirmDiscardUnsavedMovementDrafts` si no workspace. |
+| Riesgo | En modo drawer, `selectProject` usa solo `confirmDiscardUnsavedMovementDrafts` si no workspace. |
 | Archivo | `public/app.js` → `selectProject` |
-| Estado | Pendiente opcional (modo legacy). |
+| Estado | **Resuelto** — legacy confirma dirty Información vía `confirmLeaveProjectWorkspace`. |
 
 #### M6 — Tablet no verificada manualmente
 
 | Campo | Detalle |
 |-------|---------|
 | Riesgo | Breakpoint CSS 1100px existe (`public/styles.css`); sin prueba manual tablet. |
-| Estado | Pendiente verificación (no es bug de código conocido). |
+| Estado | **Pendiente verificación manual** (no es bug de código conocido). |
 
 ### 10.6 Decisiones autorizadas para la corrección + restricciones
 
@@ -435,73 +438,76 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 4. Historial permanece solo lectura (`projects:view`); sin inventar eventos; sin exponer secretos.
 5. FACTURADO (MXN) = `total_invoiced_mxn` (snapshot si existe); no confundir con pendiente.
 
-**Propuesta de corrección C1 (a aplicar en la conversación de fixes):**
+**Corrección C1 aplicada:**
 
 - Si `isProjectFormDirty()`: **no** llamar `fillProjectForm` ni `snapshotProjectFormBaseline` en `applyProjectListUpdate` / `loadProjects`.
-- Sí actualizar indicadores/listas vía `renderDetail` / strip cuando el workspace o drawer esté abierto (sin pisar el form dirty).
-- Tras guardado exitoso del proyecto (submit Información), sí rellenar + baseline como hoy.
-- Añadir prueba de regresión (estática o headless) que falle si se vuelve a rellenar con dirty.
+- Sí actualizar indicadores/listas vía `renderDetail` cuando el workspace o drawer esté abierto (sin pisar el form dirty).
+- Tras guardado exitoso del proyecto (submit Información): rellenar + baseline **solo si** el form no cambió después del envío (`unchangedSinceSubmit`).
+- Prueba de regresión: `test/stage4-c1-dirty-form.test.js` + anclas en `scripts/verify-stage4-workspace.mjs`.
 
-**M1–M6:** corregir en la misma rama tras C1 si el tiempo lo permite; M2 acoplado a C1; M1 recomendado; M3–M5 opcionales; M6 verificación manual.
+**M1–M5:** corregidos en la misma rama. **M6:** verificación manual tablet pendiente.
 
-**Restricciones (no negociar sin OK nuevo):**
+**Restricciones (siguen vigentes):**
 
 - No modificar fórmulas (`src/calculations.js` / SQL de totales) salvo hallazgo autorizado.
 - No modificar lógica de liquidación ni endpoints settle existentes.
 - No modificar snapshots FX ni migraciones; **no nuevas migraciones**.
 - No tocar ECOVIS, KPI, asistencia, vacaciones, cotizador.
 - No Etapas 5 ni 6.
-- No push / merge / deploy hasta nueva autorización explícita tras fixes + re-chequeo C1.
+- No push / merge / deploy hasta nueva autorización explícita (recomendado tras M6 manual).
 
 ### 10.7 Pruebas: existentes vs faltantes
 
-**Existen y pasaron en auditoría (88 unit + script + smoke):**
+**Cubiertas tras correcciones:**
 
 | Artefacto | Cubre |
 |-----------|--------|
+| `test/stage4-c1-dirty-form.test.js` | **C1/M1–M5** regresión estática + M4 unit |
 | `test/project-historial.test.js` | API historial, dedup, UI tabs/flag estáticos |
-| `test/project-form-isolation.test.js` | Dirty movimientos; patrón confirm en `selectProject` |
+| `test/project-form-isolation.test.js` | Dirty movimientos; confirm switch (actualizado M5) |
 | `test/session-drafts.test.js` / `session-extend.test.js` | Etapa 2 |
 | `test/project-invoice-settlement*.test.js` / `project-payment-fx-snapshot*.test.js` | Etapa 3 |
 | `test/frontend-table.test.js` | Listado / `applyProjectListUpdate` wiring |
-| `test/calculations.test.js`, `projects-search`, `projects-export` | Totales / listado |
-| `scripts/verify-stage4-workspace.mjs` | Estructura Stage 4 + IDs únicos |
-| Smoke API manual | FACTURADO post-settle estable; historial sin secretos |
-| Manual UI | Flag legacy round-trip; workspace 5 tabs; móvil |
+| `scripts/verify-stage4-workspace.mjs` | Estructura Stage 4 + IDs únicos + anclas C1/M1/M2 |
 
-**Faltan (crear al corregir):**
+**Pendiente:**
 
-| Prueba faltante | Objetivo |
-|-----------------|----------|
-| Regresión C1 | Dirty Información + pago async → form no se pisa; baseline no se rebasea |
-| Regresión M2 | `loadProjects` con workspace abierto actualiza strip/listas sin clobber dirty |
-| Regresión M1 | Historial ignora respuesta stale tras cambio de proyecto |
-| (opc.) M3 | Controles ocultos/deshabilitados sin `projects:edit` |
-| (opc.) M4 | Clasificación settlement por metadata, no por substring libre |
-| Manual tablet | Viewport ~768–1024: 5 indicadores / tabs usables |
+| Prueba | Objetivo |
+|--------|----------|
+| Manual tablet (M6) | Viewport ~768–1024: 5 indicadores / tabs usables |
+
+### 10.8 Cierre de correcciones C1/M1–M5 (2026-10-12)
+
+| Ítem | Resultado |
+|------|-----------|
+| C1 | `applyProjectListUpdate` / `loadProjects` respetan dirty; save race con `unchangedSinceSubmit` |
+| M2 | `loadProjects` llama `renderDetail` con workspace abierto |
+| M1 | `beginHistorialLoad` + `isHistorialLoadCurrent` + abort en switch |
+| M3 | `applyPermissionVisibility` + `projectRowActions` gates create/edit/close |
+| M4 | `SETTLEMENT_PAYMENT_NOTES` exacto en `projectHistorial.js` |
+| M5 | Legacy `selectProject` confirma dirty Información |
+| M6 | **No verificado** en esta pasada (requiere UI tablet) |
+| Integración a `main` | **No recomendar aún** hasta M6 manual + OK explícito de push/PR |
+
+**No se tocaron:** `calculations.js`, settle/preview, FX snapshots, migraciones, ECOVIS/KPI/asistencia/vacaciones/cotizador.
 
 ---
 
-## 11. Cómo continuar (conversación de correcciones Etapa 4)
+## 11. Cómo continuar
 
-1. `git fetch origin` (opcional) y `git checkout cursor/project-workspace-tabs-0cc1`.
-2. Verificar `HEAD` ≥ `a45940b`, working tree limpio, base merge-base con `ce6f63d`.
-3. Leer **este archivo completo** (§10.5–10.7) y `AGENTS.md`.
-4. **No re-auditar** los 10 puntos desde cero; partir de C1/M1–M6.
-5. Implementar C1 (+ M2 recomendado; M1 si cabe); tests de regresión; re-verificar solo lo tocado.
-6. Actualizar este documento al cerrar correcciones.
-7. No push/merge/Etapa 5–6 sin OK explícito.
+1. `git checkout cursor/project-workspace-tabs-0cc1` (working tree limpio).
+2. Verificar merge-base con `ce6f63d` y leer §10.8.
+3. Completar **M6** (tablet manual) si se requiere antes de integrar.
+4. Pedir OK explícito para push/PR; no merge a `main` ni Etapas 5–6 sin autorización.
+5. No re-auditar los 10 puntos desde cero.
 
-### Checklist Git (continuidad 2026-10-12)
+### Checklist Git (cierre correcciones 2026-10-12)
 
 | Ítem | Valor |
 |------|--------|
 | Rama | `cursor/project-workspace-tabs-0cc1` |
-| HEAD | `a45940b` |
 | Base Etapa 3 | `ce6f63d` (#85) |
-| Commits ahead de `origin/main` | 4 |
-| Working tree al preparar continuidad | limpio **antes** del commit de este handoff; luego +1 commit doc |
-| Push / merge / deploy | **no** |
+| Push / merge / deploy | **no** (instrucción explícita) |
 
 ```
 git status
