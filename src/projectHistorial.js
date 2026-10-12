@@ -1,6 +1,7 @@
 'use strict';
 
 const { sanitizeForLog } = require('./audit');
+const { SETTLEMENT_PAYMENT_NOTES } = require('./projectInvoiceSettlement');
 
 const SAFE_SUMMARY_KEYS = [
   'status',
@@ -221,7 +222,8 @@ function buildProjectHistorial(db, projectId, { limit = 50, offset = 0 } = {}) {
     if (skipPaymentCreateIds.has(Number(payment.id))) {
       // Still emit domain event; audit create was skipped above for non-settlement.
     }
-    const isSettlement = String(payment.notes || '').toLowerCase().includes('liquidaci');
+    // M4: prefer exact Etapa 3 settlement notes (not free-text "liquidaci" substring).
+    const isSettlement = String(payment.notes || '') === SETTLEMENT_PAYMENT_NOTES;
     pushEvent(events, {
       id: `payment-${payment.id}`,
       event_type: isSettlement ? 'settlement_payment_created' : 'payment_registered',
