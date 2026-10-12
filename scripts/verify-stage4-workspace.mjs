@@ -25,6 +25,15 @@ const checks = [
   [/buildProjectHistorial/, serverJs, 'historial builder wired'],
   [/settlement-preview/, serverJs, 'stage3 preview intact'],
   [/settle-invoice/, serverJs, 'stage3 settle intact'],
+  // C1 / M1 / M2 anchors
+  [/formDirty[\s\S]{0,80}fillProjectForm/, appJs, 'C1 dirty guard applyProjectListUpdate'],
+  [/!isProjectFormDirty\(\)[\s\S]{0,80}fillProjectForm/, appJs, 'C1 dirty guard loadProjects'],
+  [/projectDrawerOpen\s*\|\|\s*state\.projectWorkspaceOpen[\s\S]{0,120}renderDetail/, appJs, 'M2 workspace renderDetail'],
+  [/function beginHistorialLoad/, appJs, 'M1 historial begin load'],
+  [/isHistorialLoadCurrent/, appJs, 'M1 historial token check'],
+  [/unchangedSinceSubmit/, appJs, 'C1 save race guard'],
+  [/canAccess\('projects', 'create'\)/, appJs, 'M3 create gate'],
+  [/SETTLEMENT_PAYMENT_NOTES/, fs.readFileSync(path.join(root, 'src/projectHistorial.js'), 'utf8'), 'M4 settlement notes'],
 ];
 
 let failed = 0;

@@ -116,9 +116,10 @@ test('app wires reset helpers, discard confirm and AbortController detail loads'
 });
 
 test('switching projects asks before discarding and keeps cancel path', () => {
+  // Workspace: confirmLeaveProjectWorkspace. Legacy: dirty Información form OR movement drafts.
   assert.match(
     appJs,
-    /if \(isSwitchingProject\) \{\s*if \(isWorkspaceUiMode\(\)\) \{\s*if \(!confirmLeaveProjectWorkspace\([^)]*\)\) \{\s*return;\s*\}\s*\} else if \(!confirmDiscardUnsavedMovementDrafts\(\)\) \{\s*return;\s*\}/s,
+    /if \(isSwitchingProject\) \{\s*if \(isWorkspaceUiMode\(\)\) \{\s*if \(!confirmLeaveProjectWorkspace\([^)]*\)\) \{\s*return;\s*\}\s*\} else \{[\s\S]*?isProjectFormDirty\(\)[\s\S]*?confirmLeaveProjectWorkspace[\s\S]*?confirmDiscardUnsavedMovementDrafts\(\)/s,
   );
   assert.match(
     appJs,
