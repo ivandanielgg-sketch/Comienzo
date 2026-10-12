@@ -6,7 +6,7 @@ Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
 | Campo | Valor |
 |-------|--------|
 | Rama Etapa 4 | `cursor/project-workspace-tabs-0cc1` |
-| HEAD (correcciones) | `e3ec181` — *Note Stage 4 C1 manual UI evidence in continuity doc* |
+| HEAD (correcciones) | `43527b6` — *Pin Stage 4 correction HEAD in continuity header* |
 | Base autorizada | `origin/main` @ `ce6f63d` (PR #85 — Etapas 1–3) |
 | Continuidad Etapa 3 (rama histórica) | `cursor/stage3-invoice-settlement-c0b6` / pin `8e635b8` |
 | PRs cerrados | #83 (Etapa 1), #84 (Etapa 2), #85 (Etapa 3 + FX) |
