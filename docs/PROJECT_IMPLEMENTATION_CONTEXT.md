@@ -476,7 +476,7 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 | Prueba | Objetivo |
 |--------|----------|
 | Reportes E2E (post-push) | boiler/general/autoflame: create→edit→persist→print shell PASS; failure: create/reopen/print PASS, **sin endpoint UI de edición** (solo create) |
-| Scripts puppeteer verify-* | `puppeteer-core` **no** está en package.json (solo import en scripts). Instalación efímera `--no-save`. Scripts adaptados a feature flag Stage 4. form-isolation 7/7; stage2-handoff 6/6; session-stage2 8/9 (timeout flaky post-restore) |
+| Scripts puppeteer verify-* | `puppeteer-core` **no** está en package.json (solo import en scripts). Instalación efímera `--no-save`. Scripts adaptados a feature flag Stage 4. form-isolation 7/7; stage2-handoff 6/6; session-stage2 **10/10** tras fix de espera (ver §10.11) |
 
 ### 10.8 Cierre de correcciones C1/M1–M5 (2026-10-12)
 
@@ -544,6 +544,20 @@ git log --oneline origin/main..HEAD
 | PR Draft | https://github.com/ivandanielgg-sketch/Comienzo/pull/86 (#86) → `main` |
 | Merge / Ready / deploy / migraciones | **no** |
 | Reportes E2E | 3 tipos project_reports ciclo completo PASS; failure create/print PASS (sin edit API) |
-| Puppeteer | No en `package.json`; runtime `--no-save`. form-isolation + handoff PASS; session-stage2 8/9 flaky timeout |
+| Puppeteer | No en `package.json`; runtime `--no-save`. form-isolation + handoff + session-stage2 PASS (ver §10.11) |
 | Ready for Review | **No** hasta OK explícito del usuario |
+
+### 10.11 Validación final PR #86 — `verify-session-stage2` (2026-10-12)
+
+**Alcance:** Draft PR #86; sin merge, Ready, deploy ni migraciones.
+
+| Ítem | Resultado |
+|------|-----------|
+| Baseline 5× | **5/5 fallan** ~249s; 8 PASS + `script-error`; hang en `STEP: afterSave-evaluate` tras submit |
+| Causa | **Solo script / datos de prueba**, no bug de producto. Monto fijo `$15000` > `pending_collection` → API `409 PAYMENT_OVERPAY` → `window.alert` nativo bloquea CDP (`Runtime.callFunctionOn timed out`) |
+| Fix | `scripts/verify-session-stage2.mjs`: proyecto con saldo ≥50, monto bajo ese saldo, `waitForFunction` a borrador/form limpios, handler de diálogos nativos. Aserciones intactas |
+| Post-fix 5× | **5/5 PASS** ~8–9s, 10/10 checks |
+| Regresión | `verify-form-isolation` 7/7; `verify-stage2-handoff` 6/6; `verify-stage4-workspace` OK; C1/M1–M5 unit PASS |
+| Diff PR | 14 archivos Etapa 4 + scripts/tests/docs; `server.js` solo historial + sort/filter `created_at` |
+| HEAD | tip con fix de script; PR permanece Draft |
 
