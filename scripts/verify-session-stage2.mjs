@@ -10,14 +10,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const pass = (name, detail = '') => { results.push({ name, ok: true, detail }); console.log(`PASS: ${name}${detail ? ` — ${detail}` : ''}`); };
 const fail = (name, detail = '') => { results.push({ name, ok: false, detail }); console.error(`FAIL: ${name}${detail ? ` — ${detail}` : ''}`); };
+const step = (label) => { console.log(`STEP: ${label} @ ${new Date().toISOString()}`); };
 
 const browser = await puppeteer.launch({
   executablePath: '/usr/local/bin/google-chrome',
   headless: true,
+  protocolTimeout: 120000,
   args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
 });
 const page = await browser.newPage();
-page.setDefaultTimeout(20000);
+page.setDefaultTimeout(30000);
+
+// Native alert/confirm blocks CDP evaluate until dismissed. Capture and dismiss so
+// failures surface as assertion errors instead of ProtocolError timeouts.
+const dialogs = [];
+page.on('dialog', async (dialog) => {
+  const entry = { type: dialog.type(), message: dialog.message() };
+  dialogs.push(entry);
+  console.error(`DIALOG: ${entry.type} — ${entry.message}`);
+  try {
+    await dialog.accept();
+  } catch {
+    /* already handled */
+  }
+});
 
 try {
   await page.goto(BASE, { waitUntil: 'networkidle0' });
@@ -72,31 +88,102 @@ try {
     fail('extend-renews-and-closes-modal', JSON.stringify(afterExtend));
   }
 
-  // Draft isolation + restore flow
-  await page.waitForSelector('#projects-table tr[data-row-id]', { timeout: 10000 });
-  const projectId = await page.evaluate(() => {
-    const row = document.querySelector('#projects-table tr[data-row-id]');
-    return row ? Number(row.getAttribute('data-row-id')) : null;
-  });
-  if (!projectId) throw new Error('No project rows');
+  // Draft isolation + restore flow — create a controlled fixture project so the script
+  // never depends on commercial/existing rows or their pending balances.
+  step('create-controlled-fixture-project');
+  const fixtureInvoiceMxn = 5000;
+  const draftAmount = 100;
+  const fixture = await page.evaluate(async (invoiceMxn) => {
+    const empRes = await fetch('/api/employees?limit=100');
+    const empJson = await empRes.json();
+    const employees = empJson.data || empJson || [];
+    const tecnico = employees.find((e) => e.employee_number === 'EMP-TEC-001')
+      || employees.find((e) => /tecnico/i.test(String(e.full_name || '')))
+      || employees[0];
+    const vendedor = employees.find((e) => e.employee_number === 'EMP-VEN-001')
+      || employees.find((e) => /vendedor/i.test(String(e.full_name || '')))
+      || employees[1]
+      || employees[0];
+    if (!tecnico?.id || !vendedor?.id) {
+      throw new Error('fixture requires seed employees (tecnico/vendedor)');
+    }
+    const stamp = Date.now();
+    const payload = {
+      quote_number: `SESS2-FIX-${stamp}`,
+      order_number: `ORD-SESS2-${stamp}`,
+      purchase_order_not_applicable: true,
+      tecnico_id: tecnico.id,
+      vendedor_id: vendedor.id,
+      client_name: 'Cliente Fixture Session Stage2',
+      project_description: 'Proyecto de prueba controlado (verify-session-stage2)',
+      fecha_vencimiento: '2026-12-31',
+      promised_delivery_date: '2026-12-15',
+      expected_margin: 10,
+      total_invoiced: invoiceMxn,
+      total_invoiced_currency: 'MXN',
+      progress_percent: 0,
+      status: 'Pendiente',
+      risk: 'Bajo',
+    };
+    const res = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(`fixture create failed ${res.status}: ${JSON.stringify(body)}`);
+    }
+    return { id: Number(body.id), quote_number: body.quote_number, pending: invoiceMxn };
+  }, fixtureInvoiceMxn);
+  const projectId = fixture.id;
+  if (!projectId) throw new Error('Controlled fixture project was not created');
+  console.log(`FIXTURE: projectId=${projectId} quote=${fixture.quote_number} pending=${fixture.pending} draftAmount=${draftAmount}`);
 
-  await page.evaluate((id) => selectProject(id), projectId);
-  await page.waitForSelector('#project-detail-drawer:not(.hidden)');
+  // Refresh list so the fixture row is present, then force legacy drawer mode.
+  await page.evaluate(async () => {
+    if (typeof loadProjects === 'function') await loadProjects();
+  });
+  await page.waitForSelector(`#projects-table tr[data-row-id="${projectId}"]`, { timeout: 10000 });
+
   await page.evaluate(() => {
+    const toggle = document.querySelector('#projects-workspace-mode-toggle');
+    if (toggle && toggle.checked) {
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (typeof ProjectWorkspace !== 'undefined' && typeof ProjectWorkspace.setWorkspaceMode === 'function') {
+      ProjectWorkspace.setWorkspaceMode(false);
+    }
+    if (typeof applyProjectsUiModeFromToggle === 'function') {
+      applyProjectsUiModeFromToggle();
+    }
+  });
+  await page.evaluate((id) => selectProject(id), projectId);
+  await page.waitForFunction(() => {
+    const drawer = document.querySelector('#project-detail-drawer');
+    const workspace = document.querySelector('#project-workspace');
+    return (drawer && !drawer.classList.contains('hidden'))
+      || (workspace && !workspace.classList.contains('hidden'));
+  }, { timeout: 10000 });
+  await page.evaluate((amount) => {
+    const pagosTab = document.querySelector('.workspace-tab[data-ws-tab="payments"]');
+    if (pagosTab && typeof setWorkspaceTab === 'function') setWorkspaceTab('payments');
+    else if (pagosTab) pagosTab.click();
     const form = document.querySelector('#payment-form');
-    form.elements.amount.setCurrencyValue(15000);
+    form.elements.amount.setCurrencyValue(amount);
     form.elements.notes.value = 'DRAFT-SESSION';
     form.elements.payment_date.value = '2026-01-20';
     snapshotActiveProjectDrafts();
-  });
+  }, draftAmount);
 
   const stored = await page.evaluate((userId, projectId) => {
     return SessionDrafts.readDraft(sessionStorage, userId, projectId, 'payment_new');
   }, sessionMeta.user.id, projectId);
-  if (stored?.payload?.notes === 'DRAFT-SESSION' && Number(stored.payload.amount) === 15000) {
+  if (stored?.payload?.notes === 'DRAFT-SESSION' && Number(stored.payload.amount) === draftAmount) {
     pass('draft-saved-to-sessionStorage', JSON.stringify(stored.payload));
   } else {
-    fail('draft-saved-to-sessionStorage', JSON.stringify(stored));
+    fail('draft-saved-to-sessionStorage', JSON.stringify({ stored, draftAmount }));
   }
 
   // Simulate expiry handling without waiting full TTL
@@ -122,6 +209,11 @@ try {
 
   await page.click('#session-draft-restore');
   await sleep(1000);
+  await page.evaluate(() => {
+    const pagosTab = document.querySelector('.workspace-tab[data-ws-tab="payments"]');
+    if (pagosTab && typeof setWorkspaceTab === 'function') setWorkspaceTab('payments');
+    else if (pagosTab) pagosTab.click();
+  });
   const restored = await page.evaluate(() => {
     const form = document.querySelector('#payment-form');
     return {
@@ -130,44 +222,64 @@ try {
       paymentDate: form.elements.payment_date.value,
     };
   });
-  if (Number(restored.amount) === 15000 && restored.notes === 'DRAFT-SESSION') {
+  if (Number(restored.amount) === draftAmount && restored.notes === 'DRAFT-SESSION') {
     pass('draft-restored-into-form', JSON.stringify(restored));
   } else {
-    fail('draft-restored-into-form', JSON.stringify(restored));
+    fail('draft-restored-into-form', JSON.stringify({ restored, draftAmount }));
   }
 
   // Saving payment clears draft and does not auto-create extras beyond submit
+  step('beforeCount-fetch');
   const beforeCount = await page.evaluate(async (id) => {
     const res = await fetch('/api/projects/' + id);
     const data = await res.json();
     return (data.payments || []).length;
   }, projectId);
+  step('set-payment-date');
   await page.evaluate(() => {
     document.querySelector('#payment-form').elements.payment_date.value = new Date().toISOString().slice(0, 10);
   });
+  const dialogCountBeforeSave = dialogs.length;
+  step('click-payment-submit');
   await page.click('#payment-form button[type="submit"]');
-  await sleep(1000);
-  const afterSave = await page.evaluate((userId, projectId) => {
-    return {
-      draft: SessionDrafts.readDraft(sessionStorage, userId, projectId, 'payment_new'),
-      amount: document.querySelector('#payment-form').elements.amount.getCurrencyValue(),
-    };
-  }, sessionMeta.user.id, projectId);
-  const afterCount = await page.evaluate(async (id) => {
-    const res = await fetch('/api/projects/' + id);
-    const data = await res.json();
-    return (data.payments || []).length;
-  }, projectId);
-  if (!afterSave.draft && Math.abs(Number(afterSave.amount) || 0) < 0.000001 && afterCount === beforeCount + 1) {
-    pass('save-clears-draft-and-one-payment-only', JSON.stringify({ beforeCount, afterCount }));
+  step('wait-save-cleared');
+  // Wait for product success signals instead of a fixed sleep (avoids racing applyProjectListUpdate).
+  await page.waitForFunction((userId, projectId) => {
+    const form = document.querySelector('#payment-form');
+    if (!form?.elements?.amount?.getCurrencyValue) return false;
+    const draft = SessionDrafts.readDraft(sessionStorage, userId, projectId, 'payment_new');
+    const amount = form.elements.amount.getCurrencyValue();
+    return !draft && Math.abs(Number(amount) || 0) < 0.000001;
+  }, { timeout: 15000 }, sessionMeta.user.id, projectId);
+  if (dialogs.length > dialogCountBeforeSave) {
+    fail('save-clears-draft-and-one-payment-only', `unexpected dialog during save: ${JSON.stringify(dialogs.slice(dialogCountBeforeSave))}`);
   } else {
-    fail('save-clears-draft-and-one-payment-only', JSON.stringify({ afterSave, beforeCount, afterCount }));
+    step('afterSave-evaluate');
+    const afterSave = await page.evaluate((userId, projectId) => {
+      return {
+        draft: SessionDrafts.readDraft(sessionStorage, userId, projectId, 'payment_new'),
+        amount: document.querySelector('#payment-form').elements.amount.getCurrencyValue(),
+      };
+    }, sessionMeta.user.id, projectId);
+    step('afterCount-fetch');
+    const afterCount = await page.evaluate(async (id) => {
+      const res = await fetch('/api/projects/' + id);
+      const data = await res.json();
+      return (data.payments || []).length;
+    }, projectId);
+    if (!afterSave.draft && Math.abs(Number(afterSave.amount) || 0) < 0.000001 && afterCount === beforeCount + 1) {
+      pass('save-clears-draft-and-one-payment-only', JSON.stringify({ beforeCount, afterCount, draftAmount, projectId }));
+    } else {
+      fail('save-clears-draft-and-one-payment-only', JSON.stringify({ afterSave, beforeCount, afterCount, draftAmount, projectId, dialogs }));
+    }
   }
 
   // Multiple 401s collapse to one handled expiry
+  step('logout-fetch');
   await page.evaluate(async () => {
     await fetch('/api/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
   });
+  step('multi401-evaluate');
   const multi401 = await page.evaluate(async () => {
     state.sessionExpiredHandled = false;
     state.sessionAuthBlocked = false;
@@ -194,14 +306,16 @@ try {
   } else {
     fail('multiple-401-single-handler', JSON.stringify(multi401));
   }
+  step('done');
 } catch (error) {
-  fail('script-error', error.stack || error.message);
+  const dialogHint = dialogs.length ? ` | dialogs=${JSON.stringify(dialogs)}` : '';
+  fail('script-error', `${error.stack || error.message}${dialogHint}`);
   try { await page.screenshot({ path: path.join(ARTIFACTS, 'session-stage2-error.png'), fullPage: true }); } catch {}
 } finally {
   await browser.close();
 }
 
 const out = path.join(ARTIFACTS, 'session-stage2-verification.json');
-fs.writeFileSync(out, JSON.stringify({ results, failed: results.filter((r) => !r.ok).length }, null, 2));
+fs.writeFileSync(out, JSON.stringify({ results, failed: results.filter((r) => !r.ok).length, dialogs }, null, 2));
 console.log(`Wrote ${out}`);
 process.exit(results.some((r) => !r.ok) ? 1 : 0);

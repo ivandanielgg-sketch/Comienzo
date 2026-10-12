@@ -23,6 +23,7 @@ const {
   hasMaterialPendingBalance,
   hasPositivePendingBalance,
 } = require('./projectInvoiceSettlement');
+const { buildProjectHistorial } = require('./projectHistorial');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
 const {
@@ -1067,6 +1068,7 @@ const PROJECT_SORTS = {
   invoice_number: 'p.invoice_number',
   invoice_payment_status: 'p.invoice_payment_status',
   promised_delivery_date: 'p.promised_delivery_date',
+  created_at: 'p.created_at',
   closed_at: 'p.closed_at',
   total_invoiced_mxn: PROJECT_INVOICED_SQL,
   total_charged: PROJECT_CHARGED_SQL,
@@ -1093,6 +1095,7 @@ const PROJECT_FILTERS = {
     options: VALID_INVOICE_PAYMENT_STATUSES_STORED,
   },
   promised_delivery_date: { type: 'date', column: 'p.promised_delivery_date' },
+  created_at: { type: 'date', column: 'date(p.created_at)' },
   closed_at: { type: 'date', column: 'date(p.closed_at)' },
   total_invoiced_mxn: { type: 'currency', column: PROJECT_INVOICED_SQL },
   total_charged: { type: 'currency', column: PROJECT_CHARGED_SQL },
@@ -2084,6 +2087,16 @@ app.get('/api/projects/:id/settlement-preview', requireAuth, requirePermission('
   try {
     const project = getProjectOrFail(req.params.id);
     res.json(buildProjectSettlementPreview(project));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/projects/:id/historial', requireAuth, requirePermission('projects', 'view'), (req, res, next) => {
+  try {
+    const limit = Number(req.query.limit || 50);
+    const offset = Number(req.query.offset || 0);
+    res.json(buildProjectHistorial(db, req.params.id, { limit, offset }));
   } catch (error) {
     next(error);
   }

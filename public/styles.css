@@ -2496,3 +2496,188 @@ body.scroll-lock {
     flex: 1 1 calc(50% - 8px);
   }
 }
+
+/* Etapa 4 — listado full-width + workspace */
+.projects-ui-mode-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+}
+
+.projects-ui-mode-label {
+  font-weight: 600;
+}
+
+body.projects-ui-workspace #projects-main-layout {
+  grid-template-columns: 1fr;
+}
+
+body.projects-ui-workspace #project-form-legacy-host:empty,
+body.projects-ui-workspace #project-form-legacy-host:not(:has(#project-form-block)) {
+  display: none;
+}
+
+body.projects-ui-workspace #project-detail-drawer {
+  display: none !important;
+}
+
+body.projects-ui-legacy #project-workspace {
+  display: none !important;
+}
+
+.project-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.project-workspace.hidden {
+  display: none !important;
+}
+
+.project-workspace-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.project-workspace-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.workspace-finance-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.workspace-finance-strip article {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.03), rgba(15, 23, 42, 0.07));
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workspace-finance-strip span {
+  font-size: 0.78rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.workspace-finance-strip strong {
+  font-size: 1.15rem;
+}
+
+.workspace-finance-strip small {
+  font-size: 0.75rem;
+}
+
+.workspace-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+.workspace-tab {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: #475569;
+  padding: 10px 14px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.workspace-tab.active,
+.workspace-tab[aria-selected='true'] {
+  color: #0f172a;
+  background: rgba(15, 23, 42, 0.06);
+  box-shadow: inset 0 -2px 0 #0f172a;
+}
+
+.workspace-tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.workspace-tab-panels {
+  min-width: 0;
+}
+
+.workspace-tab-panel.hidden {
+  display: none !important;
+}
+
+.historial-list li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.historial-list .historial-meta {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.historial-pagination {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.col-facturado-original {
+  display: block;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+@media (max-width: 1100px) {
+  .workspace-finance-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace-finance-toggle {
+    display: inline-flex;
+  }
+
+  .workspace-finance-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-finance-strip[hidden] {
+    display: none !important;
+  }
+
+  .project-workspace-header h2 {
+    font-size: 1.2rem;
+  }
+}
+
+@media (min-width: 721px) {
+  .workspace-finance-toggle {
+    display: none;
+  }
+
+  .workspace-finance-strip[hidden] {
+    display: grid !important;
+  }
+}

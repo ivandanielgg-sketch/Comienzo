@@ -203,12 +203,26 @@ try {
   });
 
   await page.evaluate(async (id) => {
+    const toggle = document.querySelector('#projects-workspace-mode-toggle');
+    if (toggle && toggle.checked) {
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (typeof ProjectWorkspace !== 'undefined' && typeof ProjectWorkspace.setWorkspaceMode === 'function') {
+      ProjectWorkspace.setWorkspaceMode(false);
+    }
+    if (typeof applyProjectsUiModeFromToggle === 'function') {
+      applyProjectsUiModeFromToggle();
+    }
     await loadProjects();
     selectProject(id);
   }, projectId);
   await page.waitForFunction((id) => Number(state.selectedProjectId) === Number(id), { timeout: 10000 }, projectId);
   const adminUserId = await page.evaluate(() => state.currentUserId);
   await page.evaluate(() => {
+    const pagosTab = document.querySelector('.workspace-tab[data-ws-tab="payments"]');
+    if (pagosTab && typeof setWorkspaceTab === 'function') setWorkspaceTab('payments');
+    else if (pagosTab) pagosTab.click();
     const form = document.querySelector('#payment-form');
     if (!form?.elements?.amount?.setCurrencyValue) {
       throw new Error('payment form currency helpers missing');

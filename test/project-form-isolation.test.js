@@ -116,14 +116,16 @@ test('app wires reset helpers, discard confirm and AbortController detail loads'
 });
 
 test('switching projects asks before discarding and keeps cancel path', () => {
+  // Workspace: confirmLeaveProjectWorkspace. Legacy: dirty Información form OR movement drafts.
   assert.match(
     appJs,
-    /if \(isSwitchingProject\) \{\s*if \(!confirmDiscardUnsavedMovementDrafts\(\)\) \{\s*return;\s*\}/s,
+    /if \(isSwitchingProject\) \{\s*if \(isWorkspaceUiMode\(\)\) \{\s*if \(!confirmLeaveProjectWorkspace\([^)]*\)\) \{\s*return;\s*\}\s*\} else \{[\s\S]*?isProjectFormDirty\(\)[\s\S]*?confirmLeaveProjectWorkspace[\s\S]*?confirmDiscardUnsavedMovementDrafts\(\)/s,
   );
   assert.match(
     appJs,
     /Hay un pago o costo capturado que aún no se ha guardado/,
   );
+  assert.match(appJs, /confirmLeaveProjectWorkspace/);
 });
 
 test('payment and cost submit no longer rely on bare form.reset without clearing currency', () => {
