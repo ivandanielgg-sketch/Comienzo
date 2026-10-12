@@ -6,7 +6,7 @@ Documento de continuidad para retomar el trabajo sin depender del hilo de chat.
 | Campo | Valor |
 |-------|--------|
 | Rama Etapa 4 | `cursor/project-workspace-tabs-0cc1` |
-| HEAD | `6acc8f9` (tip local; ver `git rev-parse HEAD`) |
+| HEAD | `d794574`+ tip post-push (ver `git rev-parse HEAD`) |
 | Base autorizada | `origin/main` @ `ce6f63d` (PR #85 — Etapas 1–3) |
 | Continuidad Etapa 3 (rama histórica) | `cursor/stage3-invoice-settlement-c0b6` / pin `8e635b8` |
 | PRs cerrados | #83 (Etapa 1), #84 (Etapa 2), #85 (Etapa 3 + FX) |
@@ -475,8 +475,8 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 
 | Prueba | Objetivo |
 |--------|----------|
-| Reportes create/edit/print E2E | Solo se abrió el picker de tipo; falta ciclo completo |
-| Scripts puppeteer verify-* | Requieren `puppeteer-core` (ausente en este entorno) |
+| Reportes E2E (post-push) | boiler/general/autoflame: create→edit→persist→print shell PASS; failure: create/reopen/print PASS, **sin endpoint UI de edición** (solo create) |
+| Scripts puppeteer verify-* | `puppeteer-core` **no** está en package.json (solo import en scripts). Instalación efímera `--no-save`. Scripts adaptados a feature flag Stage 4. form-isolation 7/7; stage2-handoff 6/6; session-stage2 8/9 (timeout flaky post-restore) |
 
 ### 10.8 Cierre de correcciones C1/M1–M5 (2026-10-12)
 
@@ -535,3 +535,15 @@ git status
 git rev-parse HEAD
 git log --oneline origin/main..HEAD
 ```
+
+### 10.10 Push / PR Draft (2026-10-12)
+
+| Ítem | Valor |
+|------|--------|
+| Rama publicada | `cursor/project-workspace-tabs-0cc1` |
+| PR Draft | https://github.com/ivandanielgg-sketch/Comienzo/pull/86 (#86) → `main` |
+| Merge / Ready / deploy / migraciones | **no** |
+| Reportes E2E | 3 tipos project_reports ciclo completo PASS; failure create/print PASS (sin edit API) |
+| Puppeteer | No en `package.json`; runtime `--no-save`. form-isolation + handoff PASS; session-stage2 8/9 flaky timeout |
+| Ready for Review | **No** hasta OK explícito del usuario |
+

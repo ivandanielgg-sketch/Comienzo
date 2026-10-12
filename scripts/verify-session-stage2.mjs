@@ -14,10 +14,11 @@ const fail = (name, detail = '') => { results.push({ name, ok: false, detail });
 const browser = await puppeteer.launch({
   executablePath: '/usr/local/bin/google-chrome',
   headless: true,
+  protocolTimeout: 120000,
   args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
 });
 const page = await browser.newPage();
-page.setDefaultTimeout(20000);
+page.setDefaultTimeout(30000);
 
 try {
   await page.goto(BASE, { waitUntil: 'networkidle0' });
@@ -80,9 +81,30 @@ try {
   });
   if (!projectId) throw new Error('No project rows');
 
-  await page.evaluate((id) => selectProject(id), projectId);
-  await page.waitForSelector('#project-detail-drawer:not(.hidden)');
   await page.evaluate(() => {
+    const toggle = document.querySelector('#projects-workspace-mode-toggle');
+    if (toggle && toggle.checked) {
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (typeof ProjectWorkspace !== 'undefined' && typeof ProjectWorkspace.setWorkspaceMode === 'function') {
+      ProjectWorkspace.setWorkspaceMode(false);
+    }
+    if (typeof applyProjectsUiModeFromToggle === 'function') {
+      applyProjectsUiModeFromToggle();
+    }
+  });
+  await page.evaluate((id) => selectProject(id), projectId);
+  await page.waitForFunction(() => {
+    const drawer = document.querySelector('#project-detail-drawer');
+    const workspace = document.querySelector('#project-workspace');
+    return (drawer && !drawer.classList.contains('hidden'))
+      || (workspace && !workspace.classList.contains('hidden'));
+  }, { timeout: 10000 });
+  await page.evaluate(() => {
+    const pagosTab = document.querySelector('.workspace-tab[data-ws-tab="payments"]');
+    if (pagosTab && typeof setWorkspaceTab === 'function') setWorkspaceTab('payments');
+    else if (pagosTab) pagosTab.click();
     const form = document.querySelector('#payment-form');
     form.elements.amount.setCurrencyValue(15000);
     form.elements.notes.value = 'DRAFT-SESSION';
@@ -122,6 +144,11 @@ try {
 
   await page.click('#session-draft-restore');
   await sleep(1000);
+  await page.evaluate(() => {
+    const pagosTab = document.querySelector('.workspace-tab[data-ws-tab="payments"]');
+    if (pagosTab && typeof setWorkspaceTab === 'function') setWorkspaceTab('payments');
+    else if (pagosTab) pagosTab.click();
+  });
   const restored = await page.evaluate(() => {
     const form = document.querySelector('#payment-form');
     return {

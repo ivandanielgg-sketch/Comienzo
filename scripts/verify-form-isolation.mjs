@@ -74,7 +74,25 @@ async function ensureTwoProjects(page) {
   return [a, b];
 }
 
+async function ensureLegacyProjectsUi(page) {
+  // Stage 4 defaults to workspace; Stage 1 isolation script targets the legacy drawer.
+  await page.evaluate(() => {
+    const toggle = document.querySelector('#projects-workspace-mode-toggle');
+    if (toggle && toggle.checked) {
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (typeof ProjectWorkspace !== 'undefined' && typeof ProjectWorkspace.setWorkspaceMode === 'function') {
+      ProjectWorkspace.setWorkspaceMode(false);
+    }
+    if (typeof applyProjectsUiModeFromToggle === 'function') {
+      applyProjectsUiModeFromToggle();
+    }
+  });
+}
+
 async function openProjectById(page, projectId) {
+  await ensureLegacyProjectsUi(page);
   await page.evaluate((id) => {
     const btn = document.querySelector(`button[data-action="select"][data-id="${id}"]`);
     if (btn) {
@@ -85,7 +103,13 @@ async function openProjectById(page, projectId) {
       selectProject(id);
     }
   }, projectId);
-  await page.waitForSelector('#project-detail-drawer:not(.hidden)', { timeout: 5000 });
+  await page.waitForFunction(() => {
+    const drawer = document.querySelector('#project-detail-drawer');
+    const workspace = document.querySelector('#project-workspace');
+    const drawerOpen = drawer && !drawer.classList.contains('hidden');
+    const workspaceOpen = workspace && !workspace.classList.contains('hidden');
+    return Boolean(drawerOpen || workspaceOpen);
+  }, { timeout: 10000 });
 }
 
 async function readPaymentDraft(page) {
@@ -152,6 +176,11 @@ try {
   const paymentsBeforeA = (await api(page, 'GET', `/api/projects/${projectA.id}`)).data.payments || [];
 
   await openProjectById(page, projectA.id);
+  await page.evaluate(() => {
+    const pagosTab = document.querySelector('.workspace-tab[data-ws-tab="payments"]');
+    if (pagosTab && typeof setWorkspaceTab === 'function') setWorkspaceTab('payments');
+    else if (pagosTab) pagosTab.click();
+  });
   await fillPaymentDraft(page, {
     amount: 15000,
     notes: 'BORRADOR-A',
