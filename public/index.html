@@ -66,6 +66,18 @@
         </header>
 
         <section id="projects-view">
+          <div class="projects-ui-mode-bar panel">
+            <label class="checkbox-row projects-ui-mode-label">
+              <input type="checkbox" id="projects-workspace-mode-toggle" checked />
+              Usar workspace de proyecto (Etapa 4)
+            </label>
+            <p class="muted" style="margin:0;">
+              Desactive para volver temporalmente al listado con formulario lateral y drawer.
+              Solo una interfaz permanece activa.
+            </p>
+          </div>
+
+          <div id="projects-list-level">
           <section class="panel exchange-panel">
             <div class="panel-header">
               <div>
@@ -112,8 +124,9 @@
             </article>
           </section>
 
-          <section class="layout">
-            <div class="panel">
+          <section class="layout" id="projects-main-layout">
+            <div class="panel" id="project-form-legacy-host">
+              <div id="project-form-block">
               <div class="panel-header">
                 <div>
                   <h2 id="project-form-title">Nuevo proyecto</h2>
@@ -257,14 +270,16 @@
                 <button type="submit">Guardar proyecto</button>
                 <p id="project-message" class="message"></p>
               </form>
+              </div>
             </div>
 
-            <div class="panel">
+            <div class="panel" id="projects-list-panel">
               <div class="panel-header">
                 <div>
                   <h2>Listado</h2>
-                  <p class="muted">Selecciona un proyecto para agregar pagos, compras, gastos o salarios.</p>
+                  <p class="muted">Selecciona un proyecto para abrir su workspace o el panel de detalle.</p>
                 </div>
+                <button id="projects-new-button" type="button">Nuevo proyecto</button>
               </div>
               <div id="projects-export-bar" class="search-row" style="margin-bottom:12px;gap:8px;flex-wrap:wrap;align-items:flex-end;">
                 <label style="flex-direction:row;gap:6px;align-items:center;">
@@ -311,6 +326,64 @@
               <div id="projects-pagination"></div>
             </div>
           </section>
+          </div>
+
+          <section id="project-workspace" class="project-workspace hidden" aria-hidden="true">
+            <div class="project-workspace-toolbar">
+              <button type="button" id="workspace-back-button" class="secondary">← Volver al listado</button>
+              <button type="button" id="workspace-new-from-ws" class="secondary">Nuevo proyecto</button>
+            </div>
+            <header class="project-workspace-header">
+              <div>
+                <p class="eyebrow" id="workspace-eyebrow">Proyecto</p>
+                <h2 id="workspace-title">Nuevo proyecto</h2>
+                <p id="workspace-subtitle" class="muted"></p>
+              </div>
+              <button type="button" id="workspace-finance-toggle" class="secondary workspace-finance-toggle" aria-expanded="false">
+                Indicadores
+              </button>
+            </header>
+            <div id="workspace-finance-strip" class="workspace-finance-strip" hidden>
+              <article><span>Facturado (MXN)</span><strong id="ws-ind-invoiced">—</strong><small id="ws-ind-invoiced-original" class="muted"></small></article>
+              <article><span>Cobrado</span><strong id="ws-ind-charged">—</strong></article>
+              <article><span>Gastado</span><strong id="ws-ind-spent">—</strong></article>
+              <article><span>Pendiente</span><strong id="ws-ind-pending">—</strong></article>
+              <article><span>Margen</span><strong id="ws-ind-margin">—</strong></article>
+            </div>
+            <nav class="workspace-tabs" role="tablist" aria-label="Pestañas del proyecto">
+              <button type="button" class="workspace-tab active" role="tab" data-ws-tab="info" aria-selected="true">Información general</button>
+              <button type="button" class="workspace-tab" role="tab" data-ws-tab="payments" aria-selected="false">Pagos</button>
+              <button type="button" class="workspace-tab" role="tab" data-ws-tab="costs" aria-selected="false">Costos</button>
+              <button type="button" class="workspace-tab" role="tab" data-ws-tab="reports" aria-selected="false">Reportes</button>
+              <button type="button" class="workspace-tab" role="tab" data-ws-tab="historial" aria-selected="false">Historial</button>
+            </nav>
+            <div class="workspace-tab-panels">
+              <div id="ws-panel-info" class="workspace-tab-panel panel" data-ws-panel="info" role="tabpanel">
+                <div id="project-form-workspace-host"></div>
+              </div>
+              <div id="ws-panel-payments" class="workspace-tab-panel panel hidden" data-ws-panel="payments" role="tabpanel">
+                <div id="payments-workspace-host"></div>
+              </div>
+              <div id="ws-panel-costs" class="workspace-tab-panel panel hidden" data-ws-panel="costs" role="tabpanel">
+                <div id="costs-workspace-host"></div>
+              </div>
+              <div id="ws-panel-reports" class="workspace-tab-panel panel hidden" data-ws-panel="reports" role="tabpanel">
+                <div id="reports-workspace-host"></div>
+              </div>
+              <div id="ws-panel-historial" class="workspace-tab-panel panel hidden" data-ws-panel="historial" role="tabpanel">
+                <div class="panel-header">
+                  <div>
+                    <h3>Historial del proyecto</h3>
+                    <p class="muted">Eventos verificables de auditoría y movimientos. No se inventan registros.</p>
+                  </div>
+                  <button type="button" id="workspace-historial-refresh" class="secondary">Actualizar</button>
+                </div>
+                <ul id="workspace-historial-list" class="entry-list historial-list"></ul>
+                <div id="workspace-historial-pagination" class="historial-pagination"></div>
+                <p id="workspace-historial-message" class="message muted"></p>
+              </div>
+            </div>
+          </section>
 
           <div id="project-detail-drawer" class="project-drawer hidden" aria-hidden="true">
             <div id="project-detail-backdrop" class="project-drawer-backdrop" tabindex="-1"></div>
@@ -350,14 +423,17 @@
                   <article><span>Fecha de pago</span><strong id="detail-invoice-paid-at"></strong></article>
                 </div>
 
-                <div class="detail-reports-section" style="margin-bottom:16px;">
+                <div id="reports-drawer-host">
+                <div id="detail-reports-section" class="detail-reports-section" style="margin-bottom:16px;">
                   <h3>Reportes generados</h3>
                   <ul id="detail-reports-list" class="entry-list"></ul>
                   <button class="secondary" id="detail-new-report" type="button" style="margin-top:8px;">Generar reporte</button>
                 </div>
+                </div>
 
                 <div class="project-drawer-sections">
-              <div>
+              <div id="payments-drawer-host">
+              <div id="payments-section">
                 <h3>Agregar pago</h3>
                 <form id="payment-form" class="stack">
                   <label>
@@ -383,8 +459,10 @@
                 </form>
                 <ul id="payments-list" class="entry-list"></ul>
               </div>
+              </div>
 
-              <div>
+              <div id="costs-drawer-host">
+              <div id="costs-section">
                 <h3>Agregar costo</h3>
                 <form id="cost-form" class="stack">
                   <label>
@@ -422,6 +500,7 @@
                   <button type="submit">Registrar costo</button>
                 </form>
                 <ul id="costs-list" class="entry-list"></ul>
+              </div>
               </div>
                 </div>
               </div>
@@ -2835,7 +2914,8 @@
     <script src="/service-quoter-buildup.js?v=buildup-tarifas-20260717"></script>
     <script src="/project-form-isolation.js?v=form-isolation-stage1"></script>
     <script src="/session-drafts.js?v=session-stage2"></script>
-    <script src="/app.js?v=stage3-settle"></script>
+    <script src="/project-workspace.js?v=stage4-workspace"></script>
+    <script src="/app.js?v=stage4-workspace"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>

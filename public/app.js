@@ -150,6 +150,13 @@ state.selectedEcovisPaymentId = null;
 state.tableSort = {};
 state.tableSort.projects = { sortBy: 'order_number', sortOrder: 'asc' };
 state.lastWorkedProjectId = null;
+state.projectWorkspaceOpen = false;
+state.projectWorkspaceTab = 'info';
+state.projectFormBaseline = '';
+state.historialPag = { limit: 30, offset: 0, total: 0 };
+state.historialLoadedFor = null;
+state.listPositionSnapshot = null;
+state.workspaceFinanceExpanded = false;
 
 const loginView = document.querySelector('#login-view');
 const appView = document.querySelector('#app-view');
@@ -490,6 +497,16 @@ function renderInvoicePaymentStatusBadge(status) {
   return `<span class="badge ${invoicePaymentStatusBadgeClass(status)}">${escapeHtml(status)}</span>`;
 }
 
+function renderFacturadoMxnCell(project) {
+  const mxn = money.format(project.total_invoiced_mxn);
+  const currency = project.total_invoiced_currency || 'MXN';
+  if (currency === 'MXN') {
+    return mxn;
+  }
+  const original = formatCurrency(project.total_invoiced, currency);
+  return `${mxn}<small class="col-facturado-original" title="Importe original facturado">Original: ${escapeHtml(original)}</small>`;
+}
+
 const projectColumns = [
   { key: 'id', label: 'ID', type: 'number', sortable: true },
   { key: 'quote_number', label: 'Cotizacion', type: 'text', sortable: true },
@@ -500,7 +517,9 @@ const projectColumns = [
   { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
   { key: 'status', label: 'Estado', type: 'select', sortable: true, filterOptions: statusOptions, render: (p) => `<span class="badge status ${statusBadgeClass(p.status)}">${escapeHtml(p.status)}</span>` },
   { key: 'risk', label: 'Riesgo', type: 'select', sortable: true, filterOptions: riskOptions, render: (p) => `<span class="badge risk-${escapeHtml(String(p.risk || '').toLowerCase())}">${escapeHtml(p.risk)}</span>` },
-  { key: 'promised_delivery_date', label: 'Fecha', type: 'date', sortable: true },
+  { key: 'created_at', label: 'Creacion', type: 'date', sortable: true, render: (p) => escapeHtml(String(p.created_at || '').slice(0, 10) || '—') },
+  { key: 'promised_delivery_date', label: 'Entrega', type: 'date', sortable: true },
+  { key: 'total_invoiced_mxn', label: 'FACTURADO (MXN)', type: 'currency', sortable: true, render: renderFacturadoMxnCell },
   { key: 'total_charged', label: 'Cobrado', type: 'currency', sortable: true, render: (p) => money.format(p.total_charged) },
   { key: 'spent', label: 'Gastado', type: 'currency', sortable: true, render: (p) => money.format(p.spent) },
   { key: 'pending_collection', label: 'Pendiente', type: 'currency', sortable: true, render: (p) => money.format(p.pending_collection) },
@@ -1591,9 +1610,16 @@ function projectRowActions(project) {
       </div>`;
 }
 
+function isProjectSurfaceOpen() {
+  if (typeof ProjectWorkspace !== 'undefined' && ProjectWorkspace.isWorkspaceMode()) {
+    return Boolean(state.projectWorkspaceOpen);
+  }
+  return Boolean(state.projectDrawerOpen);
+}
+
 function projectRowClass(project) {
   const classes = [];
-  if (state.projectDrawerOpen && state.selectedProjectId === project.id) {
+  if (isProjectSurfaceOpen() && state.selectedProjectId === project.id) {
     classes.push('row-selected');
   }
   if (state.lastWorkedProjectId === project.id) {
@@ -1608,7 +1634,7 @@ function syncProjectsRowClasses() {
   }
   projectsTable.querySelectorAll('tbody tr[data-row-id]').forEach((tr) => {
     const id = Number(tr.dataset.rowId);
-    tr.classList.toggle('row-selected', Boolean(state.projectDrawerOpen && state.selectedProjectId === id));
+    tr.classList.toggle('row-selected', Boolean(isProjectSurfaceOpen() && state.selectedProjectId === id));
     tr.classList.toggle('row-last-worked', state.lastWorkedProjectId === id);
   });
 }
@@ -1728,12 +1754,19 @@ async function applyProjectListUpdate(updatedProject, { remove = false, markWork
 
   if (state.selectedProjectId === id) {
     fillProjectForm(updatedProject);
-    if (state.projectDrawerOpen) {
+    if (state.projectDrawerOpen || state.projectWorkspaceOpen) {
       renderDetail(updatedProject, {
         token: state.projectDetailLoadToken,
         signal: state.projectDetailAbortController ? state.projectDetailAbortController.signal : undefined,
         projectId: id,
       });
+    }
+    snapshotProjectFormBaseline();
+    if (state.projectWorkspaceOpen && state.projectWorkspaceTab === 'historial') {
+      state.historialPag.offset = 0;
+      loadWorkspaceHistorial();
+    } else {
+      state.historialLoadedFor = null;
     }
   }
 
@@ -1922,6 +1955,9 @@ function trapProjectDrawerFocus(container) {
 }
 
 function openProjectDrawer() {
+  if (isWorkspaceUiMode()) {
+    return;
+  }
   if (!projectDetailDrawer) {
     return;
   }
@@ -1977,6 +2013,283 @@ function closeProjectDrawer() {
   }
 }
 
+function isWorkspaceUiMode() {
+  return typeof ProjectWorkspace !== 'undefined' && ProjectWorkspace.isWorkspaceMode();
+}
+
+function snapshotProjectFormBaseline() {
+  if (typeof ProjectWorkspace !== 'undefined' && typeof ProjectWorkspace.serializeForm === 'function') {
+    state.projectFormBaseline = ProjectWorkspace.serializeForm(projectForm);
+  } else {
+    state.projectFormBaseline = '';
+  }
+}
+
+function isProjectFormDirty() {
+  if (!projectForm) return false;
+  if (typeof ProjectWorkspace === 'undefined' || typeof ProjectWorkspace.serializeForm !== 'function') {
+    return false;
+  }
+  return ProjectWorkspace.serializeForm(projectForm) !== state.projectFormBaseline;
+}
+
+function hasUnsavedProjectWorkspaceChanges() {
+  return isProjectFormDirty() || hasUnsavedMovementDrafts();
+}
+
+function confirmLeaveProjectWorkspace(message) {
+  if (!hasUnsavedProjectWorkspaceChanges()) {
+    return true;
+  }
+  return window.confirm(
+    message
+    || 'Hay cambios sin guardar en el proyecto, un pago o un costo.\n\n'
+      + 'Si continúas, se descartará esa información.\n\n'
+      + '¿Deseas salir?',
+  );
+}
+
+function saveProjectsListPosition() {
+  const tableWrapper = projectsTable ? projectsTable.closest('.table-wrapper') : null;
+  state.listPositionSnapshot = {
+    scrollY: window.scrollY || 0,
+    tableScrollLeft: tableWrapper ? tableWrapper.scrollLeft : 0,
+    page: state.projectsPag.page,
+    search: state.projectsSearch,
+    selectedProjectId: state.selectedProjectId,
+  };
+}
+
+function restoreProjectsListPosition() {
+  const snap = state.listPositionSnapshot;
+  if (!snap) return;
+  if (snap.search != null && snap.search !== state.projectsSearch) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const tableWrapper = projectsTable ? projectsTable.closest('.table-wrapper') : null;
+    if (tableWrapper && Number.isFinite(snap.tableScrollLeft)) {
+      tableWrapper.scrollLeft = snap.tableScrollLeft;
+    }
+    window.scrollTo(0, snap.scrollY || 0);
+  });
+}
+
+function updateWorkspaceFinanceStrip(project) {
+  const invoiced = document.querySelector('#ws-ind-invoiced');
+  const invoicedOriginal = document.querySelector('#ws-ind-invoiced-original');
+  const charged = document.querySelector('#ws-ind-charged');
+  const spent = document.querySelector('#ws-ind-spent');
+  const pending = document.querySelector('#ws-ind-pending');
+  const margin = document.querySelector('#ws-ind-margin');
+  if (!project) {
+    if (invoiced) invoiced.textContent = '—';
+    if (invoicedOriginal) invoicedOriginal.textContent = '';
+    if (charged) charged.textContent = '—';
+    if (spent) spent.textContent = '—';
+    if (pending) pending.textContent = '—';
+    if (margin) margin.textContent = '—';
+    return;
+  }
+  if (invoiced) invoiced.textContent = money.format(project.total_invoiced_mxn);
+  if (invoicedOriginal) {
+    const currency = project.total_invoiced_currency || 'MXN';
+    invoicedOriginal.textContent = currency === 'MXN'
+      ? ''
+      : `Original: ${formatCurrency(project.total_invoiced, currency)}`;
+  }
+  if (charged) charged.textContent = money.format(project.total_charged);
+  if (spent) spent.textContent = money.format(project.spent);
+  if (pending) pending.textContent = money.format(project.pending_collection);
+  if (margin) margin.textContent = formatPercentDecimal(project.final_margin);
+}
+
+function updateWorkspaceHeader(project) {
+  const title = document.querySelector('#workspace-title');
+  const subtitle = document.querySelector('#workspace-subtitle');
+  const eyebrow = document.querySelector('#workspace-eyebrow');
+  if (!project) {
+    if (eyebrow) eyebrow.textContent = 'Nuevo proyecto';
+    if (title) title.textContent = 'Captura inicial';
+    if (subtitle) subtitle.textContent = 'Complete la información general y guarde para habilitar pagos, costos, reportes e historial.';
+    return;
+  }
+  if (eyebrow) eyebrow.textContent = `Proyecto #${project.id}`;
+  if (title) title.textContent = project.client_name || `Proyecto #${project.id}`;
+  if (subtitle) {
+    subtitle.textContent = `Cotizacion ${project.quote_number || '—'} · Pedido ${project.order_number || '—'} · ${project.status || ''}`;
+  }
+}
+
+function setWorkspaceTab(tabName, { force = false } = {}) {
+  const requested = String(tabName || 'info');
+  const hasId = Boolean(projectForm?.elements?.id?.value);
+  const allowed = hasId || requested === 'info';
+  const next = allowed ? requested : 'info';
+  state.projectWorkspaceTab = next;
+
+  document.querySelectorAll('.workspace-tab').forEach((btn) => {
+    const name = btn.dataset.wsTab;
+    const enabled = hasId || name === 'info';
+    btn.disabled = !enabled;
+    const active = name === next;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+
+  document.querySelectorAll('.workspace-tab-panel').forEach((panel) => {
+    panel.classList.toggle('hidden', panel.dataset.wsPanel !== next);
+  });
+
+  if (next === 'historial' && hasId && (force || state.historialLoadedFor !== Number(projectForm.elements.id.value))) {
+    loadWorkspaceHistorial();
+  }
+}
+
+function syncWorkspaceFinanceVisibility() {
+  const strip = document.querySelector('#workspace-finance-strip');
+  const toggle = document.querySelector('#workspace-finance-toggle');
+  if (!strip) return;
+  const isMobile = window.matchMedia && window.matchMedia('(max-width: 720px)').matches;
+  if (isMobile) {
+    strip.hidden = !state.workspaceFinanceExpanded;
+    if (toggle) toggle.setAttribute('aria-expanded', state.workspaceFinanceExpanded ? 'true' : 'false');
+  } else {
+    strip.hidden = false;
+    state.workspaceFinanceExpanded = false;
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function openProjectWorkspace(project) {
+  state.projectWorkspaceOpen = true;
+  if (typeof ProjectWorkspace !== 'undefined') {
+    ProjectWorkspace.applyDocumentMode(ProjectWorkspace.MODE_WORKSPACE, true);
+  }
+  updateWorkspaceHeader(project || null);
+  updateWorkspaceFinanceStrip(project || null);
+  syncWorkspaceFinanceVisibility();
+  setWorkspaceTab(project ? (state.projectWorkspaceTab || 'info') : 'info');
+  snapshotProjectFormBaseline();
+  syncProjectsRowClasses();
+}
+
+function closeProjectWorkspace({ restoreScroll = true } = {}) {
+  state.projectWorkspaceOpen = false;
+  state.historialLoadedFor = null;
+  if (typeof ProjectWorkspace !== 'undefined') {
+    ProjectWorkspace.applyDocumentMode(
+      ProjectWorkspace.isWorkspaceMode() ? ProjectWorkspace.MODE_WORKSPACE : ProjectWorkspace.MODE_LEGACY,
+      false,
+    );
+  }
+  if (restoreScroll) {
+    restoreProjectsListPosition();
+  }
+  syncProjectsRowClasses();
+}
+
+function applyProjectsUiModeFromToggle() {
+  const workspaceMode = isWorkspaceUiMode();
+  if (typeof ProjectWorkspace !== 'undefined') {
+    ProjectWorkspace.applyDocumentMode(
+      workspaceMode ? ProjectWorkspace.MODE_WORKSPACE : ProjectWorkspace.MODE_LEGACY,
+      workspaceMode && state.projectWorkspaceOpen,
+    );
+  }
+  if (!workspaceMode && state.projectWorkspaceOpen) {
+    state.projectWorkspaceOpen = false;
+    if (state.selectedProjectId) {
+      openProjectDrawer();
+    }
+  }
+  if (workspaceMode && state.projectDrawerOpen) {
+    closeProjectDrawer();
+    if (state.selectedProjectId) {
+      const project = state.projects.find((item) => item.id === Number(state.selectedProjectId));
+      openProjectWorkspace(project || null);
+    }
+  }
+  syncProjectsRowClasses();
+}
+
+async function loadWorkspaceHistorial() {
+  const list = document.querySelector('#workspace-historial-list');
+  const message = document.querySelector('#workspace-historial-message');
+  const pagination = document.querySelector('#workspace-historial-pagination');
+  const projectId = Number(projectForm?.elements?.id?.value || state.selectedProjectId);
+  if (!list || !projectId) {
+    if (list) list.innerHTML = '<li class="muted">Guarde el proyecto para ver su historial.</li>';
+    return;
+  }
+  if (message) message.textContent = 'Cargando historial...';
+  try {
+    const params = new URLSearchParams({
+      limit: String(state.historialPag.limit),
+      offset: String(state.historialPag.offset),
+    });
+    const result = await api(`/api/projects/${projectId}/historial?${params}`);
+    state.historialPag.total = result.total || 0;
+    state.historialLoadedFor = projectId;
+    const rows = result.data || [];
+    if (!rows.length) {
+      list.innerHTML = '<li class="muted">Sin eventos verificables para este proyecto.</li>';
+    } else {
+      list.innerHTML = rows.map((event) => {
+        const movement = event.movement_at ? `Movimiento: ${escapeHtml(event.movement_at)} · ` : '';
+        const recorded = event.recorded_at ? `Registro: ${escapeHtml(String(event.recorded_at).replace('T', ' ').slice(0, 19))}` : '';
+        const actor = event.actor_user_name ? ` · ${escapeHtml(event.actor_user_name)}` : '';
+        const changed = event.summary && Array.isArray(event.summary.changed_fields) && event.summary.changed_fields.length
+          ? `<small>Campos: ${escapeHtml(event.summary.changed_fields.join(', '))}</small>`
+          : '';
+        return `<li>
+          <strong>${escapeHtml(event.title || event.event_type)}</strong>
+          <span class="historial-meta">${movement}${recorded}${actor}</span>
+          ${changed}
+        </li>`;
+      }).join('');
+    }
+    if (pagination) {
+      const canPrev = state.historialPag.offset > 0;
+      const canNext = state.historialPag.offset + state.historialPag.limit < state.historialPag.total;
+      pagination.innerHTML = `
+        <button type="button" class="secondary" data-historial-nav="prev" ${canPrev ? '' : 'disabled'}>Anterior</button>
+        <span class="muted">${state.historialPag.offset + 1}-${Math.min(state.historialPag.offset + rows.length, state.historialPag.total)} / ${state.historialPag.total}</span>
+        <button type="button" class="secondary" data-historial-nav="next" ${canNext ? '' : 'disabled'}>Siguiente</button>
+      `;
+    }
+    if (message) message.textContent = '';
+  } catch (error) {
+    if (message) message.textContent = error.message;
+    list.innerHTML = '<li class="muted">No se pudo cargar el historial.</li>';
+  }
+}
+
+function startNewProjectWorkspace() {
+  if (state.projectWorkspaceOpen || state.selectedProjectId != null || hasUnsavedMovementDrafts()) {
+    if (!confirmLeaveProjectWorkspace()) {
+      return;
+    }
+  }
+  saveProjectsListPosition();
+  beginProjectDetailLoad(null);
+  state.selectedProjectId = null;
+  state.historialLoadedFor = null;
+  state.historialPag.offset = 0;
+  closeProjectDrawer();
+  resetProjectForm();
+  resetMovementForms();
+  if (paymentsList) paymentsList.innerHTML = '<li class="muted">Guarde el proyecto para registrar pagos.</li>';
+  if (costsList) costsList.innerHTML = '<li class="muted">Guarde el proyecto para registrar costos.</li>';
+  const reportsList = document.querySelector('#detail-reports-list');
+  if (reportsList) reportsList.innerHTML = '<li class="muted">Guarde el proyecto para generar reportes.</li>';
+  if (isWorkspaceUiMode()) {
+    openProjectWorkspace(null);
+    setWorkspaceTab('info');
+  }
+  syncProjectsRowClasses();
+}
+
 function selectProject(projectId, focusReturnEl) {
   const project = state.projects.find((item) => item.id === Number(projectId));
   if (!project) {
@@ -1988,7 +2301,11 @@ function selectProject(projectId, focusReturnEl) {
   const isSwitchingProject = previousProjectId != null && Number(previousProjectId) !== Number(nextProjectId);
 
   if (isSwitchingProject) {
-    if (!confirmDiscardUnsavedMovementDrafts()) {
+    if (isWorkspaceUiMode()) {
+      if (!confirmLeaveProjectWorkspace('Hay cambios sin guardar. ¿Cambiar de proyecto y descartarlos?')) {
+        return;
+      }
+    } else if (!confirmDiscardUnsavedMovementDrafts()) {
       return;
     }
     resetMovementForms();
@@ -2000,14 +2317,27 @@ function selectProject(projectId, focusReturnEl) {
     state.lastWorkedProjectId = null;
   }
 
+  if (isWorkspaceUiMode() && !state.projectWorkspaceOpen) {
+    saveProjectsListPosition();
+  }
+
   const detailLoad = beginProjectDetailLoad(nextProjectId);
   state.selectedProjectId = nextProjectId;
+  state.historialLoadedFor = null;
+  state.historialPag.offset = 0;
   if (focusReturnEl) {
     projectDrawerFocusReturn = focusReturnEl;
   }
   fillProjectForm(project);
   renderDetail(project, detailLoad);
-  openProjectDrawer();
+  snapshotProjectFormBaseline();
+  if (isWorkspaceUiMode()) {
+    closeProjectDrawer();
+    openProjectWorkspace(project);
+  } else {
+    closeProjectWorkspace({ restoreScroll: false });
+    openProjectDrawer();
+  }
 }
 
 function addDaysToDateInput(baseDate, days) {
@@ -2572,16 +2902,23 @@ function resetProjectForm() {
 }
 
 function clearSelection() {
-  if (state.selectedProjectId != null || hasUnsavedMovementDrafts()) {
-    if (!confirmDiscardUnsavedMovementDrafts()) {
+  if (state.selectedProjectId != null || hasUnsavedProjectWorkspaceChanges()) {
+    if (isWorkspaceUiMode()) {
+      if (!confirmLeaveProjectWorkspace()) {
+        return;
+      }
+    } else if (!confirmDiscardUnsavedMovementDrafts()) {
       return;
     }
   }
   beginProjectDetailLoad(null);
   state.selectedProjectId = null;
+  state.historialLoadedFor = null;
   closeProjectDrawer();
+  closeProjectWorkspace({ restoreScroll: isWorkspaceUiMode() });
   resetProjectForm();
   resetMovementForms();
+  snapshotProjectFormBaseline();
 }
 
 function clearClosedSelection() {
@@ -2840,7 +3177,14 @@ function renderDetail(project, detailLoad = null) {
     return;
   }
 
-  document.querySelector('#detail-title').textContent = `#${project.id} - ${project.client_name}`;
+  updateWorkspaceHeader(project);
+  updateWorkspaceFinanceStrip(project);
+
+  const detailTitle = document.querySelector('#detail-title');
+  if (!detailTitle) {
+    return;
+  }
+  detailTitle.textContent = `#${project.id} - ${project.client_name}`;
   document.querySelector('#detail-subtitle').textContent =
     `Cotizacion ${project.quote_number} | Pedido ${project.order_number} | Tecnico ${project.technician_name}`;
   document.querySelector('#detail-description').textContent = project.project_description || '';
@@ -3072,7 +3416,108 @@ projectForm.addEventListener('submit', async (event) => {
   }
 });
 
-newProjectButton.addEventListener('click', clearSelection);
+newProjectButton.addEventListener('click', () => {
+  if (isWorkspaceUiMode()) {
+    startNewProjectWorkspace();
+    return;
+  }
+  clearSelection();
+});
+const projectsNewButton = document.querySelector('#projects-new-button');
+if (projectsNewButton) {
+  projectsNewButton.addEventListener('click', () => {
+    if (isWorkspaceUiMode()) {
+      startNewProjectWorkspace();
+    } else {
+      clearSelection();
+      if (projectForm?.elements?.quote_number) {
+        projectForm.elements.quote_number.focus();
+      }
+    }
+  });
+}
+const workspaceBackButton = document.querySelector('#workspace-back-button');
+if (workspaceBackButton) {
+  workspaceBackButton.addEventListener('click', () => {
+    if (!confirmLeaveProjectWorkspace()) return;
+    beginProjectDetailLoad(null);
+    state.selectedProjectId = null;
+    resetMovementForms();
+    resetProjectForm();
+    snapshotProjectFormBaseline();
+    closeProjectWorkspace({ restoreScroll: true });
+  });
+}
+const workspaceNewFromWs = document.querySelector('#workspace-new-from-ws');
+if (workspaceNewFromWs) {
+  workspaceNewFromWs.addEventListener('click', startNewProjectWorkspace);
+}
+document.querySelectorAll('.workspace-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (btn.disabled) return;
+    setWorkspaceTab(btn.dataset.wsTab);
+  });
+});
+const workspaceFinanceToggle = document.querySelector('#workspace-finance-toggle');
+if (workspaceFinanceToggle) {
+  workspaceFinanceToggle.addEventListener('click', () => {
+    state.workspaceFinanceExpanded = !state.workspaceFinanceExpanded;
+    syncWorkspaceFinanceVisibility();
+  });
+}
+const workspaceHistorialRefresh = document.querySelector('#workspace-historial-refresh');
+if (workspaceHistorialRefresh) {
+  workspaceHistorialRefresh.addEventListener('click', () => {
+    state.historialPag.offset = 0;
+    loadWorkspaceHistorial();
+  });
+}
+const workspaceHistorialPagination = document.querySelector('#workspace-historial-pagination');
+if (workspaceHistorialPagination) {
+  workspaceHistorialPagination.addEventListener('click', (event) => {
+    const nav = event.target.closest('[data-historial-nav]');
+    if (!nav || nav.disabled) return;
+    if (nav.dataset.historialNav === 'prev') {
+      state.historialPag.offset = Math.max(0, state.historialPag.offset - state.historialPag.limit);
+    } else {
+      state.historialPag.offset += state.historialPag.limit;
+    }
+    loadWorkspaceHistorial();
+  });
+}
+const projectsWorkspaceModeToggle = document.querySelector('#projects-workspace-mode-toggle');
+if (projectsWorkspaceModeToggle) {
+  projectsWorkspaceModeToggle.addEventListener('change', () => {
+    if (typeof ProjectWorkspace !== 'undefined') {
+      ProjectWorkspace.setWorkspaceMode(projectsWorkspaceModeToggle.checked);
+    }
+    if (!projectsWorkspaceModeToggle.checked && state.projectWorkspaceOpen) {
+      if (!confirmLeaveProjectWorkspace('Al volver al modo anterior se cerrará el workspace. ¿Continuar?')) {
+        projectsWorkspaceModeToggle.checked = true;
+        return;
+      }
+      state.projectWorkspaceOpen = false;
+      state.selectedProjectId = null;
+      resetMovementForms();
+      resetProjectForm();
+    }
+    applyProjectsUiModeFromToggle();
+  });
+}
+if (typeof ProjectWorkspace !== 'undefined') {
+  ProjectWorkspace.applyDocumentMode(
+    ProjectWorkspace.isWorkspaceMode() ? ProjectWorkspace.MODE_WORKSPACE : ProjectWorkspace.MODE_LEGACY,
+    false,
+  );
+  if (projectsWorkspaceModeToggle) {
+    projectsWorkspaceModeToggle.checked = ProjectWorkspace.isWorkspaceMode();
+  }
+}
+window.addEventListener('resize', () => {
+  if (state.projectWorkspaceOpen) {
+    syncWorkspaceFinanceVisibility();
+  }
+});
 purchaseOrderNotApplicable.addEventListener('change', togglePurchaseOrder);
 wireInvoiceSettleModal();
 if (projectForm.elements.invoice_date_na) {
@@ -10944,4 +11389,3 @@ function bindKpiModalBackdropClose(overlayId) {
   }
 
 })();
-
