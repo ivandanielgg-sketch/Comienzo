@@ -471,11 +471,12 @@ Resumen de scorecard: puntos 2–8 y 10 OK (con matices); punto 1 **FALLA críti
 | `test/frontend-table.test.js` | Listado / `applyProjectListUpdate` wiring |
 | `scripts/verify-stage4-workspace.mjs` | Estructura Stage 4 + IDs únicos + anclas C1/M1/M2 |
 
-**Pendiente:**
+**Pendiente / parcial:**
 
 | Prueba | Objetivo |
 |--------|----------|
-| Manual tablet (M6) | Viewport ~768–1024: 5 indicadores / tabs usables |
+| Reportes create/edit/print E2E | Solo se abrió el picker de tipo; falta ciclo completo |
+| Scripts puppeteer verify-* | Requieren `puppeteer-core` (ausente en este entorno) |
 
 ### 10.8 Cierre de correcciones C1/M1–M5 (2026-10-12)
 
