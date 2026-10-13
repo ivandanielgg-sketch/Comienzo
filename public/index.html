@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Control de Proyectos</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=stage5-incomplete-label" />
   </head>
   <body>
     <main>
@@ -519,6 +519,7 @@
                 </p>
               </div>
               <button id="closed-projects-export-excel-btn" class="secondary" type="button">Exportar Excel</button>
+              <button id="closed-projects-export-csv-btn" class="secondary" type="button">Exportar CSV</button>
             </div>
             <div class="search-row" style="margin-bottom:10px;">
               <input id="closed-projects-search" type="text" placeholder="Buscar proyectos cerrados..." />
@@ -528,6 +529,31 @@
                 <option value="date-range">Rango de fechas</option>
               </select>
             </div>
+            <div id="closed-analysis-filters" class="closed-analysis-filters">
+              <label>
+                Año de creación
+                <select id="closed-filter-year">
+                  <option value="">Todos los años</option>
+                </select>
+              </label>
+              <label>
+                Mes de creación
+                <select id="closed-filter-month">
+                  <option value="">Todos los meses</option>
+                </select>
+              </label>
+              <label>
+                Agrupar
+                <select id="closed-filter-group">
+                  <option value="none">Sin agrupar</option>
+                  <option value="year">Por año de creación</option>
+                  <option value="month">Por mes dentro de cada año</option>
+                </select>
+              </label>
+            </div>
+            <p id="closed-analysis-note" class="muted closed-analysis-note"></p>
+            <div id="closed-analysis-summary" class="workspace-finance-strip closed-analysis-summary hidden"></div>
+            <div id="closed-analysis-groups" class="closed-analysis-groups hidden"></div>
             <div id="closed-date-range-controls" class="hidden" style="margin-bottom:12px;">
               <div class="search-row" style="gap:8px;flex-wrap:wrap;">
                 <label style="flex-direction:row;gap:6px;align-items:center;"><span>Desde:</span><input id="closed-date-from" type="date" style="width:auto;" /></label>
@@ -570,6 +596,9 @@
                 <h2 id="closed-detail-title"></h2>
                 <p id="closed-detail-subtitle" class="muted"></p>
                 <p id="closed-detail-description" class="project-description"></p>
+              </div>
+              <div class="row-actions">
+                <button id="closed-detail-back" class="secondary" type="button">Volver al listado</button>
               </div>
             </div>
 
@@ -2915,7 +2944,7 @@
     <script src="/project-form-isolation.js?v=form-isolation-stage1"></script>
     <script src="/session-drafts.js?v=session-stage2"></script>
     <script src="/project-workspace.js?v=stage4-workspace"></script>
-    <script src="/app.js?v=stage4-workspace"></script>
+    <script src="/app.js?v=stage5-incomplete-label"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </body>
 </html>

@@ -24,6 +24,13 @@ const {
   hasPositivePendingBalance,
 } = require('./projectInvoiceSettlement');
 const { buildProjectHistorial } = require('./projectHistorial');
+const {
+  appendCreatedPeriodSql,
+  buildClosedProjectsAnalysis,
+  buildClosedProjectsCsv,
+  buildCreationPeriods,
+  closedCreationPeriodsSql,
+} = require('./closedProjectsAnalysis');
 const { createSqliteSessionStore } = require('./sessionStore');
 const { calculateVacationEntitlement, calculateBusinessDays, getCompletedYears, getCurrentExerciseYear, calculateVacationBalance, calculateAccruedVacationDays } = require('./vacations');
 const {
@@ -1690,11 +1697,10 @@ app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (re
   res.json(buildListResponse(result.data, result.pagination, sorting, filters, { summary }));
 });
 
-app.get('/api/closed-projects', requireAuth, requirePermission('closedProjects', 'view'), (req, res) => {
+function buildClosedProjectsListQuery(req) {
   const { page, limit, search } = parsePaginationParams(req.query);
-  const exchangeRates = getExchangeRateMap();
   const sorting = normalizeSort(req.query, PROJECT_SORTS, 'p.closed_at DESC, p.id DESC');
-  const { whereClause, params, filters } = buildWhere({
+  const built = buildWhere({
     query: req.query,
     filters: PROJECT_FILTERS,
     baseWhere: ['p.closed_at IS NOT NULL'],
@@ -1703,18 +1709,132 @@ app.get('/api/closed-projects', requireAuth, requirePermission('closedProjects',
       columns: buildProjectListSearchColumns(),
     },
   });
-  const result = paginateSqlList({
-    tableSql: 'SELECT p.* FROM projects p',
-    countSql: 'SELECT COUNT(*) as count FROM projects p',
-    whereClause,
-    params,
-    page,
-    limit,
-    orderBy: sorting.orderBy,
-    map: (project) => mapProject(project, exchangeRates),
-  });
+  const period = appendCreatedPeriodSql(built.whereClause, built.params, req.query);
+  return { page, limit, search, sorting, filters: built.filters, ...period };
+}
 
-  res.json(buildListResponse(result.data, result.pagination, sorting, filters));
+function attachClosedProjectChildren(rows) {
+  if (!rows.length) return [];
+  const ids = rows.map((row) => Number(row.id));
+  const marks = ids.map(() => '?').join(',');
+  const payments = db.prepare(
+    `SELECT * FROM project_payments WHERE project_id IN (${marks})`,
+  ).all(...ids);
+  const costs = db.prepare(
+    `SELECT * FROM project_costs WHERE project_id IN (${marks})`,
+  ).all(...ids);
+  const group = (list) => {
+    const map = new Map();
+    for (const item of list) {
+      const key = Number(item.project_id);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(item);
+    }
+    return map;
+  };
+  const paymentsByProject = group(payments);
+  const costsByProject = group(costs);
+  return rows.map((row) => ({
+    ...row,
+    payments: paymentsByProject.get(Number(row.id)) || [],
+    costs: costsByProject.get(Number(row.id)) || [],
+  }));
+}
+
+function loadClosedProjectsForAnalysis(ctx) {
+  const rows = db.prepare(
+    `SELECT p.* FROM projects p WHERE ${ctx.whereClause} ORDER BY ${ctx.sorting.orderBy}`,
+  ).all(...ctx.params);
+  return attachClosedProjectChildren(rows);
+}
+
+app.get('/api/closed-projects/creation-periods', requireAuth, requirePermission('closedProjects', 'view'), (req, res, next) => {
+  try {
+    const rows = db.prepare(closedCreationPeriodsSql()).all();
+    res.json(buildCreationPeriods(rows));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/closed-projects/analysis', requireAuth, requirePermission('closedProjects', 'view'), (req, res, next) => {
+  try {
+    const ctx = buildClosedProjectsListQuery(req);
+    const rows = loadClosedProjectsForAnalysis(ctx);
+    const analysis = buildClosedProjectsAnalysis(rows, {
+      year: ctx.created_year,
+      month: ctx.created_month,
+    });
+    res.json({
+      filters: {
+        created_year: ctx.created_year,
+        created_month: ctx.created_month,
+        search: ctx.search,
+      },
+      total: analysis.total,
+      groups: analysis.groups,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/closed-projects/export.csv', requireAuth, requirePermission('closedProjects', 'view'), (req, res, next) => {
+  try {
+    const ctx = buildClosedProjectsListQuery(req);
+    const rows = loadClosedProjectsForAnalysis(ctx);
+    const analysis = buildClosedProjectsAnalysis(rows, {
+      year: ctx.created_year,
+      month: ctx.created_month,
+    });
+    const csv = buildClosedProjectsCsv(analysis.projects);
+    logAuditEvent(db, {
+      req,
+      action: 'export',
+      module: 'closedProjects',
+      entityType: 'closed_projects_export',
+      entityLabel: 'CSV proyectos cerrados',
+      metadata: {
+        format: 'csv',
+        created_year: ctx.created_year,
+        created_month: ctx.created_month,
+        search: ctx.search ? true : false,
+        project_count: analysis.total.project_count,
+      },
+    });
+    const yearPart = ctx.created_year || 'todos';
+    const monthPart = ctx.created_month ? `-${String(ctx.created_month).padStart(2, '0')}` : '';
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="proyectos-cerrados-${yearPart}${monthPart}.csv"`);
+    res.send(csv);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/closed-projects', requireAuth, requirePermission('closedProjects', 'view'), (req, res, next) => {
+  try {
+    const ctx = buildClosedProjectsListQuery(req);
+    const exchangeRates = getExchangeRateMap();
+    const result = paginateSqlList({
+      tableSql: 'SELECT p.* FROM projects p',
+      countSql: 'SELECT COUNT(*) as count FROM projects p',
+      whereClause: ctx.whereClause,
+      params: ctx.params,
+      page: ctx.page,
+      limit: ctx.limit,
+      orderBy: ctx.sorting.orderBy,
+      map: (project) => mapProject(project, exchangeRates),
+    });
+
+    res.json(buildListResponse(result.data, result.pagination, ctx.sorting, {
+      ...ctx.filters,
+      ...(ctx.created_year ? { created_year: ctx.created_year } : {}),
+      ...(ctx.created_month ? { created_month: ctx.created_month } : {}),
+    }));
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/projects/:id', requireAuth, requirePermission('projects', 'view'), (req, res, next) => {

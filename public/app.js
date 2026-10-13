@@ -164,6 +164,15 @@ state.projectsSearch = '';
 state.projectAssignableEmployees = [];
 state.closedPag = { page: 1, limit: 15 };
 state.closedSearch = '';
+state.closedCreatedYear = '';
+state.closedCreatedMonth = '';
+state.closedGroup = 'none';
+state.closedAnalysis = null;
+state.closedCreationPeriods = { years: [], monthsByYear: {}, months: [] };
+state.closedPeriodsLoaded = false;
+state.closedListStateReady = false;
+const CLOSED_LIST_STATE_KEY = 'revram.closedProjects.listState';
+const CLOSED_MONTH_LABELS = [null, 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 state.employeesPag = { page: 1, limit: 15 };
 state.employeesSearch = '';
 state.employeesActiveFilter = 'all';
@@ -573,10 +582,11 @@ const closedProjectColumns = [
   { key: 'order_number', label: 'N. Pedido', type: 'text', sortable: true, render: (p) => escapeHtml(p.order_number || 'Sin pedido') },
   { key: 'client_name', label: 'Cliente', type: 'text', sortable: true },
   { key: 'project_description', label: 'Proyecto', type: 'text', sortable: true, render: (p) => escapeHtml(p.project_description || '') },
+  { key: 'created_at', label: 'Creacion', type: 'date', sortable: true, render: (p) => escapeHtml(String(p.created_at || '').slice(0, 10) || '—') },
   { key: 'closed_at', label: 'Cerrado', type: 'date', sortable: true },
-  { key: 'total_invoiced_mxn', label: 'Facturado MXN', type: 'currency', sortable: true, render: (p) => money.format(p.total_invoiced_mxn) },
-  { key: 'total_charged', label: 'Cobrado MXN', type: 'currency', sortable: true, render: (p) => money.format(p.total_charged) },
-  { key: 'spent', label: 'Gastado MXN', type: 'currency', sortable: true, render: (p) => money.format(p.spent) },
+  { key: 'total_invoiced_mxn', label: 'Facturado MXN', type: 'currency', sortable: true, render: (p) => renderClosedMxnCell(p, 'total_invoiced_mxn', 'invoiced') },
+  { key: 'total_charged', label: 'Cobrado MXN', type: 'currency', sortable: true, render: (p) => renderClosedMxnCell(p, 'total_charged', 'charged') },
+  { key: 'spent', label: 'Gastado MXN', type: 'currency', sortable: true, render: (p) => renderClosedMxnCell(p, 'spent', 'costs') },
   { key: 'final_margin', label: 'Margen final', type: 'number', sortable: true, render: (p) => `<span class="badge margin-badge ${marginBadgeClass(p)}">${formatPercentDecimal(p.final_margin)}</span>` },
 ];
 
@@ -1623,17 +1633,99 @@ async function loadProjects() {
   }
 }
 
-async function loadClosedProjects() {
+function currentClosedListState() {
+  const sort = getTableSort('closedProjects');
+  return {
+    year: state.closedCreatedYear || '',
+    month: state.closedCreatedMonth || '',
+    group: state.closedGroup || 'none',
+    search: state.closedSearch || '',
+    sortBy: sort.sortBy || '',
+    sortOrder: sort.sortOrder === 'desc' ? 'desc' : 'asc',
+    page: state.closedPag.page || 1,
+  };
+}
+
+function persistClosedListState() {
+  try {
+    sessionStorage.setItem(CLOSED_LIST_STATE_KEY, JSON.stringify(currentClosedListState()));
+  } catch (_err) {
+    /* sessionStorage puede no estar disponible */
+  }
+}
+
+function restoreClosedListState() {
+  if (state.closedListStateReady) return;
+  state.closedListStateReady = true;
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(CLOSED_LIST_STATE_KEY) || 'null');
+  } catch (_err) {
+    saved = null;
+  }
+  if (!saved || typeof saved !== 'object') return;
+  const year = saved.year == null ? '' : String(saved.year);
+  const month = saved.month == null ? '' : String(saved.month);
+  state.closedCreatedYear = /^\d{4}$/.test(year) ? year : '';
+  state.closedCreatedMonth = /^(?:[1-9]|1[0-2])$/.test(month) ? String(Number(month)) : '';
+  state.closedGroup = ['none', 'year', 'month'].includes(saved.group) ? saved.group : 'none';
+  state.closedSearch = typeof saved.search === 'string' ? saved.search : '';
+  const page = Number(saved.page);
+  state.closedPag.page = Number.isInteger(page) && page > 0 ? page : 1;
+  if (typeof saved.sortBy === 'string' && saved.sortBy) {
+    state.tableSort.closedProjects = {
+      sortBy: saved.sortBy,
+      sortOrder: saved.sortOrder === 'desc' ? 'desc' : 'asc',
+    };
+  }
+  if (closedProjectsSearchInput) closedProjectsSearchInput.value = state.closedSearch;
+}
+
+function resetClosedListMemory() {
+  state.closedCreatedYear = '';
+  state.closedCreatedMonth = '';
+  state.closedGroup = 'none';
+  state.closedSearch = '';
+  state.closedAnalysis = null;
+  state.closedListStateReady = false;
+  state.closedPag.page = 1;
+  resetTableControls('closedProjects');
+  try {
+    sessionStorage.removeItem(CLOSED_LIST_STATE_KEY);
+  } catch (_err) {
+    /* ignore */
+  }
+}
+
+function closedProjectsQueryParams() {
   const params = new URLSearchParams({
     page: state.closedPag.page,
     limit: state.closedPag.limit,
     search: state.closedSearch,
     ...buildTableParams('closedProjects'),
   });
+  if (state.closedCreatedYear) params.set('created_year', state.closedCreatedYear);
+  if (state.closedCreatedMonth) params.set('created_month', state.closedCreatedMonth);
+  return params;
+}
+
+async function loadClosedProjects() {
+  await loadClosedCreationPeriods();
+  persistClosedListState();
+  const params = closedProjectsQueryParams();
   const result = await api(`/api/closed-projects?${params}`);
   state.closedProjects = result.data;
   state.closedPagination = result.pagination;
+  if (result.pagination && result.pagination.page) {
+    state.closedPag.page = result.pagination.page;
+  }
+  try {
+    state.closedAnalysis = await api(`/api/closed-projects/analysis?${params}`);
+  } catch (error) {
+    state.closedAnalysis = { error: error.message || 'No se pudo calcular el resumen.' };
+  }
   renderClosedProjects();
+  renderClosedAnalysis(state.closedAnalysis);
 
   if (state.selectedClosedProjectId) {
     const current = state.closedProjects.find((p) => p.id === state.selectedClosedProjectId);
@@ -1863,7 +1955,7 @@ function renderClosedProjects() {
     paginationContainerId: 'closed-projects-pagination',
     emptyMessage: 'No hay registros para mostrar.',
     filteredEmptyMessage: 'No se encontraron registros con la busqueda actual.',
-    isFiltered: Boolean(state.closedSearch),
+    isFiltered: Boolean(state.closedSearch || state.closedCreatedYear || state.closedCreatedMonth),
     onRefresh: loadClosedProjects,
     pageState: state.closedPag,
     renderActions: (project) => `
@@ -3206,6 +3298,7 @@ async function deleteClosedProject(projectId) {
 }
 
 function selectClosedProject(projectId) {
+  persistClosedListState();
   const project = state.closedProjects.find((item) => item.id === Number(projectId));
   if (!project) {
     return;
@@ -3422,6 +3515,7 @@ logoutButton.addEventListener('click', async () => {
   resetProjectForm();
   resetMovementForms();
   clearClosedSelection();
+  resetClosedListMemory();
   resetUserForm();
   state.adminVerified = false;
   state.currentUserId = null;
@@ -3434,6 +3528,7 @@ logoutButton.addEventListener('click', async () => {
 projectsTab.addEventListener('click', () => switchView('projects'));
 closedProjectsTab.addEventListener('click', async () => {
   switchView('closed-projects');
+  restoreClosedListState();
   await loadClosedProjects();
 });
 
@@ -7165,6 +7260,197 @@ if (archiveReportListBack) {
   });
 }
 
+// ===================== CLOSED PROJECTS ANALYSIS =====================
+
+function closedEntryLacksHistoricalRate(entry) {
+  const currency = entry?.currency || 'MXN';
+  return currency !== 'MXN' && entry?.amount_mxn_is_historical !== true;
+}
+
+function closedMoneyNeedsHistoricalWarning(project, kind) {
+  if (kind === 'invoiced') {
+    const currency = project.total_invoiced_currency || 'MXN';
+    return currency !== 'MXN' && project.invoiced_amount_mxn_is_historical !== true;
+  }
+  if (kind === 'charged') {
+    return (project.payments || []).some(closedEntryLacksHistoricalRate);
+  }
+  return (project.costs || []).some(closedEntryLacksHistoricalRate);
+}
+
+function renderClosedMxnCell(project, field, kind) {
+  const amount = money.format(project[field]);
+  if (!closedMoneyNeedsHistoricalWarning(project, kind)) return amount;
+  return `${amount}<small class="col-facturado-original money-incomplete" title="Estimado con el tipo de cambio actual. El resumen histórico no lo suma.">Sin TC histórico</small>`;
+}
+
+function formatAnalysisMoney(metric, projectCount) {
+  if (!metric || !metric.complete || metric.amount_mxn == null) {
+    const incomplete = Number(metric && metric.incomplete_count) || 0;
+    const total = Number(projectCount);
+    const calculable = Number.isInteger(total) && total > 0 && incomplete > 0 && incomplete <= total
+      ? total - incomplete
+      : null;
+    const label = calculable == null
+      ? 'Incompleto'
+      : `Incompleto — ${calculable} de ${total} proyectos calculables`;
+    const title = incomplete
+      ? `${incomplete} proyecto(s) sin importe MXN histórico confiable. El subtotal no se suma ni se trata como cero.`
+      : 'Incompleto';
+    return `<span class="money-incomplete" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+  }
+  return escapeHtml(money.format(metric.amount_mxn));
+}
+
+function analysisMetricCells(row) {
+  return ['invoiced', 'charged', 'pending', 'costs', 'profit']
+    .map((key) => `<td>${formatAnalysisMoney(row[key], row.project_count)}</td>`)
+    .join('');
+}
+
+function renderClosedGroupTable(groups, mode) {
+  const rows = [];
+  (groups || []).forEach((group) => {
+    rows.push(`<tr class="group-year"><td>${escapeHtml(group.label)}</td><td>${group.project_count}</td>${analysisMetricCells(group)}</tr>`);
+    if (mode === 'month') {
+      (group.months || []).forEach((month) => {
+        rows.push(`<tr class="group-month"><td>${escapeHtml(month.label)}</td><td>${month.project_count}</td>${analysisMetricCells(month)}</tr>`);
+      });
+    }
+  });
+  if (!rows.length) return '<p class="muted">No hay grupos para el filtro actual.</p>';
+  return `<div class="table-wrapper"><table class="closed-group-table"><thead><tr><th>Periodo</th><th>Proyectos</th><th>Facturado MXN</th><th>Cobrado MXN</th><th>Pendiente MXN</th><th>Costos MXN</th><th>Utilidad MXN</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+}
+
+function renderClosedAnalysis(analysis) {
+  const summary = document.getElementById('closed-analysis-summary');
+  const groupsEl = document.getElementById('closed-analysis-groups');
+  const note = document.getElementById('closed-analysis-note');
+  if (!summary || !groupsEl || !note) return;
+  const listMode = !closedViewMode || closedViewMode.value === 'list';
+  if (!listMode) {
+    summary.classList.add('hidden');
+    groupsEl.classList.add('hidden');
+    note.textContent = 'Año, mes y agrupación se aplican en la lista general, usando la fecha de creación.';
+    return;
+  }
+  note.textContent = 'Totales del filtro activo con el tipo de cambio histórico guardado. Si falta, el subtotal queda incompleto: no se usa el tipo de cambio actual ni se toma el importe como cero. Utilidad = facturado − costos.';
+  if (!analysis || analysis.error || !analysis.total) {
+    summary.classList.add('hidden');
+    groupsEl.classList.add('hidden');
+    if (analysis && analysis.error) note.textContent = analysis.error;
+    return;
+  }
+  const total = analysis.total;
+  summary.classList.remove('hidden');
+  summary.innerHTML = [
+    ['Proyectos', escapeHtml(String(total.project_count ?? 0))],
+    ['Facturado MXN', formatAnalysisMoney(total.invoiced, total.project_count)],
+    ['Cobrado MXN', formatAnalysisMoney(total.charged, total.project_count)],
+    ['Pendiente MXN', formatAnalysisMoney(total.pending, total.project_count)],
+    ['Costos MXN', formatAnalysisMoney(total.costs, total.project_count)],
+    ['Utilidad MXN', formatAnalysisMoney(total.profit, total.project_count)],
+  ].map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${value}</strong></article>`).join('');
+  if (state.closedGroup === 'none') {
+    groupsEl.classList.add('hidden');
+    groupsEl.innerHTML = '';
+    return;
+  }
+  groupsEl.classList.remove('hidden');
+  groupsEl.innerHTML = renderClosedGroupTable(analysis.groups, state.closedGroup);
+}
+
+function renderClosedPeriodFilters() {
+  const yearSel = document.getElementById('closed-filter-year');
+  const monthSel = document.getElementById('closed-filter-month');
+  const groupSel = document.getElementById('closed-filter-group');
+  if (!yearSel || !monthSel) return;
+  const periods = state.closedCreationPeriods || { years: [], monthsByYear: {}, months: [] };
+  const years = (periods.years || []).map(String);
+  if (state.closedCreatedYear && !years.includes(String(state.closedCreatedYear))) {
+    years.unshift(String(state.closedCreatedYear));
+  }
+  yearSel.innerHTML = `<option value="">Todos los años</option>${years.map((year) => `<option value="${year}">${year}</option>`).join('')}`;
+  yearSel.value = state.closedCreatedYear || '';
+  let monthSource = (yearSel.value
+    ? (periods.monthsByYear[yearSel.value] || [])
+    : (periods.months || [])).map(Number);
+  if (state.closedCreatedMonth && !monthSource.map(String).includes(String(state.closedCreatedMonth))) {
+    if (state.closedPeriodsLoaded && yearSel.value) {
+      state.closedCreatedMonth = '';
+    } else if (state.closedCreatedMonth) {
+      monthSource = [...monthSource, Number(state.closedCreatedMonth)].sort((a, b) => a - b);
+    }
+  }
+  monthSel.innerHTML = `<option value="">Todos los meses</option>${monthSource.map((month) => `<option value="${month}">${CLOSED_MONTH_LABELS[month] || month}</option>`).join('')}`;
+  monthSel.value = state.closedCreatedMonth || '';
+  if (groupSel) groupSel.value = state.closedGroup || 'none';
+}
+
+async function loadClosedCreationPeriods() {
+  try {
+    state.closedCreationPeriods = await api('/api/closed-projects/creation-periods');
+    state.closedPeriodsLoaded = true;
+  } catch (_err) {
+    state.closedCreationPeriods = { years: [], monthsByYear: {}, months: [] };
+    state.closedPeriodsLoaded = false;
+  }
+  renderClosedPeriodFilters();
+}
+
+function returnToClosedList() {
+  clearClosedSelection();
+  persistClosedListState();
+  const anchor = document.getElementById('closed-projects-view');
+  if (anchor && anchor.scrollIntoView) anchor.scrollIntoView({ block: 'start' });
+}
+
+const closedDetailBack = document.getElementById('closed-detail-back');
+if (closedDetailBack) {
+  closedDetailBack.addEventListener('click', () => {
+    returnToClosedList();
+  });
+}
+
+const closedFilterYear = document.getElementById('closed-filter-year');
+if (closedFilterYear) {
+  closedFilterYear.addEventListener('change', async () => {
+    state.closedCreatedYear = closedFilterYear.value;
+    renderClosedPeriodFilters();
+    state.closedPag.page = 1;
+    await loadClosedProjects();
+  });
+}
+
+const closedFilterMonth = document.getElementById('closed-filter-month');
+if (closedFilterMonth) {
+  closedFilterMonth.addEventListener('change', async () => {
+    state.closedCreatedMonth = closedFilterMonth.value;
+    state.closedPag.page = 1;
+    await loadClosedProjects();
+  });
+}
+
+const closedFilterGroup = document.getElementById('closed-filter-group');
+if (closedFilterGroup) {
+  closedFilterGroup.addEventListener('change', () => {
+    state.closedGroup = closedFilterGroup.value || 'none';
+    persistClosedListState();
+    renderClosedAnalysis(state.closedAnalysis);
+  });
+}
+
+const closedProjectsExportCsvBtn = document.getElementById('closed-projects-export-csv-btn');
+if (closedProjectsExportCsvBtn) {
+  closedProjectsExportCsvBtn.addEventListener('click', () => {
+    persistClosedListState();
+    const params = closedProjectsQueryParams();
+    params.delete('page');
+    params.delete('limit');
+    window.location.href = `/api/closed-projects/export.csv?${params}`;
+  });
+}
+
 // ===================== CLOSED PROJECTS VIEW MODES =====================
 
 const closedViewMode = document.getElementById('closed-view-mode');
@@ -7183,9 +7469,10 @@ if (closedViewMode) {
     if (mode === 'list') {
       await loadClosedProjects();
     } else if (mode === 'by-client') {
+      renderClosedAnalysis(state.closedAnalysis);
       await loadClosedProjectsByClient();
     } else if (mode === 'date-range') {
-      // Wait for user to apply
+      renderClosedAnalysis(state.closedAnalysis);
     }
   });
 }
