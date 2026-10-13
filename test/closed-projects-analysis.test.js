@@ -12,6 +12,7 @@ const {
   CSV_HEADERS,
   analyzeClosedProject,
   appendCreatedPeriodSql,
+  incompleteCalculableLabel,
   buildClosedProjectsAnalysis,
   buildClosedProjectsCsv,
   buildCreationPeriods,
@@ -173,6 +174,16 @@ test('group totals and grand total reuse invoiced minus costs and do not treat g
   assert.equal(mixed.total.charged.amount_mxn, 400);
   assert.equal(mixed.total.pending.complete, false);
   assert.equal(mixed.groups[0].invoiced.incomplete_count, 1);
+  assert.equal(mixed.total.invoiced.amount_mxn, null);
+  assert.equal(
+    incompleteCalculableLabel(mixed.total.invoiced, mixed.total.project_count),
+    'Incompleto — 1 de 2 proyectos calculables',
+  );
+  assert.equal(
+    incompleteCalculableLabel(mixed.total.charged, mixed.total.project_count),
+    'Incompleto',
+  );
+  assert.equal(incompleteCalculableLabel({ incomplete_count: 2 }, 2), 'Incompleto — 0 de 2 proyectos calculables');
 });
 
 test('historical snapshots are kept and a live exchange rate is not applied to unknown foreign amounts', () => {
@@ -279,6 +290,9 @@ test('opening a closed project and returning keeps year, month, grouping, sort a
   assert.match(appJs, /function selectClosedProject\(projectId\) \{\s*persistClosedListState\(\);/);
   assert.match(appJs, /function returnToClosedList\(\) \{\s*clearClosedSelection\(\);\s*persistClosedListState\(\);/);
   assert.match(appJs, /Sin TC histórico/);
+  assert.match(appJs, /Incompleto — \$\{calculable\} de \$\{total\} proyectos calculables/);
+  assert.match(appJs, /formatAnalysisMoney\(row\[key\], row\.project_count\)/);
+  assert.match(appJs, /formatAnalysisMoney\(total\.costs, total\.project_count\)/);
   assert.match(appJs, /function renderClosedMxnCell/);
   assert.doesNotMatch(appJs, /function returnToClosedList\(\) \{[^}]*closedCreatedYear = ''/);
   assert.match(serverJs, /\/api\/closed-projects\/analysis/);

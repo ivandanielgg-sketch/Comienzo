@@ -2687,6 +2687,15 @@ body.projects-ui-legacy #project-workspace {
   color: #9a3412;
   font-weight: 600;
   font-size: 0.85rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.closed-analysis-summary.workspace-finance-strip .money-incomplete {
+  color: #9a3412;
+  font-size: 0.82rem;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 @media (max-width: 1100px) {

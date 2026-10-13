@@ -7284,20 +7284,27 @@ function renderClosedMxnCell(project, field, kind) {
   return `${amount}<small class="col-facturado-original money-incomplete" title="Estimado con el tipo de cambio actual. El resumen histórico no lo suma.">Sin TC histórico</small>`;
 }
 
-function formatAnalysisMoney(metric) {
+function formatAnalysisMoney(metric, projectCount) {
   if (!metric || !metric.complete || metric.amount_mxn == null) {
-    const count = metric && metric.incomplete_count ? metric.incomplete_count : 0;
-    const title = count
-      ? `Incompleto: ${count} proyecto(s) sin importe MXN histórico confiable`
+    const incomplete = Number(metric && metric.incomplete_count) || 0;
+    const total = Number(projectCount);
+    const calculable = Number.isInteger(total) && total > 0 && incomplete > 0 && incomplete <= total
+      ? total - incomplete
+      : null;
+    const label = calculable == null
+      ? 'Incompleto'
+      : `Incompleto — ${calculable} de ${total} proyectos calculables`;
+    const title = incomplete
+      ? `${incomplete} proyecto(s) sin importe MXN histórico confiable. El subtotal no se suma ni se trata como cero.`
       : 'Incompleto';
-    return `<span class="money-incomplete" title="${escapeHtml(title)}">Incompleto</span>`;
+    return `<span class="money-incomplete" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
   }
   return escapeHtml(money.format(metric.amount_mxn));
 }
 
 function analysisMetricCells(row) {
   return ['invoiced', 'charged', 'pending', 'costs', 'profit']
-    .map((key) => `<td>${formatAnalysisMoney(row[key])}</td>`)
+    .map((key) => `<td>${formatAnalysisMoney(row[key], row.project_count)}</td>`)
     .join('');
 }
 
@@ -7338,11 +7345,11 @@ function renderClosedAnalysis(analysis) {
   summary.classList.remove('hidden');
   summary.innerHTML = [
     ['Proyectos', escapeHtml(String(total.project_count ?? 0))],
-    ['Facturado MXN', formatAnalysisMoney(total.invoiced)],
-    ['Cobrado MXN', formatAnalysisMoney(total.charged)],
-    ['Pendiente MXN', formatAnalysisMoney(total.pending)],
-    ['Costos MXN', formatAnalysisMoney(total.costs)],
-    ['Utilidad MXN', formatAnalysisMoney(total.profit)],
+    ['Facturado MXN', formatAnalysisMoney(total.invoiced, total.project_count)],
+    ['Cobrado MXN', formatAnalysisMoney(total.charged, total.project_count)],
+    ['Pendiente MXN', formatAnalysisMoney(total.pending, total.project_count)],
+    ['Costos MXN', formatAnalysisMoney(total.costs, total.project_count)],
+    ['Utilidad MXN', formatAnalysisMoney(total.profit, total.project_count)],
   ].map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${value}</strong></article>`).join('');
   if (state.closedGroup === 'none') {
     groupsEl.classList.add('hidden');

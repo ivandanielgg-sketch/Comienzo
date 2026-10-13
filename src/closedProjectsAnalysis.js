@@ -192,6 +192,15 @@ function analyzeClosedProject(project, payments = [], costs = []) {
   };
 }
 
+function incompleteCalculableLabel(metric, projectCount) {
+  const incomplete = Number(metric && metric.incomplete_count) || 0;
+  const total = Number(projectCount);
+  if (!Number.isInteger(total) || total <= 0 || incomplete <= 0 || incomplete > total) {
+    return 'Incompleto';
+  }
+  return `Incompleto — ${total - incomplete} de ${total} proyectos calculables`;
+}
+
 function summarizeProjects(projects) {
   const keys = ['invoiced', 'charged', 'pending', 'costs', 'profit'];
   const summary = { project_count: projects.length };
@@ -430,6 +439,7 @@ module.exports = {
   createdYearExpr,
   createdMonthExpr,
   appendCreatedPeriodSql,
+  incompleteCalculableLabel,
   closedCreationPeriodsSql,
   buildCreationPeriods,
   monthsAvailableForYear,
