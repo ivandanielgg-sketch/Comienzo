@@ -13,6 +13,8 @@ const {
   convertAmountToMxn,
   roundMoney,
   capturePaymentFxSnapshot,
+  captureCostFxSnapshot,
+  resolveCostSnapshot,
   hasHistoricalAmountMxn,
 } = require('./calculations');
 const {
@@ -1050,7 +1052,12 @@ const PROJECT_CHARGED_SQL = `(SELECT COALESCE(SUM(
   FROM project_payments pp
   LEFT JOIN exchange_rates er ON COALESCE(pp.currency, 'MXN') = er.currency
   WHERE pp.project_id = p.id)`;
-const PROJECT_SPENT_SQL = `(SELECT COALESCE(SUM(pc.amount * COALESCE(er.rate_to_mxn, 1)), 0)
+const PROJECT_SPENT_SQL = `(SELECT COALESCE(SUM(
+  CASE
+    WHEN pc.amount_mxn IS NOT NULL THEN pc.amount_mxn
+    ELSE pc.amount * COALESCE(er.rate_to_mxn, 1)
+  END
+), 0)
   FROM project_costs pc
   LEFT JOIN exchange_rates er ON COALESCE(pc.currency, 'MXN') = er.currency
   WHERE pc.project_id = p.id)`;
@@ -1668,7 +1675,12 @@ app.get('/api/projects', requireAuth, requirePermission('projects', 'view'), (re
   ).get().total;
 
   const totalSpent = db.prepare(
-    `SELECT COALESCE(SUM(pc.amount * COALESCE(er.rate_to_mxn, 1)), 0) as total
+    `SELECT COALESCE(SUM(
+       CASE
+         WHEN pc.amount_mxn IS NOT NULL THEN pc.amount_mxn
+         ELSE pc.amount * COALESCE(er.rate_to_mxn, 1)
+       END
+     ), 0) as total
      FROM project_costs pc
      LEFT JOIN exchange_rates er ON COALESCE(pc.currency, 'MXN') = er.currency
      JOIN projects p ON p.id = pc.project_id
@@ -2569,16 +2581,96 @@ app.delete('/api/projects/:projectId/payments/:paymentId', requireAuth, requireP
 
 app.post('/api/projects/:id/costs', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
   try {
-    getProjectOrFail(req.params.id);
     const cost = normalizeCost(req.body);
     const audit = createdByFields(req);
-    const result = db.prepare(
-      `INSERT INTO project_costs (project_id, category, description, amount, currency, cost_date, created_at, created_by_user_id, created_by_name)
-       VALUES (@project_id, @category, @description, @amount, @currency, @cost_date, @created_at, @created_by_user_id, @created_by_name)`,
-    ).run({ ...cost, project_id: req.params.id, ...audit });
+    const projectId = req.params.id;
+    runImmediateTransaction(() => {
+      getProjectLockedOrFail(projectId);
+      const fx = captureCostFxSnapshot(cost.amount, cost.currency, getExchangeRateMap());
+      const result = db.prepare(
+        `INSERT INTO project_costs (
+           project_id, category, description, amount, currency,
+           exchange_rate_to_mxn, amount_mxn, cost_date,
+           created_at, created_by_user_id, created_by_name
+         ) VALUES (
+           @project_id, @category, @description, @amount, @currency,
+           @exchange_rate_to_mxn, @amount_mxn, @cost_date,
+           @created_at, @created_by_user_id, @created_by_name
+         )`,
+      ).run({ ...cost, ...fx, project_id: projectId, ...audit });
 
-    logAuditEvent(db, { req, action: 'create', module: 'costs', entityType: 'project_cost', entityId: result.lastInsertRowid, entityLabel: `${cost.category} ${cost.amount}`, after: cost });
-    res.status(201).json(mapProject(getProjectOrFail(req.params.id), getExchangeRateMap()));
+      logAuditEvent(db, {
+        req,
+        action: 'create',
+        module: 'costs',
+        entityType: 'project_cost',
+        entityId: result.lastInsertRowid,
+        entityLabel: `${cost.category} ${cost.amount}`,
+        after: { ...cost, ...fx },
+        metadata: {
+          project_id: Number(projectId),
+          exchange_rate_to_mxn: fx.exchange_rate_to_mxn,
+          amount_mxn: fx.amount_mxn,
+        },
+      });
+    });
+    res.status(201).json(mapProject(getProjectOrFail(projectId), getExchangeRateMap()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/projects/:projectId/costs/:costId', requireAuth, requirePermission('projects', 'edit'), (req, res, next) => {
+  try {
+    const projectId = req.params.projectId;
+    const costId = req.params.costId;
+    const cost = normalizeCost(req.body);
+    runImmediateTransaction(() => {
+      getProjectLockedOrFail(projectId);
+      const before = db.prepare('SELECT * FROM project_costs WHERE id = ? AND project_id = ?').get(costId, projectId);
+      if (!before) {
+        const error = new Error('Costo no encontrado.');
+        error.statusCode = 404;
+        throw error;
+      }
+      const fx = resolveCostSnapshot(before, cost, getExchangeRateMap());
+      const audit = updatedByFields(req);
+      db.prepare(
+        `UPDATE project_costs SET
+           category = @category,
+           description = @description,
+           amount = @amount,
+           currency = @currency,
+           exchange_rate_to_mxn = @exchange_rate_to_mxn,
+           amount_mxn = @amount_mxn,
+           cost_date = @cost_date
+         WHERE id = @id AND project_id = @project_id`,
+      ).run({
+        ...cost,
+        ...fx,
+        id: costId,
+        project_id: projectId,
+      });
+      logAuditEvent(db, {
+        req,
+        action: 'update',
+        module: 'costs',
+        entityType: 'project_cost',
+        entityId: Number(costId),
+        entityLabel: `${cost.category} ${cost.amount}`,
+        before,
+        after: { ...cost, ...fx },
+        metadata: {
+          project_id: Number(projectId),
+          exchange_rate_to_mxn: fx.exchange_rate_to_mxn,
+          amount_mxn: fx.amount_mxn,
+          monetary_snapshot_preserved: Number(before.amount) === Number(cost.amount)
+            && String(before.currency || 'MXN') === String(cost.currency || 'MXN'),
+          updated_by_user_id: audit.updated_by_user_id,
+        },
+      });
+    });
+    res.json(mapProject(getProjectOrFail(projectId), getExchangeRateMap()));
   } catch (error) {
     next(error);
   }
@@ -6750,6 +6842,12 @@ app.post('/api/admin/backup/preview', requireAuth, requirePermission('backups', 
   res.json({ preview, conflicts, schemaVersion: backup.backupMetadata.schemaVersion });
 });
 
+function backupFxNumber(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', 'import'), (req, res) => {
   const backup = req.body;
   if (!backup || !backup.backupMetadata || !backup.data) {
@@ -6816,19 +6914,50 @@ app.post('/api/admin/backup/import', requireAuth, requirePermission('backups', '
           if (entityKey === 'projects' || entityKey === 'closedProjects') {
             const existing = db.prepare('SELECT id FROM projects WHERE quote_number = ?').get(row.quote_number);
             if (existing) { skipped++; continue; }
-            const cols = ['quote_number', 'order_number', 'purchase_order_number', 'purchase_order_not_applicable', 'seller', 'client_name', 'project_description', 'expected_margin', 'total_invoiced', 'total_invoiced_currency', 'progress_percent', 'technician_name', 'promised_delivery_date', 'status', 'risk', 'observations', 'closed_at'];
-            const vals = cols.map((c) => row[c] !== undefined ? row[c] : null);
+            const cols = ['quote_number', 'order_number', 'purchase_order_number', 'purchase_order_not_applicable', 'seller', 'client_name', 'project_description', 'expected_margin', 'total_invoiced', 'total_invoiced_currency', 'progress_percent', 'technician_name', 'promised_delivery_date', 'status', 'risk', 'observations', 'closed_at', 'invoiced_exchange_rate_to_mxn', 'invoiced_amount_mxn'];
+            const vals = cols.map((c) => {
+              if (c === 'invoiced_exchange_rate_to_mxn' || c === 'invoiced_amount_mxn') {
+                return backupFxNumber(row[c]);
+              }
+              return row[c] !== undefined ? row[c] : null;
+            });
             db.prepare(`INSERT INTO projects (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
             added++;
           } else if (entityKey === 'projectPayments') {
             const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
             if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Proyecto padre no encontrado' }); continue; }
-            db.prepare('INSERT INTO project_payments (project_id, amount, currency, payment_date, notes) VALUES (?, ?, ?, ?, ?)').run(row.project_id, row.amount, row.currency || 'MXN', row.payment_date, row.notes || null);
+            db.prepare(
+              `INSERT INTO project_payments (
+                 project_id, amount, currency, exchange_rate_to_mxn, amount_mxn, payment_date, notes
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              row.project_id,
+              row.amount,
+              row.currency || 'MXN',
+              backupFxNumber(row.exchange_rate_to_mxn),
+              backupFxNumber(row.amount_mxn),
+              row.payment_date,
+              row.notes || null,
+            );
             added++;
           } else if (entityKey === 'projectCosts') {
             const parentExists = db.prepare('SELECT id FROM projects WHERE id = ?').get(row.project_id);
             if (!parentExists) { entityConflicts.push({ backupId: row.id, reason: 'Proyecto padre no encontrado' }); continue; }
-            db.prepare('INSERT INTO project_costs (project_id, category, description, amount, currency, cost_date) VALUES (?, ?, ?, ?, ?, ?)').run(row.project_id, row.category, row.description, row.amount, row.currency || 'MXN', row.cost_date);
+            db.prepare(
+              `INSERT INTO project_costs (
+                 project_id, category, description, amount, currency,
+                 exchange_rate_to_mxn, amount_mxn, cost_date
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              row.project_id,
+              row.category,
+              row.description,
+              row.amount,
+              row.currency || 'MXN',
+              backupFxNumber(row.exchange_rate_to_mxn),
+              backupFxNumber(row.amount_mxn),
+              row.cost_date,
+            );
             added++;
           } else if (entityKey === 'employees') {
             const existing = db.prepare('SELECT id FROM employees WHERE employee_number = ?').get(row.employee_number);

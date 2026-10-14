@@ -71,6 +71,66 @@ function capturePaymentFxSnapshot(amount, currency = 'MXN', exchangeRates = {}) 
   };
 }
 
+function missingCostExchangeRateError(currency) {
+  const error = new Error(
+    `No hay un tipo de cambio valido para ${currency}. El costo no se guardo.`,
+  );
+  error.code = 'MISSING_EXCHANGE_RATE';
+  error.statusCode = 400;
+  return error;
+}
+
+/**
+ * Snapshot de un costo nuevo o de un costo cuyo importe o moneda cambiaron.
+ * MXN queda en 1. USD/EUR exigen una tasa presente y mayor que cero.
+ * No sustituye una tasa ausente por 1. Una tasa explicita de 1 si se conserva.
+ */
+function captureCostFxSnapshot(amount, currency = 'MXN', exchangeRates = {}) {
+  const cur = currency || 'MXN';
+  const numericAmount = Number(amount || 0);
+  if (cur === 'MXN') {
+    return {
+      exchange_rate_to_mxn: 1,
+      amount_mxn: roundMoney(numericAmount),
+    };
+  }
+  const rates = normalizeExchangeRates(exchangeRates);
+  const rate = Number(rates[cur]);
+  if (!Object.prototype.hasOwnProperty.call(rates, cur) || !Number.isFinite(rate) || rate <= 0) {
+    throw missingCostExchangeRateError(cur);
+  }
+  return {
+    exchange_rate_to_mxn: rate,
+    amount_mxn: roundMoney(numericAmount * rate),
+  };
+}
+
+function sameMoney(left, right) {
+  return roundMoney(left) === roundMoney(right);
+}
+
+/**
+ * Politica de edicion de costos:
+ * - Descripcion, categoria y cost_date no cambian el snapshot, aunque sea NULL.
+ * - Importe o moneda distintos reemplazan el snapshot con la tasa vigente.
+ * - Nunca se conserva un amount_mxn de un importe que ya no es el actual.
+ * - Un costo antiguo con snapshot NULL no se vuelve historico si el importe no cambia.
+ */
+function resolveCostSnapshot(existing, next, exchangeRates = {}) {
+  const amountUnchanged = existing != null && sameMoney(existing.amount, next.amount);
+  const currencyUnchanged = existing != null
+    && String(existing.currency || 'MXN') === String(next.currency || 'MXN');
+  if (amountUnchanged && currencyUnchanged) {
+    const hasRate = existing.exchange_rate_to_mxn != null && existing.exchange_rate_to_mxn !== '';
+    const hasAmount = hasHistoricalAmountMxn(existing);
+    return {
+      exchange_rate_to_mxn: hasRate ? Number(existing.exchange_rate_to_mxn) : null,
+      amount_mxn: hasAmount ? roundMoney(Number(existing.amount_mxn)) : null,
+    };
+  }
+  return captureCostFxSnapshot(next.amount, next.currency, exchangeRates);
+}
+
 function buildProjectTotals(project, payments = [], costs = [], exchangeRates = {}) {
   const totalCharged = sumAmounts(payments, exchangeRates);
   const spent = sumAmounts(costs, exchangeRates);
@@ -97,5 +157,7 @@ module.exports = {
   resolveEntryAmountMxn,
   resolveInvoicedAmountMxn,
   capturePaymentFxSnapshot,
+  captureCostFxSnapshot,
+  resolveCostSnapshot,
   hasHistoricalAmountMxn,
 };
