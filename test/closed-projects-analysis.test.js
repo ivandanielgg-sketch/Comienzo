@@ -490,9 +490,10 @@ test('closed projects analysis API filters, totals, currencies and csv', async (
   assert.equal(year2022.body.total.project_count, 1);
   assert.equal(year2022.body.total.invoiced.amount_mxn, 1700);
   assert.equal(year2022.body.total.charged.amount_mxn, 680);
-  assert.equal(year2022.body.total.costs.complete, false);
-  assert.equal(year2022.body.total.costs.amount_mxn, null);
-  assert.equal(year2022.body.total.profit.complete, false);
+  assert.equal(year2022.body.total.costs.complete, true);
+  assert.equal(year2022.body.total.costs.amount_mxn, 170);
+  assert.equal(year2022.body.total.profit.complete, true);
+  assert.equal(year2022.body.total.profit.amount_mxn, 1530);
   assert.equal(year2022.body.groups[0].year, 2022);
   assert.equal(year2022.body.groups[0].months[0].month, 3);
   assert.equal(year2022.body.groups[0].project_count, 1);
@@ -504,6 +505,30 @@ test('closed projects analysis API filters, totals, currencies and csv', async (
   assert.equal(year2021.body.total.pending.amount_mxn, 600);
   assert.equal(year2021.body.total.costs.amount_mxn, 250);
   assert.equal(year2021.body.total.profit.amount_mxn, 750);
+
+  const legacyId = await createClosed({
+    quote_number: 'COT-C5-LEGACY',
+    order_number: 'PED-C5-LEGACY',
+    client_name: 'Cliente Legacy',
+    project_description: 'Costo sin snapshot',
+    total_invoiced: 80,
+    total_invoiced_currency: 'USD',
+    cost: { amount: 5, currency: 'USD' },
+    invoiceSnapshot: 1360,
+  }, '2020-05-01T12:00:00.000Z');
+  const legacyDb = new Database(DB_PATH);
+  legacyDb.prepare(
+    'UPDATE project_costs SET exchange_rate_to_mxn = NULL, amount_mxn = NULL WHERE project_id = ?',
+  ).run(legacyId);
+  legacyDb.close();
+  const year2020 = await request('GET', '/api/closed-projects/analysis?created_year=2020', null, cookie);
+  assert.equal(year2020.status, 200, JSON.stringify(year2020.body));
+  assert.equal(year2020.body.total.project_count, 1);
+  assert.equal(year2020.body.total.invoiced.amount_mxn, 1360);
+  assert.equal(year2020.body.total.costs.complete, false);
+  assert.equal(year2020.body.total.costs.amount_mxn, null);
+  assert.equal(year2020.body.total.profit.complete, false);
+  assert.equal(year2020.body.total.profit.amount_mxn, null);
 
   const listed = await request('GET', '/api/closed-projects?created_year=2022&search=USD', null, cookie);
   assert.equal(listed.status, 200);
@@ -524,7 +549,8 @@ test('closed projects analysis API filters, totals, currencies and csv', async (
   assert.match(csv.raw, /Cliente USD/);
   assert.match(csv.raw, /1700/);
   assert.match(csv.raw, /680/);
-  assert.match(csv.raw, /incompleto/);
+  assert.match(csv.raw, /1530/);
+  assert.equal(csv.raw.includes('incompleto'), false);
   assert.equal(csv.raw.includes('SECRETO-INTERNO'), false);
   assert.equal(csv.raw.includes('NOTA-PRIVADA'), false);
   assert.equal(csv.raw.includes('Sigue abierto'), false);
