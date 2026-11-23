@@ -107,6 +107,9 @@ function ensurePostgresColumns(database) {
 
   const { migrateProjectPaymentFx } = require('./projectPaymentFxMigration');
   migrateProjectPaymentFx(database, { postgres: true });
+
+  const { migrateProjectCostFx } = require('./projectCostFxMigration');
+  migrateProjectCostFx(database, { postgres: true });
 }
 
 

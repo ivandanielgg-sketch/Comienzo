@@ -597,6 +597,8 @@ CREATE TABLE project_costs (
       description TEXT NOT NULL,
       amount DOUBLE PRECISION NOT NULL CHECK (amount >= 0),
       currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn DOUBLE PRECISION,
+      amount_mxn DOUBLE PRECISION,
       cost_date TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, created_by_user_id INTEGER, created_by_name TEXT,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE

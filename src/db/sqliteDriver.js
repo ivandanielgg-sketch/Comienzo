@@ -102,6 +102,8 @@ function migrate(database) {
       description TEXT NOT NULL,
       amount REAL NOT NULL CHECK (amount >= 0),
       currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate_to_mxn REAL,
+      amount_mxn REAL,
       cost_date TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
@@ -1151,6 +1153,9 @@ function migrate(database) {
 
   const { migrateProjectPaymentFx } = require('./projectPaymentFxMigration');
   migrateProjectPaymentFx(database, { postgres: false });
+
+  const { migrateProjectCostFx } = require('./projectCostFxMigration');
+  migrateProjectCostFx(database, { postgres: false });
 }
 
 function seedDefaultEmployees(database) {

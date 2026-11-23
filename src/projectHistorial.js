@@ -245,7 +245,7 @@ function buildProjectHistorial(db, projectId, { limit = 50, offset = 0 } = {}) {
   }
 
   const costs = db.prepare(`
-    SELECT id, category, description, amount, currency, cost_date,
+    SELECT id, category, description, amount, currency, amount_mxn, exchange_rate_to_mxn, cost_date,
            created_at, created_by_user_id, created_by_name
     FROM project_costs
     WHERE project_id = ?
@@ -266,6 +266,8 @@ function buildProjectHistorial(db, projectId, { limit = 50, offset = 0 } = {}) {
         description: cost.description,
         amount: cost.amount,
         currency: cost.currency,
+        amount_mxn: cost.amount_mxn,
+        exchange_rate_to_mxn: cost.exchange_rate_to_mxn,
         cost_date: cost.cost_date,
       }),
       source: 'project_costs',

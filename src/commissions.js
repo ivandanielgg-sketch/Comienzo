@@ -15,7 +15,9 @@ function loadExchangeRates(db) {
 
 function mapProjectForCommission(db, project, rates) {
   const payments = db.prepare('SELECT amount, currency FROM project_payments WHERE project_id = ?').all(project.id);
-  const costs = db.prepare('SELECT amount, currency FROM project_costs WHERE project_id = ?').all(project.id);
+  const costs = db.prepare(
+    'SELECT amount, currency, amount_mxn, exchange_rate_to_mxn FROM project_costs WHERE project_id = ?',
+  ).all(project.id);
   const totals = buildProjectTotals(project, payments, costs, rates);
   const totalCostsMxn = totals.spent;
   const totalSaleMxn = totals.total_invoiced_mxn;
