@@ -6,7 +6,12 @@ const session = require('express-session');
 const path = require('node:path');
 const { getDb } = require('./db');
 const { isPostgres, yearFilter, monthFilter, distinctYearSelect, sqlCurrentDate, isDbTruthy, sqlDateCompareGte, sqlDateCompareLte } = require('./db/dialect');
-const { parseExportDateRange, buildProjectsExcelWorkbook } = require('./projectsExport');
+const {
+  parseExportDateRange,
+  buildProjectsExcelWorkbook,
+  buildSellerProfitabilityRows,
+  buildSellerProfitabilityExcelWorkbook,
+} = require('./projectsExport');
 const { isUniqueConstraintError, uniqueConstraintMessage } = require('./db/uniqueConstraint');
 const {
   buildProjectTotals,
@@ -14,6 +19,8 @@ const {
   roundMoney,
   capturePaymentFxSnapshot,
   hasHistoricalAmountMxn,
+  resolveInvoicedAmountMxn,
+  resolveEntryAmountMxn,
 } = require('./calculations');
 const {
   PENDING_TOLERANCE_MXN,
@@ -1625,6 +1632,131 @@ app.get('/api/projects/export/excel', requireAuth, requirePermission('projects',
     });
 
     const filename = `proyectos_${from}_${to}.xls`;
+    res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(xml);
+  } catch (error) {
+    error.statusCode = error.statusCode || 400;
+    next(error);
+  }
+});
+
+function fetchProjectsForSellerProfitabilityExport({ from, to, vendedorId = null }) {
+  const params = [from, to];
+  let sellerClause = '';
+  if (vendedorId != null) {
+    sellerClause = ' AND p.vendedor_id = ?';
+    params.push(vendedorId);
+  }
+  const sql = `
+    SELECT
+      p.*,
+      (SELECT full_name FROM employees WHERE id = p.vendedor_id) AS vendedor_nombre,
+      (SELECT full_name FROM employees WHERE id = p.tecnico_id) AS tecnico_nombre
+    FROM projects p
+    WHERE p.invoice_date_na = 0
+      AND p.invoice_date IS NOT NULL
+      AND TRIM(p.invoice_date) != ''
+      AND ${sqlDateCompareGte('p.invoice_date')}
+      AND ${sqlDateCompareLte('p.invoice_date')}
+      ${sellerClause}
+    ORDER BY p.invoice_date ASC, p.id ASC
+  `;
+  const rows = db.prepare(sql).all(...params);
+  if (!rows.length) return [];
+
+  const ids = rows.map((row) => Number(row.id));
+  const marks = ids.map(() => '?').join(',');
+  const payments = db.prepare(
+    `SELECT * FROM project_payments WHERE project_id IN (${marks}) ORDER BY payment_date ASC, id ASC`,
+  ).all(...ids);
+  const costs = db.prepare(
+    `SELECT * FROM project_costs WHERE project_id IN (${marks}) ORDER BY cost_date ASC, id ASC`,
+  ).all(...ids);
+
+  const group = (list) => {
+    const map = new Map();
+    for (const item of list) {
+      const key = Number(item.project_id);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(item);
+    }
+    return map;
+  };
+  const paymentsByProject = group(payments);
+  const costsByProject = group(costs);
+  const exchangeRates = getExchangeRateMap();
+
+  return rows.map((row) => ({
+    ...row,
+    invoice_payment_status: resolveInvoicePaymentStatus(row),
+    payments: paymentsByProject.get(Number(row.id)) || [],
+    costs: costsByProject.get(Number(row.id)) || [],
+    _exchangeRates: exchangeRates,
+  }));
+}
+
+app.get('/api/projects/export/seller-profitability', requireAuth, requirePermission('projects', 'view'), (req, res, next) => {
+  try {
+    const { from, to, days } = parseExportDateRange(req.query);
+    const rawSeller = String(req.query.vendedor_id || req.query.seller_id || '').trim();
+    let vendedorId = null;
+    let sellerLabel = 'Todos';
+    if (rawSeller && rawSeller !== 'all' && rawSeller !== 'todos') {
+      vendedorId = Number(rawSeller);
+      if (!Number.isInteger(vendedorId) || vendedorId < 1) {
+        const error = new Error('Vendedor invalido.');
+        error.statusCode = 400;
+        throw error;
+      }
+      const seller = db.prepare('SELECT id, full_name FROM employees WHERE id = ?').get(vendedorId);
+      if (!seller) {
+        const error = new Error('Vendedor no encontrado.');
+        error.statusCode = 404;
+        throw error;
+      }
+      sellerLabel = seller.full_name;
+    }
+
+    const projects = fetchProjectsForSellerProfitabilityExport({ from, to, vendedorId });
+    const exchangeRates = getExchangeRateMap();
+    const { detail, summary, total } = buildSellerProfitabilityRows({
+      projects,
+      resolveInvoicedMxn: (project) => resolveInvoicedAmountMxn(project, exchangeRates),
+      resolvePaymentMxn: (payment) => resolveEntryAmountMxn(payment, exchangeRates),
+      resolveCostMxn: (cost) => resolveEntryAmountMxn(cost, exchangeRates),
+    });
+
+    const xml = buildSellerProfitabilityExcelWorkbook({
+      from,
+      to,
+      sellerLabel,
+      detailRows: detail,
+      summaryRows: summary,
+      totalRow: total,
+      generatedBy: req.session.username || '',
+    });
+
+    logAuditEvent(db, {
+      req,
+      action: 'export',
+      module: 'projects',
+      entityType: 'projects_seller_profitability_export',
+      entityLabel: 'Excel utilidad por vendedor',
+      metadata: {
+        format: 'excel',
+        date_field: 'invoice_date',
+        from,
+        to,
+        days,
+        vendedor_id: vendedorId,
+        detail_count: detail.length,
+        seller_count: summary.length,
+      },
+    });
+
+    const sellerPart = vendedorId == null ? 'todos' : `vendedor-${vendedorId}`;
+    const filename = `utilidad_vendedores_${from}_${to}_${sellerPart}.xls`;
     res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(xml);
