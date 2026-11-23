@@ -298,8 +298,12 @@
               <p class="muted" style="margin:-4px 0 10px;">
                 Exporta activos (por fecha de creacion) y cerrados (por fecha de cierre) en un Excel. Rango maximo: 1 año.
               </p>
-              <div class="search-row" style="margin-bottom:10px;">
+              <div class="search-row" style="margin-bottom:10px;flex-wrap:wrap;gap:10px;align-items:center;">
                 <input id="projects-search" type="text" placeholder="Buscar por pedido, factura, cliente..." />
+                <label style="flex-direction:row;gap:8px;align-items:center;white-space:nowrap;margin:0;">
+                  <input id="projects-filter-no-expenses-payments" type="checkbox" />
+                  Sin gastos ni pagos registrados
+                </label>
               </div>
               <div class="table-wrapper">
                 <table>

@@ -1604,6 +1604,10 @@ async function loadProjects() {
     search: state.projectsSearch,
     ...buildTableParams('projects'),
   });
+  const noExpPay = document.getElementById('projects-filter-no-expenses-payments');
+  if (noExpPay && noExpPay.checked) {
+    params.set('without_expenses_or_payments', '1');
+  }
   const result = await api(`/api/projects?${params}`);
   state.projects = result.data;
   state.projectsSummary = result.summary;
@@ -3958,6 +3962,14 @@ if (projectsSearchInput) {
     state.projectsPag.page = 1;
     loadProjects();
   }));
+}
+
+const projectsFilterNoExpensesPayments = document.getElementById('projects-filter-no-expenses-payments');
+if (projectsFilterNoExpensesPayments) {
+  projectsFilterNoExpensesPayments.addEventListener('change', () => {
+    state.projectsPag.page = 1;
+    loadProjects();
+  });
 }
 
 function toIsoDateLocal(date) {

@@ -1109,6 +1109,13 @@ const PROJECT_FILTERS = {
   spent: { type: 'currency', column: PROJECT_SPENT_SQL },
   pending_collection: { type: 'currency', column: PROJECT_PENDING_SQL },
   final_margin: { type: 'number', column: PROJECT_MARGIN_SQL },
+  // Regla: project_payments y project_costs se eliminan con DELETE duro (sin
+  // deleted_at / is_cancelled). El filtro usa EXISTS de filas, no importes:
+  // un registro con amount=0 también cuenta como "tiene gastos/pagos".
+  without_expenses_or_payments: {
+    type: 'boolean',
+    column: `(CASE WHEN NOT EXISTS (SELECT 1 FROM project_costs pc WHERE pc.project_id = p.id) AND NOT EXISTS (SELECT 1 FROM project_payments pp WHERE pp.project_id = p.id) THEN 1 ELSE 0 END)`,
+  },
 };
 
 function buildProjectListSearchColumns() {
