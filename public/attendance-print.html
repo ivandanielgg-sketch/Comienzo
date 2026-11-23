@@ -12,10 +12,19 @@
     .header h2 { font-size: 13px; font-weight: normal; margin-bottom: 2px; }
     .header h3 { font-size: 11px; font-weight: normal; }
     table { width: 100%; border-collapse: collapse; font-size: 9px; }
-    th, td { border: 1px solid #333; padding: 3px 4px; text-align: center; }
+    th, td { border: 1px solid #333; padding: 3px 4px; text-align: center; vertical-align: top; }
     th { background: #f0f0f0; font-weight: bold; }
     td.name-cell { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
     td.position-cell { text-align: left; font-size: 8px; max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+    td.wrap-cell {
+      text-align: left;
+      font-size: 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      max-width: 160px;
+    }
+    td.extra-cell { text-align: right; font-size: 8px; white-space: nowrap; }
     .day-header { font-size: 8px; }
     .day-date { font-size: 7px; color: #555; }
     .status-F { background-color: #fff9c4; }
@@ -33,6 +42,9 @@
     .legend span { padding: 2px 5px; border: 1px solid #999; border-radius: 2px; }
     .summary { margin-top: 10px; font-size: 9px; }
     .no-print { margin-bottom: 12px; }
+    .status-banner { margin-bottom: 12px; font-size: 12px; color: #333; }
+    .status-banner.error { color: #b00020; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
     @media print {
       .no-print { display: none; }
       body { padding: 5mm; }
@@ -54,58 +66,138 @@
 </head>
 <body>
   <div class="no-print">
-    <button onclick="window.print()">Imprimir / Guardar PDF</button>
-    <button onclick="window.close()">Cerrar</button>
+    <button id="print-btn" type="button" disabled>Imprimir / Guardar PDF</button>
+    <button type="button" onclick="window.close()">Cerrar</button>
   </div>
+  <p id="status-banner" class="status-banner no-print">Cargando lista de asistencia…</p>
 
-  <div class="header">
-    <h1>REVRAM</h1>
-    <h2>LISTA DE ASISTENCIA</h2>
-    <h3 id="week-title"></h3>
-  </div>
-
-  <table>
-    <thead id="table-head"></thead>
-    <tbody id="table-body"></tbody>
-  </table>
-
-  <div class="summary" id="summary-section"></div>
-
-  <div class="signatures">
-    <div class="signature-box">
-      <div class="signature-line">Firma de Autorización</div>
+  <div id="print-root" hidden>
+    <div class="header">
+      <h1>REVRAM</h1>
+      <h2>LISTA DE ASISTENCIA</h2>
+      <h3 id="week-title"></h3>
     </div>
-    <div class="signature-box">
-      <div class="signature-line">Firma de Contabilidad</div>
-    </div>
-    <div class="signature-box">
-      <div class="signature-line">Firma de Recursos Humanos</div>
-    </div>
-  </div>
 
-  <div class="legend">
-    <span class="status-F">F Falta</span>
-    <span class="status-B">B Baja</span>
-    <span>A Asistencia</span>
-    <span class="status-Astar">A* Personal fuera de taller / Trabajo fuera</span>
-    <span class="status-PC">PC Permiso c/goce de sueldo</span>
-    <span class="status-PS">PS Permiso s/goce de sueldo</span>
-    <span class="status-D">D Descanso</span>
-    <span class="status-I">I Incapacidad</span>
-    <span class="status-V">V Vacaciones</span>
+    <table>
+      <thead id="table-head"></thead>
+      <tbody id="table-body"></tbody>
+    </table>
+
+    <div class="summary" id="summary-section"></div>
+
+    <div class="signatures">
+      <div class="signature-box">
+        <div class="signature-line">Firma de Autorización</div>
+      </div>
+      <div class="signature-box">
+        <div class="signature-line">Firma de Contabilidad</div>
+      </div>
+      <div class="signature-box">
+        <div class="signature-line">Firma de Recursos Humanos</div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span class="status-F">F Falta</span>
+      <span class="status-B">B Baja</span>
+      <span>A Asistencia</span>
+      <span class="status-Astar">A* Personal fuera de taller / Trabajo fuera</span>
+      <span class="status-PC">PC Permiso c/goce de sueldo</span>
+      <span class="status-PS">PS Permiso s/goce de sueldo</span>
+      <span class="status-D">D Descanso</span>
+      <span class="status-I">I Incapacidad</span>
+      <span class="status-V">V Vacaciones</span>
+    </div>
   </div>
 
   <script>
     const params = new URLSearchParams(window.location.search);
     const weekId = params.get('id');
+    const printBtn = document.getElementById('print-btn');
+    const statusBanner = document.getElementById('status-banner');
+    const printRoot = document.getElementById('print-root');
+    let printReady = false;
+    let printTriggered = false;
+
+    function setStatus(message, isError) {
+      if (!statusBanner) return;
+      statusBanner.textContent = message || '';
+      statusBanner.classList.toggle('error', !!isError);
+      statusBanner.hidden = !message;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function waitForPaint() {
+      return new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(resolve);
+        });
+      });
+    }
+
+    async function waitUntilPrintReady() {
+      if (document.fonts && document.fonts.ready) {
+        try {
+          await document.fonts.ready;
+        } catch (_err) {
+          /* ignore font readiness errors */
+        }
+      }
+      await waitForPaint();
+      // Force layout so print preview sees the rendered table (not a blank frame).
+      void printRoot.offsetHeight;
+      await waitForPaint();
+    }
+
+    async function triggerPrintWhenReady() {
+      if (!printReady || printTriggered) return;
+      printTriggered = true;
+      await waitUntilPrintReady();
+      window.print();
+    }
+
+    if (printBtn) {
+      printBtn.addEventListener('click', () => {
+        if (!printReady) {
+          setStatus('Espere a que termine de cargarse la lista antes de imprimir.', true);
+          return;
+        }
+        window.print();
+      });
+    }
 
     if (!weekId) {
-      document.body.innerHTML = '<p>Error: No se especificó ID de nómina.</p>';
+      setStatus('Error: No se especificó ID de nómina.', true);
     } else {
       fetch(`/api/attendance/weeks/${weekId}/print`, { credentials: 'include' })
         .then((r) => { if (!r.ok) throw new Error('Sin acceso'); return r.json(); })
-        .then(render)
-        .catch((e) => { document.body.innerHTML = `<p>Error: ${e.message}</p>`; });
+        .then(async (week) => {
+          render(week);
+          printRoot.hidden = false;
+          printReady = true;
+          if (printBtn) printBtn.disabled = false;
+          setStatus('Lista lista para imprimir.');
+          await triggerPrintWhenReady();
+        })
+        .catch((e) => {
+          printReady = false;
+          if (printBtn) printBtn.disabled = true;
+          setStatus(`Error: ${e.message}`, true);
+        });
+    }
+
+    function formatExtra(amount) {
+      if (amount == null || amount === '') return '';
+      const num = Number(amount);
+      if (!Number.isFinite(num) || num === 0) return amount === 0 || amount === '0' ? '$0.00' : '';
+      return '$' + num.toLocaleString('es-MX', { minimumFractionDigits: 2 });
     }
 
     function render(week) {
@@ -130,7 +222,9 @@
         <th>Nombre del trabajador</th>
         <th>Puesto</th>
         ${dayNames.map((d, i) => `<th><div class="day-header">${d}</div><div class="day-date">${dayDates[i]}</div></th>`).join('')}
-        <th>Ubicación / Proyecto</th>
+        <th>Lugar de trabajo</th>
+        <th>Extras</th>
+        <th>Observaciones</th>
       </tr>`;
 
       const tbody = document.getElementById('table-body');
@@ -138,24 +232,25 @@
 
       const statusClassMap = { 'A*': 'status-Astar', F: 'status-F', B: 'status-B', PC: 'status-PC', PS: 'status-PS', D: 'status-D', I: 'status-I', V: 'status-V' };
 
-      tbody.innerHTML = (week.employees || []).map((emp, idx) => {
+      tbody.innerHTML = (week.employees || []).map((emp) => {
         const dayCells = dayFields.map((f) => {
           const val = emp[f] || 'A';
           const cls = statusClassMap[val] ? ` class="${statusClassMap[val]}"` : '';
-          return `<td${cls}>${val}</td>`;
+          return `<td${cls}>${escapeHtml(val)}</td>`;
         }).join('');
 
-        let proj = emp.project_location_text || '';
-        if (emp.extra_payment_amount) {
-          proj += (proj ? ' ' : '') + '$' + Number(emp.extra_payment_amount).toLocaleString('es-MX', { minimumFractionDigits: 2 });
-        }
+        const location = emp.project_location_text || '';
+        const extras = formatExtra(emp.extra_payment_amount);
+        const observations = emp.notes || '';
 
         return `<tr>
-          <td>${emp.employee_number_snapshot}</td>
-          <td class="name-cell">${emp.full_name_snapshot}</td>
-          <td class="position-cell">${emp.position_snapshot || ''}</td>
+          <td>${escapeHtml(emp.employee_number_snapshot)}</td>
+          <td class="name-cell">${escapeHtml(emp.full_name_snapshot)}</td>
+          <td class="position-cell">${escapeHtml(emp.position_snapshot || '')}</td>
           ${dayCells}
-          <td style="text-align:left;font-size:8px;">${proj}</td>
+          <td class="wrap-cell">${escapeHtml(location)}</td>
+          <td class="extra-cell">${escapeHtml(extras)}</td>
+          <td class="wrap-cell">${escapeHtml(observations)}</td>
         </tr>`;
       }).join('');
 
@@ -165,7 +260,7 @@
         const dayLabels = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
         const dayKeys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
         const absLines = dayKeys.map((k, i) => s.absencesByDay[k] > 0 ? `${dayLabels[i]}: ${s.absencesByDay[k]}` : '').filter(Boolean);
-        summaryEl.innerHTML = `<strong>Resumen:</strong> ${s.totalEmployees} empleados | Inasistencias: ${s.totalAbsences} ${absLines.length ? '(' + absLines.join(', ') + ')' : ''} | Pagos extra: $${s.totalExtraPayments.toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
+        summaryEl.innerHTML = `<strong>Resumen:</strong> ${s.totalEmployees} empleados | Inasistencias: ${s.totalAbsences} ${absLines.length ? '(' + absLines.join(', ') + ')' : ''} | Pagos extra: $${Number(s.totalExtraPayments || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
       }
     }
   </script>

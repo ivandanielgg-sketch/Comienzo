@@ -298,8 +298,33 @@
               <p class="muted" style="margin:-4px 0 10px;">
                 Exporta activos (por fecha de creacion) y cerrados (por fecha de cierre) en un Excel. Rango maximo: 1 año.
               </p>
-              <div class="search-row" style="margin-bottom:10px;">
+              <div id="projects-seller-export-bar" class="search-row" style="margin-bottom:12px;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+                <label style="flex-direction:row;gap:6px;align-items:center;">
+                  <span>Facturacion desde:</span>
+                  <input id="projects-seller-export-from" type="date" style="width:auto;" />
+                </label>
+                <label style="flex-direction:row;gap:6px;align-items:center;">
+                  <span>Facturacion hasta:</span>
+                  <input id="projects-seller-export-to" type="date" style="width:auto;" />
+                </label>
+                <label style="flex-direction:row;gap:6px;align-items:center;">
+                  <span>Vendedor:</span>
+                  <select id="projects-seller-export-seller" style="width:auto;min-width:160px;">
+                    <option value="all">Todos</option>
+                  </select>
+                </label>
+                <button id="projects-seller-export-excel-btn" class="secondary" type="button">Excel utilidad por vendedor</button>
+                <p id="projects-seller-export-message" class="message muted" style="margin:0;flex-basis:100%;"></p>
+              </div>
+              <p class="muted" style="margin:-4px 0 10px;">
+                Descarga detalle por proyecto y resumen por vendedor segun <strong>fecha de facturacion</strong> (ambos extremos inclusive). Rango maximo: 1 año.
+              </p>
+              <div class="search-row" style="margin-bottom:10px;flex-wrap:wrap;gap:10px;align-items:center;">
                 <input id="projects-search" type="text" placeholder="Buscar por pedido, factura, cliente..." />
+                <label style="flex-direction:row;gap:8px;align-items:center;white-space:nowrap;margin:0;">
+                  <input id="projects-filter-no-expenses-payments" type="checkbox" />
+                  Sin gastos ni pagos registrados
+                </label>
               </div>
               <div class="table-wrapper">
                 <table>

@@ -1604,6 +1604,10 @@ async function loadProjects() {
     search: state.projectsSearch,
     ...buildTableParams('projects'),
   });
+  const noExpPay = document.getElementById('projects-filter-no-expenses-payments');
+  if (noExpPay && noExpPay.checked) {
+    params.set('without_expenses_or_payments', '1');
+  }
   const result = await api(`/api/projects?${params}`);
   state.projects = result.data;
   state.projectsSummary = result.summary;
@@ -3960,6 +3964,14 @@ if (projectsSearchInput) {
   }));
 }
 
+const projectsFilterNoExpensesPayments = document.getElementById('projects-filter-no-expenses-payments');
+if (projectsFilterNoExpensesPayments) {
+  projectsFilterNoExpensesPayments.addEventListener('change', () => {
+    state.projectsPag.page = 1;
+    loadProjects();
+  });
+}
+
 function toIsoDateLocal(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -4020,11 +4032,74 @@ function exportProjectsExcel() {
   window.location.href = `/api/projects/export/excel?${params.toString()}`;
 }
 
+function initSellerProfitabilityExportDefaults() {
+  const fromInput = document.getElementById('projects-seller-export-from');
+  const toInput = document.getElementById('projects-seller-export-to');
+  if (!fromInput || !toInput) return;
+  if (!fromInput.value || !toInput.value) {
+    const y = new Date().getFullYear();
+    fromInput.value = `${y}-01-01`;
+    toInput.value = `${y}-12-31`;
+  }
+}
+
+async function loadSellerProfitabilityExportSellers() {
+  const select = document.getElementById('projects-seller-export-seller');
+  if (!select) return;
+  try {
+    let employees = state.projectAssignableEmployees || [];
+    if (!employees.length) {
+      const result = await api('/api/projects/assignable-employees');
+      employees = result.data || [];
+      state.projectAssignableEmployees = employees;
+    }
+    const current = select.value || 'all';
+    const options = ['<option value="all">Todos</option>'];
+    for (const emp of employees) {
+      const name = emp.full_name || emp.name || `#${emp.id}`;
+      options.push(`<option value="${escapeHtml(String(emp.id))}">${escapeHtml(name)}</option>`);
+    }
+    select.innerHTML = options.join('');
+    select.value = [...select.options].some((o) => o.value === current) ? current : 'all';
+  } catch (_err) {
+    /* keep default Todos */
+  }
+}
+
+function exportSellerProfitabilityExcel() {
+  const fromInput = document.getElementById('projects-seller-export-from');
+  const toInput = document.getElementById('projects-seller-export-to');
+  const sellerSelect = document.getElementById('projects-seller-export-seller');
+  const messageEl = document.getElementById('projects-seller-export-message');
+  const from = fromInput ? fromInput.value : '';
+  const to = toInput ? toInput.value : '';
+  const error = validateProjectsExportRange(from, to);
+  if (error) {
+    if (messageEl) messageEl.textContent = error;
+    window.alert(error);
+    return;
+  }
+  const seller = sellerSelect ? sellerSelect.value : 'all';
+  if (messageEl) {
+    messageEl.textContent = `Descargando utilidad por facturacion del ${from} al ${to}...`;
+  }
+  const params = new URLSearchParams({ from, to });
+  if (seller && seller !== 'all') params.set('vendedor_id', seller);
+  window.location.href = `/api/projects/export/seller-profitability?${params.toString()}`;
+}
+
 initProjectsExportDefaultRange();
+initSellerProfitabilityExportDefaults();
+loadSellerProfitabilityExportSellers();
 
 const projectsExportExcelBtn = document.getElementById('projects-export-excel-btn');
 if (projectsExportExcelBtn) {
   projectsExportExcelBtn.addEventListener('click', exportProjectsExcel);
+}
+
+const projectsSellerExportExcelBtn = document.getElementById('projects-seller-export-excel-btn');
+if (projectsSellerExportExcelBtn) {
+  projectsSellerExportExcelBtn.addEventListener('click', exportSellerProfitabilityExcel);
 }
 
 const closedProjectsExportExcelBtn = document.getElementById('closed-projects-export-excel-btn');
